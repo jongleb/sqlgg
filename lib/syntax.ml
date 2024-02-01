@@ -9,7 +9,7 @@ let debug = ref false
 
 type env = {
   tables : Tables.table list;
-  schema : Schema.t;
+  schema : table_name source_attr list;
   insert_schema : Schema.t;
 }
 
@@ -79,15 +79,97 @@ let exists_grouping columns =
 let all_columns = Schema.(make_unique $ cross_all)
 let all_tbl_columns = all_columns $ List.map snd
 
+let reffalse = ref false
+
 let resolve_column tables schema {cname;tname} =
-  Schema.find (Option.map_default (schema_of tables) schema tname) cname
+
+  let by_name name = function attr -> attr.attr.name = name && Option.map_default (fun tname -> List.mem tname.tn (List.map(fun i -> i.tn) attr.sources)) true tname in 
+  let find_by_name t name = List.find_all (by_name name) t in 
+
+  let find t name =
+    match find_by_name t name with
+    | [x] -> 
+
+
+      (* if !reffalse = false then 
+        
+         List.iter (fun i -> 
+            print_endline "NAMES!";
+            i.sources |> Format.asprintf "%a" (Format.pp_print_list Sql.pp_table_name) |> print_endline;
+            print_endline "SCHEMA!";
+            i.attr |> Format.asprintf "%a" Sql.pp_attr |> print_endline;
+        ) schema;
+        reffalse := true;
+
+        print_endline "NOTHING_IS FOUND!!";
+      {cname;tname} |> Format.asprintf "%a" pp_col_name |> print_endline; *)
+      Some x
+    | [] -> 
+      (* print_endline "NOTHING!!";
+      {cname;tname} |> Format.asprintf "%a" pp_col_name |> print_endline; 
+      List.iter (fun i -> 
+        print_endline "NAMES!";
+        i.sources |> Format.asprintf "%a" (Format.pp_print_list Sql.pp_table_name) |> print_endline;
+        print_endline "SCHEMA!";
+        i.attr |> Format.asprintf "%a" Sql.pp_attr |> print_endline;
+      ) schema;
+      reffalse := true; *)
+        None
+    | lst ->
+      (* print_endline "DUPLICATES!!";
+      {cname;tname} |> Format.asprintf "%a" pp_col_name |> print_endline;  *)
+      Some (List.last lst) in
+
+  let result = find schema cname in
+
+  let by_name name = function attr -> attr.attr.name = name in 
+  let find_by_name t name = List.find_all (by_name name) t in 
+
+  let find t name =
+    match find_by_name t name with
+    | [x] -> Some x
+    | _ -> None in
+
+  let default_result = find schema cname in  
+
+  let result = match result, default_result with 
+    | Some r , Some _ -> Some r
+    | None, Some r -> Some r
+    | _ -> None in
+
+  let by_name name = function attr -> attr.attr.name = name in 
+  let find_by_name t name = List.find_all (by_name name) t in 
+
+  let find t name =
+    match find_by_name t name with
+    | [x] -> x
+    | [] -> raise (Schema.Error ((List.map (fun i -> i.attr) t),"missing attribute : " ^ name))
+    | _ -> raise (Schema.Error ((List.map (fun i -> i.attr) t),"duplicate attribute : " ^ name)) in
+
+  let schema_of tables name =
+    let result = Tables.get_from tables name in 
+    List.map (fun attr -> { sources=[result |> fst]; attr; }) (result |> snd) in
+
+  let default_result = find (Option.map_default (schema_of tables) schema tname) cname in
+
+  Option.default default_result result
+
+
+
 
 let resolve_column_assignments tables l =
-  let all = all_tbl_columns tables in
+  let make_unique = List.unique ~cmp:(fun a1 a2 -> a1.attr.name = a2.attr.name && a1.attr.name <> "") in
+
+  let all_columns  = make_unique $ Schema.cross_all in
+
+  let all_tbl_columns = all_columns $ List.map snd  in
+
+  let all = all_tbl_columns (List.map (fun (a, b) -> a, (List.map (fun attr -> {sources=[a]; attr}) b)) tables) in
+
   l |> List.map begin fun (col,expr) ->
     let attr = resolve_column tables all col in
     (* autoincrement is special - nullable on insert, strict otherwise *)
-    let typ = if Constraints.mem Autoincrement attr.extra then Sql.Type.nullable attr.domain.t else attr.domain in
+    let typ = if Constraints.mem Autoincrement attr.attr.extra then Sql.Type.nullable attr.attr.domain.t else attr.attr.domain in
     if !debug then eprintfn "column assignment %s type %s" col.cname (Type.show typ);
     (* add equality on param and column type *)
     let equality typ expr = Fun (F (Var 0, [Var 0; Var 0]), [Value typ; expr]) in
@@ -96,28 +178,37 @@ let resolve_column_assignments tables l =
     | _ -> equality typ expr
   end
 
-let get_columns_schema tables l =
-  let all = all_tbl_columns tables in
-  (* FIXME col_name *)
-  l |> List.map (fun col -> { (resolve_column tables all col) with name = col.cname })
+let get_columns_schema (tables: (table_name * attr list) list) l =
+  let make_unique = List.unique ~cmp:(fun a1 a2 -> a1.attr.name = a2.attr.name && a1.attr.name <> "") in
 
-let _print_env env =
-  eprintfn "env: ";
+  let all_columns  = make_unique $ Schema.cross_all in
+
+  let all_tbl_columns = all_columns $ List.map snd  in
+
+  let all = all_tbl_columns (List.map (fun (a, b) -> a, (List.map (fun attr -> {sources=[a]; attr}) b)) tables) in
+  
+  (* FIXME col_name *)
+  l |> List.map (fun col -> 
+    let res = resolve_column tables all col in
+    { res with attr = { res.attr with name = col.cname } })
+
+let _print_env env = ()
+  (* eprintfn "env: ";
   Sql.Schema.print env.schema;
-  Tables.print stderr env.tables
+  Tables.print stderr env.tables *)
 
 (** resolve each name reference (Column, Inserted, etc) into ResValue or ResFun of corresponding type *)
 let rec resolve_columns env expr =
   if !debug then
   begin
     eprintf "\nRESOLVE COLUMNS %s\n%!" (expr_to_string expr);
-    eprintf "schema: "; Sql.Schema.print env.schema;
+    (* eprintf "schema: "; Sql.Schema.print env.schema; *)
     Tables.print stderr env.tables;
   end;
   let rec each e =
     match e with
     | Value x -> ResValue x
-    | Column col -> ResValue (resolve_column env.tables env.schema col).domain
+    | Column col -> ResValue (resolve_column env.tables env.schema col).attr.domain
     | Inserted name ->
       let attr = try Schema.find env.insert_schema name with Schema.Error (_,s) -> fail "for inserted values : %s" s in
       ResValue attr.domain
@@ -136,6 +227,7 @@ let rec resolve_columns env expr =
         | TupleList (p, _) -> failed ~at:p.pos "FIXME TupleList in SELECT subquery"
       and as_params p = flat_map params_of_var p in
       let (schema,p,_) = eval_select_full env select in
+      let schema = List.map (fun i -> i.attr) schema in
       (* represet nested selects as functions with sql parameters as function arguments, some hack *)
       match schema, usage with
       | [ {domain;_} ], `AsValue -> ResFun (Type.Ret domain.t, as_params p) (* use nullable *)
@@ -244,6 +336,11 @@ and resolve_types env expr =
 
 and infer_schema env columns =
 (*   let all = tables |> List.map snd |> List.flatten in *)
+
+  let schema_of  tables name =
+    let result = Tables.get_from tables name in 
+    List.map (fun attr -> { sources=[result |> fst]; attr; }) (result |> snd) in
+
   let resolve1 = function
     | All -> env.schema
     | AllOf t -> schema_of env.tables t
@@ -251,9 +348,9 @@ and infer_schema env columns =
       let col =
         match e with
         | Column col -> resolve_column env.tables env.schema col
-        | _ -> unnamed_attribute (resolve_types env e |> snd |> get_or_failwith)
+        | _ -> { attr = unnamed_attribute (resolve_types env e |> snd |> get_or_failwith); sources = [] }
       in
-      let col = Option.map_default (fun n -> {col with name = n}) col name in
+      let col = Option.map_default (fun n -> {col with attr = { col.attr with name = n }}) col name in
       [ col ]
   in
   flat_map resolve1 columns
@@ -281,7 +378,7 @@ and get_params_l env l = flat_map (get_params env) l
 
 and do_join (env,params) ((schema1,params1,_tables),join_type,join_cond) =
   let schema = Schema.Join.join join_type join_cond env.schema schema1 in
-  let env = { env with schema } in
+  let env = { env with schema; } in
   let p = match join_cond with
   | Default | Natural | Using _ -> []
   | On e -> get_params env e (* TODO should use final schema (same as tables)? *)
@@ -299,10 +396,23 @@ and params_of_assigns env ss =
   get_params_l env exprs
 
 and params_of_order order final_schema tables =
+
+  let make_unique = List.unique ~cmp:(fun a1 a2 -> a1.attr.name = a2.attr.name && a1.attr.name <> "") in
+
+  let all_columns  = make_unique $ Schema.cross_all in
+
+  let tbls = tables |> List.map (fun (source, schema) -> 
+    List.map (fun attr -> { attr; sources=[source] }) schema
+  ) in
+
+
+  (* let env = { tables; schema=(final_schema :: (List.map snd tables) |> all_columns); insert_schema = []; } in *)
+
+
   List.concat @@
   List.map
     (fun (order, direction) ->
-       let env = { tables; schema=(final_schema :: (List.map snd tables) |> all_columns); insert_schema = []; } in
+       let env = { tables; insert_schema = []; schema = final_schema :: tbls |> all_columns } in
        let p1 = get_params_l env [ order ] in
        let p2 =
          match direction with
@@ -326,7 +436,7 @@ and ensure_res_expr = function
 and eval_nested env nested =
   (* nested selects generate new fresh schema in scope, cannot refer to outer schema,
     but can refer to attributes of tables through `tables` *)
-  let env = { env with schema = [] } in
+  let env = { env with schema = []; } in
   (* FIXME resolved table schema depends on join (nullability with left), this is resolving too early *)
   match nested with
   | Some (t,l) -> join env (resolve_source env t, List.map (fun (x,jt,jc) -> resolve_source env x, jt, jc) l)
@@ -334,15 +444,35 @@ and eval_nested env nested =
 
 and eval_select env { columns; from; where; group; having; } =
   let (env,p2) = eval_nested env from in
+
   let cardinality =
     if from = None then (if where = None then `One else `Zero_one)
     else if group = [] && exists_grouping columns then `One
     else `Nat
   in
+
+  (* from |> Format.asprintf "%a" (Format.pp_print_list Sql.pp_source_attr) |> print_endline; *)
+
+  (* List.iter (fun i -> 
+    print_endline "NAMES!";
+    i.sources |> Format.asprintf "%a" (Format.pp_print_list Sql.pp_table_name) |> print_endline;
+    print_endline "SCHEMA!";
+    i.attr |> Format.asprintf "%a" Sql.pp_attr |> print_endline;
+  ) env.schema; *)
+
+  let make_unique = List.unique ~cmp:(fun a1 a2 -> 
+    (* let l1 = List.map (fun i -> i.tn) a1.sources in
+    let l2 = List.map (fun i -> i.tn) a2.sources in
+    l1 = l2 && *)
+     a1.attr.name = a2.attr.name && a1.attr.name <> "") in
+
+  (* let printschema = List.map(fun i -> i.attr) env.schema in
+  printschema |> Format.asprintf "%a" Sql.pp_schema |> print_endline; *)
+
   let final_schema = infer_schema env columns in
   (* use schema without aliases here *)
   let p1 = get_params_of_columns env columns in
-  let env = Schema.{ env with schema = Join.cross env.schema final_schema |> make_unique } in (* enrich schema in scope with aliases *)
+  let env = { env with schema = Schema.Join.cross env.schema final_schema |> make_unique } in (* enrich schema in scope with aliases *)
   let p3 = get_params_opt env where in
   let p4 = get_params_l env group in
   let p5 = get_params_opt env having in
@@ -353,7 +483,7 @@ and resolve_source env (x,alias) =
   match x with
   | `Select select ->
     let (s,p,_) = eval_select_full env select in
-    s, p, (match alias with None -> [] | Some name -> [name,s])
+    s, p, (match alias with None -> [] | Some name -> [name, List.map(fun i -> i.attr) s])
   | `Nested s ->
     let (env,p) = eval_nested env (Some s) in
     let s = infer_schema env [All] in
@@ -361,7 +491,16 @@ and resolve_source env (x,alias) =
     s, p, env.tables
   | `Table s ->
     let (name,s) = Tables.get s in
-    s, [], List.map (fun name -> name, s) (name :: option_list alias)
+    let sources = (name :: option_list alias)  in
+
+    (* print_endline "!";
+
+    List.iter( fun i -> i.tn |> print_endline) sources;
+
+    print_endline "<!"; *)
+
+    let s3 = List.map (fun attr -> { attr; sources }) s  in
+    s3, [], List.map (fun name -> name, s) sources
 
 and eval_select_full env { select=(select,other); order; limit; } =
   let (s1,p1,tbls,cardinality) = eval_select env select in
@@ -372,7 +511,26 @@ and eval_select_full env { select=(select,other); order; limit; } =
             (List.length other);
   let cardinality = if other = [] then cardinality else `Nat in
   (* ignoring tables in compound statements - they cannot be used in ORDER BY *)
-  let final_schema = List.fold_left Schema.compound s1 s2l in
+
+
+  let compound t1 t2 =
+    if List.length t1 <> List.length t2 then raise (Schema.Error (List.map (fun i -> i.attr) t1, (Schema.to_string (List.map (fun i -> i.attr) t1)) ^ " differs in size to " ^ (Schema.to_string (List.map (fun i -> i.attr) t2))));
+    let show_name i a =
+      match a.name with
+      | "" -> sprintf "column %d (of %d)" (i+1) (List.length t1)
+      | s -> s
+    in
+    List.combine t1 t2
+    |> List.mapi begin fun i (a1,a2) ->
+      match Type.supertype a1.attr.domain a2.attr.domain with
+      | Some t -> { a1 with attr = { a1.attr with domain=t } }
+      | None -> raise (Schema.Error (List.map (fun i -> i.attr) t1, sprintf "Attributes do not match : %s of type %s and %s of type %s"
+        (show_name i a1.attr) (Type.show a1.attr.domain)
+        (show_name i a2.attr) (Type.show a2.attr.domain)))
+    end
+  in 
+
+  let final_schema = List.fold_left compound s1 s2l in
   let p3 = params_of_order order final_schema tbls in
   let (p4,limit1) = match limit with Some (p,x) -> List.map (fun p -> Single p) p, x | None -> [],false in
   (*                 Schema.check_unique schema; *)
@@ -386,7 +544,9 @@ let update_tables sources ss w =
   let schema = Schema.cross_all @@ List.map (fun (s,_,_) -> s) sources in
   let p0 = List.flatten @@ List.map (fun (_,p,_) -> p) sources in
   let tables = List.flatten @@ List.map (fun (_,_,ts) -> ts) sources in (* TODO assert equal duplicates if not unique *)
-  let env = { tables; schema; insert_schema=get_columns_schema tables (List.map fst ss); } in
+
+  let result = get_columns_schema tables (List.map fst ss) in
+  let env = { tables; schema; insert_schema=List.map (fun i -> i.attr) result } in
   let p1 = params_of_assigns env ss in
   let p2 = get_params_opt env w in
   p0 @ p1 @ p2
@@ -410,7 +570,7 @@ let eval (stmt:Sql.stmt) =
       ([],[],Create name)
   | Create (name,`Select select) ->
       let (schema,params,_) = eval_select_full empty_env select in
-      Tables.add (name,schema);
+      Tables.add (name, List.map (fun i -> i.attr) schema);
       ([],params,Create name)
   | Alter (name,actions) ->
       List.iter (function
@@ -433,7 +593,9 @@ let eval (stmt:Sql.stmt) =
       [],[],CreateIndex name
   | Insert { target=table; action=`Values (names, values); on_duplicate; } ->
     let expect = values_or_all table names in
-    let env = { tables = [Tables.get table]; schema = Tables.get_schema table; insert_schema = expect; } in
+    let t = Tables.get_schema table in
+    let schema = List.map (fun attr ->  { sources=[table]; attr }) t in
+    let env = { tables = [Tables.get table]; schema ; insert_schema = expect; } in
     let params, inferred = match values with
     | None -> [], Some (Values, expect)
     | Some values ->
@@ -455,21 +617,23 @@ let eval (stmt:Sql.stmt) =
     [], params @ params2, Insert (inferred,table)
   | Insert { target=table; action=`Param (names, param_id); on_duplicate; } ->
     let expect = values_or_all table names in
-    let env = { tables = [Tables.get table]; schema = Tables.get_schema table; insert_schema = expect; } in
+    let schema = List.map (fun attr ->  { sources=[table]; attr }) (Tables.get_schema table) in
+    let env = { tables = [Tables.get table]; schema; insert_schema = expect; } in
     let params = [ TupleList (param_id, expect) ] in
     let params2 = params_of_assigns env (Option.default [] on_duplicate) in
     [], params @ params2, Insert (None, table)
   | Insert { target=table; action=`Select (names, select); on_duplicate; } ->
     let expect = values_or_all table names in
-    let env = { tables = [Tables.get table]; schema = Tables.get_schema table; insert_schema = expect; } in
+    let env = { tables = [Tables.get table]; schema = List.map (fun attr ->  { sources=[table]; attr }) (Tables.get_schema table); insert_schema = expect;} in
     let select = annotate_select select (List.map (fun a -> a.domain) expect) in
     let (schema,params,_) = eval_select_full env select in
+    let schema = List.map (fun i -> i.attr) schema in
     ignore (Schema.compound expect schema); (* test equal types once more (not really needed) *)
     let params2 = params_of_assigns env (Option.default [] on_duplicate) in
     [], params @ params2, Insert (None,table)
   | Insert { target=table; action=`Set ss; on_duplicate; } ->
     let expect = values_or_all table (Option.map (List.map (function ({cname; tname=None},_) -> cname | _ -> assert false)) ss) in
-    let env = { tables = [Tables.get table]; schema = Tables.get_schema table; insert_schema = expect; } in
+    let env = { tables = [Tables.get table]; schema = List.map (fun attr ->  { sources=[table]; attr }) (Tables.get_schema table); insert_schema = expect;} in
     let (params,inferred) = match ss with
     | None -> [], Some (Assign, Tables.get_schema table)
     | Some ss -> params_of_assigns env ss, None
@@ -478,7 +642,7 @@ let eval (stmt:Sql.stmt) =
     [], params @ params2, Insert (inferred,table)
   | Delete (table, where) ->
     let t = Tables.get table in
-    let p = get_params_opt { tables=[t]; schema=snd t; insert_schema=[]; } where in
+    let p = get_params_opt { tables=[t]; schema=List.map (fun attr ->  { sources=[t |> fst]; attr }) (t |> snd); insert_schema=[]; } where in
     [], p, Delete [table]
   | DeleteMulti (targets, tables, where) ->
     (* use dummy columns to verify targets match the provided tables  *)
@@ -493,15 +657,29 @@ let eval (stmt:Sql.stmt) =
     in
     [], p, Other
   | Update (table,ss,w,o,lim) ->
-    let t = Tables.get table in
-    let params = update_tables [snd t,[],[t]] ss w in
-    let p3 = params_of_order o [] [t] in
+    let f, s = Tables.get table in
+
+    let r = List.map (fun attr -> {attr; sources=[f] }) s in
+
+    let params = update_tables [r,[],[(f, s)]] ss w in
+    let p3 = params_of_order o [] [(f, s)] in
     [], params @ p3 @ (List.map (fun p -> Single p) lim), Update (Some table)
   | UpdateMulti (tables,ss,w) ->
     let sources = List.map (resolve_source empty_env) tables in
+
+    (* This expression has type
+  (table_name source_attr list * var list * table list) list
+but an expression was expected of type
+  (table_name source_attr list * var list *
+   (table_name * table_name source_attr list) list)
+  list *)
+
+
     let params = update_tables sources ss w in
     [], params, Update None
-  | Select select -> eval_select_full empty_env select
+  | Select select -> 
+    let (schema, a, b) = eval_select_full empty_env select in
+    List.map (fun i -> i.attr) schema , a ,b
   | CreateRoutine (name,_,_) ->
     [], [], CreateRoutine name
 

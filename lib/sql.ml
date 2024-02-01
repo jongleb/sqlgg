@@ -152,12 +152,15 @@ end
 type attr = {name : string; domain : Type.t; extra : Constraints.t; }
   [@@deriving show {with_path=false}]
 
+
 let make_attribute name kind extra =
   if Constraints.mem Null extra && Constraints.mem NotNull extra then fail "Column %s can be either NULL or NOT NULL, but not both" name;
   let domain = Type.{ t = Option.default Int kind; nullability = if Constraints.mem Null extra then Nullable else Strict } in
   {name;domain;extra}
 
 let unnamed_attribute domain = {name="";domain;extra=Constraints.empty}
+
+type 'a source_attr = { attr: attr; sources: 'a list }  [@@deriving show]
 
 module Schema =
 struct
@@ -220,19 +223,63 @@ struct
 
     let cross t1 t2 = t1 @ t2
 
+   
     (* TODO check that attribute types match (ignoring nullability)? *)
     let natural t1 t2 =
+
+
+
+      let by_name name = function attr -> attr.attr.name = name in
+      let find_by_name t name = List.find_all (by_name name) t in
+
+      let find t name =
+        match find_by_name t name with
+        | [x] -> x
+        | [] -> raise (Error (List.map (fun i -> i.attr) t,"missing attribute : " ^ name))
+        | _ -> raise (Error (List.map (fun i -> i.attr) t,"duplicate attribute : " ^ name)) in
+
+
+      let mem_by_name t a =
+        match find_by_name t a.attr.name with
+        | [_] -> true
+        | [] -> false
+        | _ -> raise (Error (List.map (fun i -> i.attr) t,"duplicate attribute : " ^ a.attr.name)) in
+
+      let sub_by_name l del = List.filter (fun x -> not (mem_by_name del x)) l in
+
+
+
       let (common,t1only) = List.partition (fun a -> mem_by_name t2 a) t1 in
-      if 0 = List.length common then raise (Error (t1,"no common attributes for natural join of " ^ (names t1) ^ " and " ^ (names t2)));
+      if 0 = List.length common then raise (Error (List.map (fun i -> i.attr) t1,"no common attributes for natural join of " ^ (names (List.map (fun i -> i.attr) t1)) ^ " and " ^ (names (List.map (fun i -> i.attr) t2))));
       common @ t1only @ sub_by_name t2 common
 
     let using l t1 t2 =
+
+
+      let by_name name = function attr -> attr.attr.name = name in
+      let find_by_name t name = List.find_all (by_name name) t in
+
+      let find t name =
+        match find_by_name t name with
+        | [x] -> x
+        | [] -> raise (Error (List.map (fun i -> i.attr) t,"missing attribute : " ^ name))
+        | _ -> raise (Error (List.map (fun i -> i.attr) t,"duplicate attribute : " ^ name)) in
+
+
+      let mem_by_name t a =
+        match find_by_name t a.attr.name with
+        | [_] -> true
+        | [] -> false
+        | _ -> raise (Error (List.map (fun i -> i.attr) t,"duplicate attribute : " ^ a.attr.name)) in
+
+      let sub_by_name l del = List.filter (fun x -> not (mem_by_name del x)) l in
+
       let common = List.map (find t1) l in
-      List.iter (fun a -> let (_:attr) = find t2 a.name in ()) common;
+      List.iter (fun a -> let _ = find t2 a.attr.name in ()) common;
       common @ sub_by_name t1 common @ sub_by_name t2 common
 
     let join typ cond a b =
-      let nullable = List.map (fun a -> { a with domain = Type.make_nullable a.domain }) in
+      let nullable = List.map (fun data -> {data with attr={data.attr with domain = Type.make_nullable data.attr.domain}}) in
       let action = match cond with Default | On _ -> cross | Natural -> natural | Using l -> using l in
       match typ with
       | Inner -> action a b
