@@ -83,7 +83,7 @@ let reffalse = ref false
 
 let resolve_column tables schema {cname;tname} =
 
-  let by_name name = function attr -> attr.attr.name = name && Option.map_default (fun tname -> List.mem tname.tn (List.map(fun i -> i.tn) attr.sources)) true tname in 
+  let by_name name = function attr -> attr.attr.name = name && Option.map_default (fun tname -> List.mem tname.tn (List.map(fun i -> i.tn) attr.sources)) false tname in 
   let find_by_name t name = List.find_all (by_name name) t in 
 
   let find t name =
@@ -105,9 +105,9 @@ let resolve_column tables schema {cname;tname} =
       {cname;tname} |> Format.asprintf "%a" pp_col_name |> print_endline; *)
       Some x
     | [] -> 
-      (* print_endline "NOTHING!!";
-      {cname;tname} |> Format.asprintf "%a" pp_col_name |> print_endline; 
-      List.iter (fun i -> 
+       (* print_endline "NOTHING!!"; *)
+      (* {cname;tname} |> Format.asprintf "%a" pp_col_name |> print_endline;  *)
+     (* List.iter (fun i -> 
         print_endline "NAMES!";
         i.sources |> Format.asprintf "%a" (Format.pp_print_list Sql.pp_table_name) |> print_endline;
         print_endline "SCHEMA!";
@@ -122,7 +122,7 @@ let resolve_column tables schema {cname;tname} =
 
   let result = find schema cname in
 
-  let by_name name = function attr -> attr.attr.name = name in 
+   (*let by_name name = function attr -> attr.attr.name = name in 
   let find_by_name t name = List.find_all (by_name name) t in 
 
   let find t name =
@@ -135,7 +135,7 @@ let resolve_column tables schema {cname;tname} =
   let result = match result, default_result with 
     | Some r , Some _ -> Some r
     | None, Some r -> Some r
-    | _ -> None in
+    | _ -> None in *)
 
   let by_name name = function attr -> attr.attr.name = name in 
   let find_by_name t name = List.find_all (by_name name) t in 
@@ -466,10 +466,12 @@ and eval_select env { columns; from; where; group; having; } =
     l1 = l2 && *)
      a1.attr.name = a2.attr.name && a1.attr.name <> "") in
 
-  (* let printschema = List.map(fun i -> i.attr) env.schema in
-  printschema |> Format.asprintf "%a" Sql.pp_schema |> print_endline; *)
+  (* let printschema = List.map(fun i -> i.attr) env.schema in *)
+  (* printschema |> Format.asprintf "%a" Sql.pp_schema |> print_endline; *)
 
   let final_schema = infer_schema env columns in
+
+
   (* use schema without aliases here *)
   let p1 = get_params_of_columns env columns in
   let env = { env with schema = Schema.Join.cross env.schema final_schema |> make_unique } in (* enrich schema in scope with aliases *)
@@ -483,7 +485,26 @@ and resolve_source env (x,alias) =
   match x with
   | `Select select ->
     let (s,p,_) = eval_select_full env select in
-    s, p, (match alias with None -> [] | Some name -> [name, List.map(fun i -> i.attr) s])
+    (* print_endline "ALIAS IS:";
+
+    List.iter (fun i -> 
+      print_endline "NAMES!";
+      i.sources |> Format.asprintf "%a" (Format.pp_print_list Sql.pp_table_name) |> print_endline;
+      print_endline "SCHEMA!";
+      i.attr |> Format.asprintf "%a" Sql.pp_attr |> print_endline;
+  ) s; *)
+
+    (* let s1 = List.map (fun i -> i.attr) s in
+
+    s1 |> Format.asprintf "%a" Sql.pp_schema |> print_endline; *)
+
+
+    (* print_endline "#1:"; *)
+    let s = List.map (fun i -> { i  with sources = List.concat [option_list alias; i.sources] }) s in
+
+    s, p, (match alias with None -> [] | Some name -> 
+      (* print_endline (RT); *)
+      [name, List.map(fun i -> i.attr) s])
   | `Nested s ->
     let (env,p) = eval_nested env (Some s) in
     let s = infer_schema env [All] in
@@ -492,6 +513,8 @@ and resolve_source env (x,alias) =
   | `Table s ->
     let (name,s) = Tables.get s in
     let sources = (name :: option_list alias)  in
+
+    (* name |> Format.asprintf "%a" Sql.pp_table_name |> print_endline; *)
 
     (* print_endline "!";
 
@@ -678,6 +701,7 @@ but an expression was expected of type
     let params = update_tables sources ss w in
     [], params, Update None
   | Select select -> 
+    (* select |> Format.asprintf "%a" Sql.pp_select_full |> print_endline; *)
     let (schema, a, b) = eval_select_full empty_env select in
     List.map (fun i -> i.attr) schema , a ,b
   | CreateRoutine (name,_,_) ->
