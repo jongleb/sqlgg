@@ -50,18 +50,18 @@ let test = Type.[
   tt "CREATE TABLE test (id INT, str TEXT, name TEXT)" [] [];
   tt "SELECT str FROM test WHERE id=?"
      [attr' ~nullability:(Nullable) "str" Text]
-     [param_nullable Int];
+     [param Int];
    tt "SELECT x,y+? AS z FROM (SELECT id AS y,CONCAT(str,name) AS x FROM test WHERE id=@id*2) ORDER BY x,x+z LIMIT @lim"
      [attr' "x" Text; attr' ~nullability:(Nullable) "z" Int]
-     [param_nullable Int; named "id" Int; named "lim" Int; ];
+     [param Int; named "id" Int; named "lim" Int; ];
   tt "select test.name,other.name as other_name from test, test as other where test.id=other.id + @delta"
      [  attr' ~nullability:(Nullable) "name" Text;
         attr' ~nullability:(Nullable) "other_name" Text
      ]
-     [named_nullable "delta" Int];
+     [named "delta" Int];
   tt "select test.name from test where test.id + @x = ? or test.id - @x = ?"
      [attr' ~nullability:(Nullable) "name" Text;]
-     [named_nullable "x" Int; param_nullable Int; named_nullable "x" Int; param_nullable Int;];
+     [named "x" Int; param Int; named "x" Int; param Int;];
   tt "insert into test values"
      []
      [named_nullable "id" Int; named_nullable "str" Text; named_nullable "name" Text];
@@ -75,13 +75,13 @@ let test = Type.[
   tt "replace into test values (2,?,?)" [] [param_nullable Text; param_nullable Text;];
  tt "select str, case when id > @id then name when id < @id then 'qqq' else @def end as q from test"
     [attr' ~nullability:(Nullable) "str" Text; attr' ~nullability:(Nullable) "q" Text]
-    [named_nullable "id" Int; named_nullable "id" Int; named_nullable "def" Text];
+    [named "id" Int; named "id" Int; named "def" Text];
    wrong "insert into test values (1,2)";
   wrong "insert into test (str,name) values (1,'str','name')";
   (* check precedence of boolean and arithmetic operators *)
   tt "select str from test where id>=@id and id-@x<@id"
     [attr' ~nullability:(Nullable) "str" Text;]
-    [named_nullable "id" Int; named_nullable "x" Int; named_nullable "id" Int];
+    [named "id" Int; named "x" Int; named "id" Int];
   tt "select 3/5"
     [attr' ~nullability:(Strict) "" Float;]
     [];
@@ -125,8 +125,8 @@ let test4 =
     [attr' ~nullability:(Strict)  "" Int; attr' ~nullability:(Strict) "" Text] [] ~kind:(Select `Nat);
   tt "select greatest(10,x) from test4" [attr' ~nullability:(Nullable) "" Int] [] ~kind:(Select `Nat);
   tt "select 1+2 from test4 where x=y"  [attr' ~nullability:(Strict) "" Int] [] ~kind:(Select `Nat);
-  tt "select max(x) as q from test4 where y = x + @n" [attr' ~nullability:(Nullable) "q" Int] [named_nullable "n" Int] ~kind:(Select `One);
-  tt "select coalesce(max(x),0) as q from test4 where y = x + @n" [attr' ~nullability:(Strict) "q" Int] [named_nullable "n" Int] ~kind:(Select `One); 
+  tt "select max(x) as q from test4 where y = x + @n" [attr' ~nullability:(Nullable) "q" Int] [named "n" Int] ~kind:(Select `One);
+  tt "select coalesce(max(x),0) as q from test4 where y = x + @n" [attr' ~nullability:(Strict) "q" Int] [named "n" Int] ~kind:(Select `One); 
 ]
 
 let test_parsing = [
@@ -158,12 +158,12 @@ let test_join_result_cols () =
   do_test
     "SELECT * FROM t1 NATURAL JOIN t2 WHERE j > @x"
     (ints ["j";"i";"k"])
-    [named_nullable "x" Int];
+    [named "x" Int];
 (*   NATURAL JOIN with common column qualified in WHERE *)
   do_test
     "SELECT * FROM t1 NATURAL JOIN t2 WHERE t2.j > @x"
     (ints ["j";"i";"k"])
-    [named_nullable "x" Int];
+    [named "x" Int];
   ()
 
 let test_enum = [
@@ -175,7 +175,7 @@ let test_enum = [
 let test_manual_param = [
   tt "CREATE TABLE test7 (x INT NULL DEFAULT 0) ENGINE=MyISAM DEFAULT CHARSET=utf8" [] [];
   tt "SELECT * FROM test7 WHERE x = @x_arg" [attr "x" Int ~extra:[Null; WithDefault];] [
-    named_nullable "x_arg" Int
+    named "x_arg" Int
   ];
   tt "SELECT * FROM test7 WHERE x = @x_arg::Int" [attr "x" Int ~extra:[Null; WithDefault];] [
     named "x_arg" Int
@@ -185,7 +185,7 @@ let test_manual_param = [
   ];
   tt "UPDATE test7 SET x = @x_arg WHERE x = @x_arg_2" [] [
     named_nullable "x_arg" Int;
-    named_nullable "x_arg_2" Int
+    named "x_arg_2" Int
   ];
   tt "UPDATE test7 SET x = @x_arg ::Int WHERE x = @x_arg_2 :: Int" [] [
     named "x_arg" Int;
@@ -240,6 +240,16 @@ let test_update_join = [
   ];
 ]
 
+let test_param_not_null_by_default = [
+  tt "CREATE TABLE test15 (a INT, b INT NULL, c TEXT NULL)" [] [];
+  tt "SELECT a FROM test15 WHERE a = @a AND a + b = @ab AND c = @c AND a < (@a2 :: Int Null)" [attr "a" Int ~extra:[];] [
+    named "a" Int;
+    named "ab" Int;
+    named "c" Text;
+    named_nullable "a2" Int;
+  ];
+]
+
 let run () =
   Gen.params_mode := Some Named;
   let tests =
@@ -256,6 +266,7 @@ let run () =
     "test_coalesce" >::: test_coalesce;
     "test_not_null_default_field" >::: test_not_null_default_field;
     "test_update_join" >::: test_update_join;
+    "test_param_not_null_by_default" >::: test_param_not_null_by_default;
   ]
   in
   let test_suite = "main" >::: tests in
