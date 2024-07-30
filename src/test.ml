@@ -53,7 +53,7 @@ let test = Type.[
      [param Int];
    tt "SELECT x,y+? AS z FROM (SELECT id AS y,CONCAT(str,name) AS x FROM test WHERE id=@id*2) ORDER BY x,x+z LIMIT @lim"
      [attr' "x" Text; attr' ~nullability:(Nullable) "z" Int]
-     [param_nullable Int; named "id" Int; named "lim" Int; ];
+     [param Int; named "id" Int; named "lim" Int; ];
   tt "select test.name,other.name as other_name from test, test as other where test.id=other.id + @delta"
      [  attr' ~nullability:(Nullable) "name" Text;
         attr' ~nullability:(Nullable) "other_name" Text
@@ -70,12 +70,12 @@ let test = Type.[
      [named_nullable "str" Text; named_nullable "name" Text];
   tt "insert into test values (2,'hello' || ' world',@name)"
      []
-     [named_nullable "name" Text];
-  tt "insert or replace into test values (2,?,?)" [] [param_nullable Text; param_nullable Text;];
-  tt "replace into test values (2,?,?)" [] [param_nullable Text; param_nullable Text;];
+     [named "name" Text];
+  tt "insert or replace into test values (2,?,?)" [] [param Text; param Text;];
+  tt "replace into test values (2,?,?)" [] [param Text; param Text;];
  tt "select str, case when id > @id then name when id < @id then 'qqq' else @def end as q from test"
     [attr' ~nullability:(Nullable) "str" Text; attr' ~nullability:(Nullable) "q" Text]
-    [named_nullable "id" Int; named_nullable "id" Int; named_nullable "def" Text];
+    [named "id" Int; named "id" Int; named "def" Text];
    wrong "insert into test values (1,2)";
   wrong "insert into test (str,name) values (1,'str','name')";
   (* check precedence of boolean and arithmetic operators *)
@@ -181,10 +181,10 @@ let test_manual_param = [
     named "x_arg" Int
   ];
   tt "INSERT INTO test7 VALUES (@x_arg)" [] [
-    named_nullable "x_arg" Int
+    named "x_arg" Int
   ];
   tt "UPDATE test7 SET x = @x_arg WHERE x = @x_arg_2" [] [
-    named_nullable "x_arg" Int;
+    named "x_arg" Int;
     named "x_arg_2" Int
   ];
   tt "UPDATE test7 SET x = @x_arg ::Int WHERE x = @x_arg_2 :: Int" [] [
@@ -242,12 +242,49 @@ let test_update_join = [
 
 let test_param_not_null_by_default = [
   tt "CREATE TABLE test15 (a INT, b INT NULL, c TEXT NULL)" [] [];
-  tt "SELECT a FROM test15 WHERE a = @a AND a + b = @ab AND c = @c AND a < (@a2 :: Int Null)" [attr "a" Int ~extra:[];] [
+  tt "CREATE TABLE test16 (d INT)" [] [];
+  tt {| 
+    SELECT a FROM test15 
+    JOIN test16 t16 on t16.d = @t16
+    WHERE a = @a 
+    AND a + b = @ab 
+    AND c = @c 
+    AND a < (@a2 :: Int Null)
+    AND a > @a3
+    AND b = COALESCE(@b1, 0) 
+    AND c = COALESCE(@c1, 'default')
+  |} [attr "a" Int ~extra:[];] [
+    named "t16" Int;
     named "a" Int;
     named "ab" Int;
     named "c" Text;
     named_nullable "a2" Int;
+    named "a3" Int;
+    named "b1" Int;
+    named "c1" Text;
   ];
+  tt "CREATE TABLE test17 (d INT, e TEXT)" [] [];
+  tt "CREATE TABLE test18 (f INT)" [] [];
+  tt {| 
+    INSERT INTO test17 (d, e)
+    SELECT f, @e
+    FROM test18
+    WHERE test18.f > 100
+    LIMIT 1
+  |} [] [
+    named "e" Text;
+  ];
+  tt "CREATE TABLE test19 (a INT, b TEXT, c BOOL, d DATE)" [] [];
+  tt {| 
+    UPDATE test19
+    SET a = @a , b = @b, c=@c, d=@d
+    LIMIT 10
+  |} [] [
+    named "a" Int;
+    named "b" Text;
+    named "c" Bool;
+    named "d" Datetime;
+  ]
 ]
 
 let run () =
