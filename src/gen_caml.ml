@@ -191,6 +191,7 @@ let match_variant_wildcard i name args =
 
 let match_arg_pattern = function
   | Sql.Single _ | SingleIn _ | Choice _
+  | SingleTuple _ 
   | ChoiceIn { param = { label = None; _ }; _ }
   | TupleList _ -> "_"
   | ChoiceIn { param = { label = Some s; _ }; _ } -> s
@@ -217,6 +218,7 @@ let set_param index param =
 let rec set_var index var =
   match var with
   | Single p -> set_param index p
+  | SingleTuple _ -> ()
   | SingleIn _ -> ()
   | TupleList _ -> ()
   | ChoiceIn { param = name; vars; _ } ->
@@ -251,6 +253,7 @@ let rec eval_count_params vars =
         | Single _ -> `Left true
         | SingleIn _ -> `Left false
         | TupleList _ -> `Left true
+        | SingleTuple _ -> assert false
         | ChoiceIn { param; vars; _ } -> `Right (`ChoiceIn (param, vars))
         | Choice (name,c) -> `Right (`Choice (name, c)))
       vars
@@ -306,6 +309,7 @@ let rec exclude_in_vars l =
     (function
       | SingleIn _ -> None
       | Single _ as v -> Some v
+      | SingleTuple _ -> assert false
       | TupleList _ -> None
       | ChoiceIn t -> Some (ChoiceIn { t with vars = exclude_in_vars t.vars })
       | Choice (param_id, ctors) ->

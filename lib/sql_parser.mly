@@ -404,6 +404,11 @@ expr:
         let e = poly (depends Bool) [ e1; Inparam (new_param p (depends Any)) ] in
         InChoice ({ label = p.label; pos = ($startofs, $endofs) }, k, e )
       }
+    | LPAREN e1=commas(expr) RPAREN k=in_or_not_in p=PARAM
+      {
+        let e = poly (depends Bool) [ Tuple e1; TupleInParam (new_param p (depends Any)) ] in
+        InChoice ({ label = p.label; pos = ($startofs, $endofs) }, k, e )
+      }  
     | LPAREN select=select_stmt RPAREN { SelectExpr (select, `AsValue) }
     | p=PARAM { Param (new_param p (depends Any)) }
     | p=PARAM DOUBLECOLON t=manual_type { Param (new_param { p with pos=($startofs, $endofs) } t) }

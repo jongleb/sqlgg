@@ -16,16 +16,17 @@ struct
     | Datetime
     | Decimal
     | Any (* FIXME - Top and Bottom ? *)
+    | Tuple of t list 
     [@@deriving eq, show{with_path=false}]
     (* TODO NULL is currently typed as Any? which actually is a misnormer *)
 
-  type nullability =
+  and nullability =
   | Nullable (** can be NULL *)
   | Strict (** cannot be NULL *)
   | Depends (** unknown, to be determined *)
   [@@deriving eq, show{with_path=false}]
 
-  type t = { t : kind; nullability : nullability; }[@@deriving eq, show{with_path=false}]
+  and t = { t : kind; nullability : nullability; }[@@deriving eq, show{with_path=false}]
 
   let nullability nullability = fun t -> { t; nullability }
   let strict = nullability Strict
@@ -103,7 +104,7 @@ struct
 
   let has_common_type x y = Option.is_some @@ subtype x y
 
-  type tyvar = Typ of t | Var of int
+  type tyvar = Typ of t | Var of int  [@@deriving show{with_path=false}, ord]
   let string_of_tyvar = function Typ t -> show t | Var i -> sprintf "'%c" (Char.chr @@ Char.code 'a' + i)
 
   type func =
@@ -346,6 +347,7 @@ type ctor =
 | Verbatim of string * string
 and var =
 | Single of param
+| SingleTuple of { id : param_id; types : Type.t list; }
 | SingleIn of param
 | ChoiceIn of { param: param_id; kind : [`In | `NotIn]; vars: var list }
 | Choice of param_id * ctor list
@@ -395,6 +397,8 @@ and expr =
   | Value of Type.t (** literal value *)
   | Param of param
   | Inparam of param
+  | TupleInParam of param
+  | Tuple of expr list
   | Choices of param_id * expr choices
   | InChoice of param_id * [`In | `NotIn] * expr
   | Fun of Type.func * expr list (** parameters *)

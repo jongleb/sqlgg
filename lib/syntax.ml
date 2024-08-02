@@ -18,8 +18,10 @@ type res_expr =
   | ResValue of Type.t (** literal value *)
   | ResParam of param
   | ResInparam of param
+  | ResTupleInParam of param
   | ResChoices of param_id * res_expr choices
   | ResInChoice of param_id * [`In | `NotIn] * res_expr
+  | ResTuple of res_expr list
   | ResFun of Type.func * res_expr list (** function kind (return type and flavor), arguments *)
   [@@deriving show]
 
@@ -58,8 +60,10 @@ let rec get_params_of_res_expr (e:res_expr) =
   let rec loop acc e =
     match e with
     | ResParam p -> Single p::acc
+    | ResTupleInParam p -> SingleTuple {id=p.id; types=[p.typ]} ::acc
     | ResInparam p -> SingleIn p::acc
     | ResFun (_,l) -> List.fold_left loop acc l
+    | ResTuple l -> List.fold_left loop acc l
     | ResValue _ -> acc
     | ResInChoice (param, kind, e) -> ChoiceIn { param; kind; vars = get_params_of_res_expr e } :: acc
     | ResChoices (p,l) -> Choice (p, List.map (fun (n,e) -> Simple (n, Option.map get_params_of_res_expr e)) l) :: acc
@@ -77,6 +81,8 @@ let rec is_grouping = function
 | Column _
 | SelectExpr _
 | Inparam _
+| TupleInParam _
+| Tuple _
 | Inserted _ -> false
 | Choices (p,l) ->
   begin match list_same @@ List.map (fun (_,expr) -> Option.map_default is_grouping false expr) l with
@@ -84,6 +90,7 @@ let rec is_grouping = function
   | Some v -> v
   end
 | InChoice (_, _, e) -> is_grouping e
+(* | TupleInChoice (_, _,  e) -> is_grouping e *)
 | Fun (func,args) ->
   (* grouping function of zero or single parameter or function on grouping result *)
   (Type.is_grouping func && List.length args <= 1) || List.exists is_grouping args
@@ -168,6 +175,8 @@ let rec resolve_columns env expr =
       ResValue attr.domain
     | Param x -> ResParam x
     | Inparam x -> ResInparam x
+    | TupleInParam x -> ResTupleInParam x
+    | Tuple x -> ResTuple (List.map each x)
     | InChoice (n, k, x) -> ResInChoice (n, k, each x)
     | Choices (n,l) -> ResChoices (n, List.map (fun (n,e) -> n, Option.map each e) l)
     | Fun (r,l) ->
@@ -175,6 +184,7 @@ let rec resolve_columns env expr =
     | SelectExpr (select, usage) ->
       let rec params_of_var = function
         | Single p -> [ResParam p]
+        | SingleTuple _ -> failwith ""
         | SingleIn p -> [ResParam p]
         | ChoiceIn { vars; _ } -> as_params vars
         | Choice (_,l) -> l |> flat_map (function Simple (_, vars) -> Option.map_default as_params [] vars | Verbatim _ -> [])
@@ -198,7 +208,12 @@ and assign_types expr =
     | ResValue t -> e, `Ok t
     | ResParam p -> e, `Ok p.typ
     | ResInparam p -> e, `Ok p.typ
+    | ResTupleInParam p -> e, `Ok p.typ
     | ResInChoice (n, k, e) -> let e, t = typeof e in ResInChoice (n, k, e), t
+    | ResTuple x -> 
+      let (params,types) = x |> List.map typeof |> List.split in
+      let types = List.map get_or_failwith types in
+      ResTuple params, `Ok ({t = Tuple types; nullability = Strict})
     | ResChoices (n,l) ->
       let (e,t) = List.split @@ List.map (fun (_,e) -> option_split @@ Option.map typeof e) l in
       let t =
@@ -380,6 +395,8 @@ and ensure_res_expr = function
   | Value x -> ResValue x
   | Param x -> ResParam x
   | Inparam x -> ResInparam x
+  | TupleInParam x -> ResTupleInParam x
+  | Tuple x -> ResTuple (List.map ensure_res_expr x)
   | Choices (p,_) -> failed ~at:p.pos "ensure_res_expr Choices TBD"
   | InChoice (p,_,_) -> failed ~at:p.pos "ensure_res_expr InChoice TBD"
   | Column _ | Inserted _ -> failwith "Not a simple expression"
@@ -595,6 +612,7 @@ let rec eval (stmt:Sql.stmt) =
     [], params, Update None
   | Select select -> 
     let (schema, a, b) = eval_select_full empty_env select in
+    prerr_endline @@ show_vars a;
     List.map (fun i -> i.Schema.Source.Attr.attr) schema , a ,b
   | CreateRoutine (name,_,_) ->
     [], [], CreateRoutine name
@@ -625,12 +643,21 @@ let unify_params l =
   in
   let rec traverse = function
   | Single { id; typ; } -> remember id.label typ
+  | SingleTuple { id; types; } -> List.iteri (fun idx typ ->
+      remember (Option.map (fun label -> label ^ (Int.to_string idx)) id.label) typ
+    ) types
   | SingleIn { id; typ; _ } -> remember id.label typ
   | ChoiceIn { vars; _ } -> List.iter traverse vars
   | Choice (p,l) -> check_choice_name p; List.iter (function Simple (_,l) -> Option.may (List.iter traverse) l | Verbatim _ -> ()) l
   | TupleList _ -> ()
   in
   let rec map = function
+  | SingleTuple { id; types; } -> 
+    let types = List.mapi (fun idx typ ->
+      let typ = match id.label with None -> typ | Some name -> try Hashtbl.find h (name ^ (Int.to_string idx)) with _ -> assert false in
+      (Type.undepend typ Strict)
+    ) types in
+    SingleTuple ({ id; types })
   | Single { id; typ; } ->
     let typ = match id.label with None -> typ | Some name -> try Hashtbl.find h name with _ -> assert false in
     Single (new_param id (Type.undepend typ Strict)) (* if no other clues - input parameters are strict *)

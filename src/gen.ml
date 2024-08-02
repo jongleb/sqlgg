@@ -93,6 +93,7 @@ let substitute_vars s vars subst_param =
           parami + 1
       in
       loop acc i2 parami tl
+    | SingleTuple _::_ -> assert false
     | SingleIn param :: tl ->
       let (i1,i2) = param.id.pos in
       assert (i2 > i1);
@@ -211,7 +212,8 @@ let rec find_param_ids l =
       | Sql.Single p | SingleIn p -> [ p.id ]
       | Choice (id,_) -> [ id ]
       | ChoiceIn { param; vars; _ } -> find_param_ids vars @ [param]
-      | TupleList (id, _) -> [ id ])
+      | TupleList (id, _) -> [ id ]
+      | SingleTuple _ -> assert false)
     l
 
 let names_of_vars l =
@@ -224,6 +226,7 @@ let rec params_only l =
   List.map
     (function
       | Sql.Single p -> [p]
+      | SingleTuple _ -> assert false
       | SingleIn _ -> []
       | ChoiceIn { vars; _ } -> params_only vars
       | Choice _ -> fail "dynamic choices not supported for this host language"

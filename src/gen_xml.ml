@@ -59,6 +59,7 @@ let value ?(inparam=false) v =
 
 let tuplelist_value_of_param = function
   | Sql.Single _ | SingleIn _ | Choice _ | ChoiceIn _ -> None
+  | SingleTuple _ -> assert false
   | TupleList ({ label = None; _ }, _) -> failwith "empty label in tuple subst"
   | TupleList ({ label = Some name; _ }, schema) ->
     let typ = "list(" ^ String.concat ", " (List.map (fun { Sql.domain; _ } -> Sql.Type.type_name domain) schema) ^ ")" in
@@ -94,6 +95,7 @@ let rec params_only l =
       | Sql.Single p -> [p]
       | SingleIn _ -> []
       | ChoiceIn { vars; _ } -> params_only vars
+      | SingleTuple _ -> assert false
       | Choice (_,choices) ->
         choices
         |> List.map (function Sql.Verbatim _ | Simple (_,None) -> [] | Simple (_name,Some vars) -> params_only vars) (* TODO prefix names *)
