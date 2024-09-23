@@ -675,6 +675,23 @@ let rec eval (stmt:Sql.stmt) =
     List.map (fun i -> i.Schema.Source.Attr.attr) schema , a ,b
   | CreateRoutine (name,_,_) ->
     [], [], CreateRoutine name
+  (* FIX ME, NOT ONLY SELECT *)  
+  | Ctes_select { ctes; stmt } ->
+    let p1 = List.fold_left (fun acc cte ->
+      (* FIX ME, DON'T SKIP ME _kind*)
+      let (schema, p1, _kind) = eval_select_full empty_env cte.Cte.stmt in
+      let tbl_name = make_table_name cte.name  in
+      let schema = List.map (fun i -> i.attr) schema in
+      (* FIX ME, GET RID OF ME *)
+      let schema = 
+        let default_cte_cols = List.map (fun i -> i.name) schema in
+        List.map2 (fun col cut -> { cut with name = col  }) (Option.default default_cte_cols cte.cols) schema in
+      (* FIX ME, WE HAVE SCHEMA FOR IT, IT ISN'T A TABLE !!!! *)
+      Tables.add (tbl_name, schema);
+      p1 @ acc
+    ) [] ctes in
+    let (schema, p2, b) = eval_select_full empty_env stmt in
+    List.map (fun i -> i.Schema.Source.Attr.attr) schema , p1 @ p2, b
 
 (* FIXME unify each choice separately *)
 let unify_params l =

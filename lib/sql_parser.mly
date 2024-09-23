@@ -92,6 +92,8 @@ if_exists: IF EXISTS {}
 temporary: either(GLOBAL,LOCAL)? TEMPORARY { }
 assign: name=IDENT EQUAL e=expr { name, e }
 
+cte: name=IDENT cols=maybe_parenth(sequence(IDENT))? AS LPAREN stmt=select_stmt RPAREN { Cte.{ name; cols;stmt } }
+
 statement: CREATE ioption(temporary) TABLE ioption(if_not_exists) name=table_name schema=table_definition
               {
                 Create (name,`Schema schema)
@@ -170,6 +172,7 @@ statement: CREATE ioption(temporary) TABLE ioption(if_not_exists) name=table_nam
                 Function.add (List.length params) (Ret Any) name.tn; (* FIXME void *)
                 CreateRoutine (name, None, params)
               }
+         | WITH ctes=commas(cte) stmt=select_stmt { Ctes_select {ctes; stmt;} }     
 
 parameter_default_: DEFAULT | EQUAL { }
 parameter_default: parameter_default_ e=expr { e }
