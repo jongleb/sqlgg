@@ -10,11 +10,20 @@ let debug = ref false
 type env = {
   tables : Tables.table list;
   schema : table_name Schema.Source.t;
+  ctes : Tables.table list;
   insert_schema : Schema.t;
   (* it is used to apply non-null comparison semantics inside WHERE expressions *)
   set_tyvar_strict: bool;
   query_has_grouping: bool;
 }
+
+module Tables_with_derived = struct
+  open Tables
+
+  let get ~ctes name = get_from  (ctes @ Tables.all()) name
+
+  let get_from ~ctes ~tables name = get_from  (ctes @ tables) name
+end
 
 (* expr with all name references resolved to values or "functions" *)
 type res_expr =
@@ -34,6 +43,7 @@ let empty_env = { query_has_grouping = false;
   tables = []; schema = []; 
   insert_schema = []; 
   set_tyvar_strict = false; 
+  ctes = [];
 }
 
 let flat_map f l = List.flatten (List.map f l)
@@ -114,7 +124,7 @@ let all_columns  = make_unique $ Schema.cross_all
 
 let all_tbl_columns = all_columns $ List.map snd
 
-let resolve_column tables schema {cname;tname} =
+let resolve_column ~tables schema {cname;tname} =
   let open Schema.Source in
   let open Attr in
   let by_name_and_sources tname name source_attr = source_attr.attr.name = 
@@ -134,8 +144,8 @@ let resolve_column tables schema {cname;tname} =
     | [x] -> x
     | [] -> raise (Schema.Error (err_data,"missing attribute : " ^ name))
     | _ -> raise (Schema.Error (err_data,"duplicate attribute : " ^ name)) in
-  let default_result = find (Option.map_default (schema_of tables) schema tname) cname in  
-  Option.default default_result result
+  let default_result () = find (Option.map_default (schema_of tables) schema tname) cname in  
+  Option.default (default_result ()) result
 
 let resolve_column_assignments tables l =
   let open Schema.Source in 
@@ -675,23 +685,18 @@ let rec eval (stmt:Sql.stmt) =
     List.map (fun i -> i.Schema.Source.Attr.attr) schema , a ,b
   | CreateRoutine (name,_,_) ->
     [], [], CreateRoutine name
-  (* FIX ME, NOT ONLY SELECT *)  
-  | Ctes_select { ctes; stmt } ->
-    let p1 = List.fold_left (fun acc cte ->
-      (* FIX ME, DON'T SKIP ME _kind*)
-      let (schema, p1, _kind) = eval_select_full empty_env cte.Cte.stmt in
-      let tbl_name = make_table_name cte.name  in
+  | Ctes_select { ctes; stmt; _ } ->
+    let (ctes, p1) = List.fold_left (fun (acc_ctes, acc_vars) cte ->
+      let (schema, p1, _kind) = eval_select_full { empty_env with ctes = acc_ctes } cte.stmt in
+      let tbl_name = make_table_name cte.cte_name  in
       let schema = List.map (fun i -> i.attr) schema in
-      (* FIX ME, GET RID OF ME *)
       let schema = 
         let default_cte_cols = List.map (fun i -> i.name) schema in
-        List.map2 (fun col cut -> { cut with name = col  }) (Option.default default_cte_cols cte.cols) schema in
-      (* FIX ME, WE HAVE SCHEMA FOR IT, IT ISN'T A TABLE !!!! *)
-      Tables.add (tbl_name, schema);
-      p1 @ acc
-    ) [] ctes in
-    let (schema, p2, b) = eval_select_full empty_env stmt in
-    List.map (fun i -> i.Schema.Source.Attr.attr) schema , p1 @ p2, b
+        List.map2 (fun col cut -> { cut with name = col }) (Option.default default_cte_cols cte.cols) schema in
+      (tbl_name, schema) :: acc_ctes, p1 @ acc_vars
+    ) ([], []) ctes in
+    let (schema, p2, b) = eval_select_full { empty_env with ctes } stmt in
+    List.map (fun i -> i.attr) schema , p1 @ p2, b
 
 (* FIXME unify each choice separately *)
 let unify_params l =

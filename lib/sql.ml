@@ -431,10 +431,7 @@ type insert_action =
   on_duplicate : assignments option;
 }
 
-(* FIXME*)
-module Cte = struct 
-  type t = { name: string;  cols: string list option; stmt: select_full; }
-end
+type cte = { cte_name: string;  cols: string list option; stmt: select_full; }
 
 type stmt =
 | Create of table_name * [ `Schema of schema | `Select of select_full ]
@@ -450,8 +447,7 @@ type stmt =
 | UpdateMulti of nested list * assignments * expr option
 | Select of select_full
 | CreateRoutine of table_name * Type.kind option * (string * Type.kind * expr option) list (* table_name represents possibly namespaced function name *)
-(* FIXME it should work not only with select*)
-| Ctes_select of { ctes: Cte.t list; stmt: select_full }
+| Ctes_select of { ctes: cte list; stmt: select_full; is_recursive: bool; }
 
 (*
 open Schema

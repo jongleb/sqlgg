@@ -42,7 +42,7 @@
        CASE WHEN THEN ELSE END CHANGE MODIFY DELAYED ENUM FOR SHARE MODE LOCK
        OF WITH NOWAIT ACTION NO IS INTERVAL SUBSTRING DIV MOD CONVERT LAG LEAD OVER
        FIRST_VALUE LAST_VALUE NTH_VALUE PARTITION ROWS RANGE UNBOUNDED PRECEDING FOLLOWING CURRENT ROW
-       CAST GENERATED ALWAYS VIRTUAL STORED STATEMENT DOUBLECOLON
+       CAST GENERATED ALWAYS VIRTUAL STORED STATEMENT DOUBLECOLON RECURSIVE
 %token FUNCTION PROCEDURE LANGUAGE RETURNS OUT INOUT BEGIN COMMENT
 %token MICROSECOND SECOND MINUTE HOUR DAY WEEK MONTH QUARTER YEAR
        SECOND_MICROSECOND MINUTE_MICROSECOND MINUTE_SECOND
@@ -92,7 +92,7 @@ if_exists: IF EXISTS {}
 temporary: either(GLOBAL,LOCAL)? TEMPORARY { }
 assign: name=IDENT EQUAL e=expr { name, e }
 
-cte: name=IDENT cols=maybe_parenth(sequence(IDENT))? AS LPAREN stmt=select_stmt RPAREN { Cte.{ name; cols;stmt } }
+cte: cte_name=IDENT cols=maybe_parenth(sequence(IDENT))? AS LPAREN stmt=select_stmt RPAREN { { cte_name; cols;stmt } }
 
 statement: CREATE ioption(temporary) TABLE ioption(if_not_exists) name=table_name schema=table_definition
               {
@@ -172,7 +172,7 @@ statement: CREATE ioption(temporary) TABLE ioption(if_not_exists) name=table_nam
                 Function.add (List.length params) (Ret Any) name.tn; (* FIXME void *)
                 CreateRoutine (name, None, params)
               }
-         | WITH ctes=commas(cte) stmt=select_stmt { Ctes_select {ctes; stmt;} }     
+         | is_recursive=cte_with ctes=commas(cte) stmt=select_stmt { Ctes_select { ctes; stmt; is_recursive }}     
 
 parameter_default_: DEFAULT | EQUAL { }
 parameter_default: parameter_default_ e=expr { e }
@@ -202,6 +202,10 @@ ignore_after(X): parser_state_ignore X IGNORED* parser_state_normal { }
 parser_state_ignore: { Parser_state.mode_ignore () }
 parser_state_normal: { Parser_state.mode_normal () }
 parser_state_ident: { Parser_state.mode_ident () }
+
+cte_with:
+  WITH { false }
+  | WITH RECURSIVE { true }
 
 select_stmt: select_core other=list(preceded(compound_op,select_core)) o=loption(order) lim=limit_t? select_row_locking?
               {
