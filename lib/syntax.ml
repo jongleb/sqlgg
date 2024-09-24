@@ -20,9 +20,9 @@ type env = {
 module Tables_with_derived = struct
   open Tables
 
-  let get ~ctes name = get_from  (ctes @ Tables.all()) name
+  let get ~env name = get_from  (env.ctes @ Tables.all()) name
 
-  let get_from ~ctes ~tables name = get_from  (ctes @ tables) name
+  let get_from ~env name = get_from  (env.ctes @ env.tables) name
 end
 
 (* expr with all name references resolved to values or "functions" *)
@@ -48,8 +48,8 @@ let empty_env = { query_has_grouping = false;
 
 let flat_map f l = List.flatten (List.map f l)
 
-let schema_of tables name =
-  let result = Tables.get_from tables name in 
+let schema_of ~env name =
+  let result = Tables_with_derived.get_from ~env name in 
   List.map (fun attr -> { Schema.Source.Attr.sources=[result |> fst]; attr; }) (result |> snd)
 
 let get_or_failwith = function `Error s -> failwith s | `Ok t -> t
@@ -124,7 +124,7 @@ let all_columns  = make_unique $ Schema.cross_all
 
 let all_tbl_columns = all_columns $ List.map snd
 
-let resolve_column ~tables schema {cname;tname} =
+let resolve_column ~env {cname;tname} =
   let open Schema.Source in
   let open Attr in
   let by_name_and_sources tname name source_attr = source_attr.attr.name = 
@@ -136,7 +136,7 @@ let resolve_column ~tables schema {cname;tname} =
     | [x] -> Some x
     | [] -> None
     | list -> Some (List.last list) in
-  let result = find schema cname in
+  let result = find env.schema cname in
   let find_by_name t name = List.find_all (by_name name) t in
   let find t name =
     let err_data = from_schema t in
@@ -144,15 +144,15 @@ let resolve_column ~tables schema {cname;tname} =
     | [x] -> x
     | [] -> raise (Schema.Error (err_data,"missing attribute : " ^ name))
     | _ -> raise (Schema.Error (err_data,"duplicate attribute : " ^ name)) in
-  let default_result () = find (Option.map_default (schema_of tables) schema tname) cname in  
+  let default_result () = find (Option.map_default (schema_of ~env) env.schema tname) cname in  
   Option.default (default_result ()) result
 
-let resolve_column_assignments tables l =
+let resolve_column_assignments ~env l =
   let open Schema.Source in 
   let open Attr in
-  let all = all_tbl_columns (List.map (fun (a, b) -> a, (List.map (fun attr -> {sources=[a]; attr}) b)) tables) in
+  let all = all_tbl_columns (List.map (fun (a, b) -> a, (List.map (fun attr -> {sources=[a]; attr}) b)) env.tables) in
   l |> List.map begin fun (col,expr) ->
-    let attr = resolve_column tables all col in
+    let attr = resolve_column ~env:{ env with schema = all } col in
     (* autoincrement is special - nullable on insert, strict otherwise *)
     let typ = if Constraints.mem Autoincrement attr.attr.extra then 
       Sql.Type.nullable attr.attr.domain.t else attr.attr.domain in
@@ -164,11 +164,11 @@ let resolve_column_assignments tables l =
     | _ -> equality typ expr
   end
 
-let get_columns_schema tables l =
-  let all = all_tbl_columns (List.map (fun (a, b) -> a, (List.map (fun attr -> {Schema.Source.Attr.sources=[a]; attr}) b)) tables) in
+let get_columns_schema ~env l =
+  let all = all_tbl_columns (List.map (fun (a, b) -> a, (List.map (fun attr -> {Schema.Source.Attr.sources=[a]; attr}) b)) env.tables) in
   (* FIXME col_name *)
   l |> List.map (fun col -> 
-    let res = resolve_column tables all col in
+    let res = resolve_column ~env:{ env with schema = all } col in
     { res with attr = { res.attr with name = col.cname } })
 
 let _print_env env =
@@ -201,7 +201,7 @@ let rec resolve_columns env expr =
   let rec each e =
     match e with
     | Value x -> ResValue x
-    | Column col -> ResValue (resolve_column env.tables env.schema col).attr.domain
+    | Column col -> ResValue (resolve_column ~env col).attr.domain
     | Inserted name ->
       let attr = try Schema.find env.insert_schema name with Schema.Error (_,s) -> fail "for inserted values : %s" s in
       ResValue attr.domain
@@ -386,11 +386,11 @@ and infer_schema env columns =
 (*   let all = tables |> List.map snd |> List.flatten in *)
   let resolve1 = function
     | All -> env.schema
-    | AllOf t -> schema_of env.tables t
+    | AllOf t -> schema_of ~env t
     | Expr (e,name) ->
       let col =
         match e with
-        | Column col -> resolve_column env.tables env.schema col
+        | Column col -> resolve_column ~env col
         | _ -> { attr = unnamed_attribute (resolve_types env e |> snd |> get_or_failwith); sources = [] }
       in
       let col = Option.map_default (fun n -> {col with attr = { col.attr with name = n }}) col name in
@@ -435,7 +435,7 @@ and join env ((schema,p0,ts0),joins) =
   List.fold_left do_join (env, p0) joins
 
 and params_of_assigns env ss =
-  let exprs = resolve_column_assignments env.tables ss in
+  let exprs = resolve_column_assignments ~env ss in
   get_params_l env exprs
 
 and params_of_order order final_schema tables =
@@ -514,7 +514,7 @@ and resolve_source env (x,alias) =
     if alias <> None then failwith "No alias allowed on nested tables";
     s, p, env.tables
   | `Table s ->
-    let (name,s) = Tables.get s in
+    let (name,s) = Tables_with_derived.get ~env s in
     let sources = (name :: option_list alias) in
     let s3 = List.map (fun attr -> { Schema.Source.Attr.attr; sources }) s  in
     s3, [], List.map (fun name -> name, s) sources
@@ -538,11 +538,11 @@ and eval_select_full env { select=(select,other); order; limit; } =
   final_schema,(p1@(List.flatten p2l)@p3@p4 : var list), Stmt.Select cardinality
 
 
-let update_tables sources ss w =
+let update_tables ~env sources ss w =
   let schema = Schema.cross_all @@ List.map (fun (s,_,_) -> s) sources in
   let p0 = List.flatten @@ List.map (fun (_,p,_) -> p) sources in
   let tables = List.flatten @@ List.map (fun (_,_,ts) -> ts) sources in (* TODO assert equal duplicates if not unique *)
-  let result = get_columns_schema tables (List.map fst ss) in
+  let result = get_columns_schema ~env:{ env with tables } (List.map fst ss) in
   let env = { empty_env with 
     tables; schema; insert_schema=List.map (fun i -> i.Schema.Source.Attr.attr) result; } in
   let p1 = params_of_assigns env ss in
@@ -673,12 +673,12 @@ let rec eval (stmt:Sql.stmt) =
 
     let r = List.map (fun attr -> {Schema.Source.Attr.attr; sources=[f] }) s in
 
-    let params = update_tables [r,[],[(f, s)]] ss w in
+    let params = update_tables ~env:empty_env [r,[],[(f, s)]] ss w in
     let p3 = params_of_order o [] [(f, s)] in
     [], params @ p3 @ (List.map (fun p -> Single p) lim), Update (Some table)
   | UpdateMulti (tables,ss,w) ->
     let sources = List.map (fun src -> resolve_source empty_env ((`Nested src), None)) tables in
-    let params = update_tables sources ss w in
+    let params = update_tables ~env:empty_env sources ss w in
     [], params, Update None
   | Select select -> 
     let (schema, a, b) = eval_select_full empty_env select in
