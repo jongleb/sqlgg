@@ -537,6 +537,32 @@ and eval_select_full env { select=(select,other); order; limit; } =
                                     else cardinality in
   final_schema,(p1@(List.flatten p2l)@p3@p4 : var list), Stmt.Select cardinality
 
+and eval_select_full_cte_recursive env ~cte =
+  let { select=(select,other); order; limit; } = cte.stmt in
+  let (s1,p1,tbls,cardinality) = eval_select env select in
+  let table = 
+    let tbl_name = make_table_name cte.cte_name  in
+    let schema = List.map (fun i ->  i.Schema.Source.Attr.attr) s1 in
+    let default_cte_cols = List.map (fun i -> i.name) schema in
+    let schema = List.map2 (fun col cut -> { cut with name = col }) (Option.default default_cte_cols cte.cols) schema in
+    (tbl_name, schema) in
+  let (s2l,p2l) = List.split (List.map (fun (s,p,_,_) -> s,p) @@ List.map (eval_select { env with tables=( table :: env.tables) }) other) in
+  if false then
+    eprintf "cardinality=%s other=%u\n%!"
+      (Stmt.cardinality_to_string cardinality)
+      (List.length other);
+  let cardinality = if other = [] then cardinality else `Nat in
+  (* ignoring tables in compound statements - they cannot be used in ORDER BY *)
+  let final_schema = List.fold_left Schema.compound s1 s2l in
+  let p3 = params_of_order order final_schema tbls in
+  prerr_endline "HEREEEE3!!";
+  let (p4,limit1) = match limit with Some (p,x) -> List.map (fun p -> Single p) p, x | None -> [],false in
+  (*                 Schema.check_unique schema; *)
+  let cardinality =
+    if limit1 && cardinality = `Nat then `Zero_one
+                                      else cardinality in
+  final_schema,(p1@(List.flatten p2l)@p3@p4 : var list), Stmt.Select cardinality  
+
 
 let update_tables ~env sources ss w =
   let schema = Schema.cross_all @@ List.map (fun (s,_,_) -> s) sources in
@@ -685,7 +711,7 @@ let rec eval (stmt:Sql.stmt) =
     List.map (fun i -> i.Schema.Source.Attr.attr) schema , a ,b
   | CreateRoutine (name,_,_) ->
     [], [], CreateRoutine name
-  | Ctes_select { ctes; stmt; _ } ->
+  | Ctes_select { ctes; stmt; is_recursive=false } ->
     let (ctes, p1) = List.fold_left (fun (acc_ctes, acc_vars) cte ->
       let (schema, p1, _kind) = eval_select_full { empty_env with ctes = acc_ctes } cte.stmt in
       let tbl_name = make_table_name cte.cte_name  in
@@ -697,6 +723,18 @@ let rec eval (stmt:Sql.stmt) =
     ) ([], []) ctes in
     let (schema, p2, b) = eval_select_full { empty_env with ctes } stmt in
     List.map (fun i -> i.attr) schema , p1 @ p2, b
+  | Ctes_select { ctes; stmt; is_recursive=true } ->
+      let (ctes, p1) = List.fold_left (fun (acc_ctes, acc_vars) cte ->
+        let (schema, p1, _kind) = eval_select_full_cte_recursive { empty_env with ctes = acc_ctes } ~cte in
+        let tbl_name = make_table_name cte.cte_name  in
+        let schema = List.map (fun i -> i.attr) schema in
+        let schema = 
+          let default_cte_cols = List.map (fun i -> i.name) schema in
+          List.map2 (fun col cut -> { cut with name = col }) (Option.default default_cte_cols cte.cols) schema in
+        (tbl_name, schema) :: acc_ctes, p1 @ acc_vars
+      ) ([], []) ctes in
+      let (schema, p2, b) = eval_select_full { empty_env with ctes } stmt in
+      List.map (fun i -> i.attr) schema , p1 @ p2, b  
 
 (* FIXME unify each choice separately *)
 let unify_params l =
