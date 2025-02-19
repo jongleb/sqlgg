@@ -24,7 +24,7 @@ let do_test sql ?kind schema params =
   let stmt = parse sql in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string schema stmt.schema;
   assert_equal ~msg:"params" ~cmp:cmp_params ~printer:Sql.show_params params
-    (List.map (function Single p -> p | OptionBoolChoice _ | SingleIn _ | Choice _ | ChoiceIn _ | TupleList _ | EnumCtor _ -> assert false) stmt.vars);
+    (List.map (function Single p -> p | OptionBoolChoice _ | SingleIn _ | Choice _ | ChoiceIn _ | TupleList _ -> assert false) stmt.vars);
   match kind with
   | Some k -> assert_equal ~msg:"kind" ~printer:[%derive.show: Stmt.kind] k stmt.kind
   | None -> ()
@@ -810,7 +810,7 @@ let test_select_exposed_alias = [
             true as flag
     ) as inner_x (a, b, c, d)
   ) as outer_x (str, num, price, flag, bonus) |} [
-    attr' "str" Text;
+    attr' "str" (StringLiteral "abc");
     attr' "num" Int;
     attr' "price" Float;
     attr' "flag" Bool;
@@ -844,33 +844,34 @@ let test_enum_literal () =
 
   do_test "CREATE TABLE test36 (status enum('active','pending','deleted') NOT NULL DEFAULT 'pending')" [] [];
   
-  let stmt = parse {|INSERT INTO test36 VALUES(^@'pending')|} in
+  let stmt = parse {|INSERT INTO test36 VALUES('pending')|} in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string [] stmt.schema;
 
-  let stmt2 = parse {|INSERT INTO test36 VALUES(^@'active')|} in
+  let stmt2 = parse {|INSERT INTO test36 VALUES('active')|} in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string [] stmt2.schema;
   
-  let stmt3 = parse {|INSERT INTO test36 VALUES(^@'deleted')|} in
+  let stmt3 = parse {|INSERT INTO test36 VALUES('deleted')|} in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string [] stmt3.schema;
 
-  let stmt4 = parse {|SELECT * FROM test36 WHERE status = ^@'active'|} in
+  let stmt4 = parse {|SELECT * FROM test36 WHERE status = 'active'|} in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string 
     [attr' ~extra:[NotNull; WithDefault] "status" 
       (Type.(Enum (Enum_kind.Ctors.of_list ["active"; "pending"; "deleted"] )))]
     stmt4.schema;
 
-  let stmt5 = parse {|UPDATE test36 SET status = ^@'deleted' WHERE status = ^@'pending'|} in
+  let stmt5 = parse {|UPDATE test36 SET status = 'deleted' WHERE status = 'pending'|} in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string [] stmt5.schema;
 
   let stmt6 = parse {|
     SELECT * FROM test36 
-    WHERE status IN (^@'active', ^@'pending') 
-    AND status != ^@'deleted'
+    WHERE status IN ('active', 'pending') 
+    AND status != 'deleted'
   |} in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string
     [attr' ~extra:[NotNull; WithDefault] "status" 
       (Type.(Enum (Enum_kind.Ctors.of_list ["active"; "pending"; "deleted"])))]
     stmt6.schema;
+    
   Sqlgg_config.type_safe_enums := false
 
 let run () =

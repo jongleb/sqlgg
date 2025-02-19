@@ -35,6 +35,7 @@ struct
     | Datetime
     | Decimal
     | Enum of Enum_kind.t
+    | StringLiteral of string
     | Any (* FIXME - Top and Bottom ? *)
     [@@deriving eq, show{with_path=false}]
     (* TODO NULL is currently typed as Any? which actually is a misnormer *)
@@ -79,17 +80,26 @@ struct
   (** @return (subtype, supertype) *)
   let order_kind x y =
     match x, y with
+    | StringLiteral _, StringLiteral _ -> `Order (Text, Text)
     | x, y when equal_kind x y -> `Equal
     | Enum a, Enum b when Enum_kind.Ctors.subset a b -> `Equal
     | Enum a, Enum b when Enum_kind.Ctors.subset b a -> `Equal
-    | Any, t | t, Any -> `Order (t,t)
-    | Int, Float | Float, Int -> `Order (Int,Float)
+    (* StringLiteral subtype *)
+    | StringLiteral a, Enum b when Enum_kind.Ctors.subset (Enum_kind.Ctors.of_list [a]) b -> 
+        `Order (StringLiteral a, Enum b)  (* StringLiteral subtype of Enum *)
+    | Enum a, StringLiteral b when Enum_kind.Ctors.subset (Enum_kind.Ctors.of_list [b]) a -> 
+        `Order (StringLiteral b, Enum a)
+    | StringLiteral _, Text | Text, StringLiteral _ -> `Equal
+    | StringLiteral x, Datetime | Datetime, StringLiteral x -> `Order (Datetime, StringLiteral x)
+    | StringLiteral x, Blob | Blob, StringLiteral x -> `Order (StringLiteral x, Blob)
+    | Any, t | t, Any -> `Order (t, t)
+    | Int, Float | Float, Int -> `Order (Int, Float)
     (* arbitrary decision : allow int<->decimal but require explicit cast for floats *)
-    | Decimal, Int | Int, Decimal -> `Order (Int,Decimal)
-    | Text, Blob | Blob, Text -> `Order (Text,Blob)
+    | Decimal, Int | Int, Decimal -> `Order (Int, Decimal)
+    | Text, Blob | Blob, Text -> `Order (Text, Blob)
     | (Text, Enum e | Enum e, Text) when !Enum_kind.enum_is_str -> `Order (Enum e, Text)
-    | Int, Datetime | Datetime, Int -> `Order (Int,Datetime)
-    | Text, Datetime | Datetime, Text -> `Order (Datetime,Text)
+    | Int, Datetime | Datetime, Int -> `Order (Int, Datetime)
+    | Text, Datetime | Datetime, Text -> `Order (Datetime, Text)
     | _ -> `No
 
   let order_nullability x y =
@@ -393,7 +403,6 @@ and var =
 | TupleList of param_id * tuple_list_kind
 (* It differs from Choice that in this case we should generate sql "TRUE", it doesn't seem reusable *)
 | OptionBoolChoice of param_id * var list * (pos * pos)
-| EnumCtor of string * pos
 and tuple_list_kind = Insertion of schema | Where_in of Type.t list | ValueRows of { types: Type.t list; values_start_pos: int; }
 [@@deriving show]
 type vars = var list [@@deriving show]
@@ -465,7 +474,6 @@ and expr =
       to use it during the substitution and to not depend on the magic numbers there.
    *) 
   | OptionBoolChoices of { choice: expr; pos: (pos * pos) }
-  | EnumCtor of { ctor_name: string; pos: pos; }
 and column =
   | All
   | AllOf of table_name

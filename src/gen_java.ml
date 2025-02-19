@@ -42,6 +42,7 @@ let as_lang_type t =
   | Bool -> "boolean"
   | Decimal -> "float" (* BigDecimal? *)
   | Datetime -> "Timestamp"
+  | StringLiteral _ -> "String"
   | Enum _
   | Unit _ -> assert false
 

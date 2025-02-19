@@ -20,7 +20,7 @@
   <in/>
   <out>
    <value name="_0" type="Int"/>
-   <value name="_1" type="Text"/>
+   <value name="_1" type="(StringLiteral &quot;foo&quot;)"/>
    <value name="_2" type="Any" nullable="true"/>
   </out>
  </stmt>
