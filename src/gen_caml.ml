@@ -132,6 +132,7 @@ module L = struct
 
   let as_lang_type = function
   | { t = Blob; nullability } -> type_name { t = Text; nullability }
+  | { t = StringLiteral _; nullability } -> type_name { t = Text; nullability }
   | t -> type_name t
 
   let as_api_type = as_lang_type

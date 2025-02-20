@@ -78,16 +78,15 @@ struct
     match x, y with
     | StringLiteral _, StringLiteral _ -> `Order (Text, Text)
     | x, y when equal_kind x y -> `Equal
-    | Enum a, Enum b when Enum_kind.Ctors.subset a b -> `Equal
-    | Enum a, Enum b when Enum_kind.Ctors.subset b a -> `Equal
-    (* StringLiteral subtype *)
+    | Enum a, Enum b when Enum_kind.Ctors.subset a b -> `Order (Enum a, Enum b)
+    | Enum a, Enum b when Enum_kind.Ctors.subset b a -> `Order (Enum b, Enum a)
     | StringLiteral a, Enum b when Enum_kind.Ctors.subset (Enum_kind.Ctors.of_list [a]) b -> 
-        `Order (StringLiteral a, Enum b)  (* StringLiteral subtype of Enum *)
+        `Order (Enum b, StringLiteral a)  (* StringLiteral subtype of Enum *)
     | Enum a, StringLiteral b when Enum_kind.Ctors.subset (Enum_kind.Ctors.of_list [b]) a -> 
-        `Order (StringLiteral b, Enum a)
+        `Order (Enum a, StringLiteral b)
     | StringLiteral _, Text | Text, StringLiteral _ -> `Equal
     | StringLiteral x, Datetime | Datetime, StringLiteral x -> `Order (Datetime, StringLiteral x)
-    | StringLiteral x, Blob | Blob, StringLiteral x -> `Order (StringLiteral x, Blob)
+    | StringLiteral x, Blob | Blob, StringLiteral x -> `Order (Blob, StringLiteral x)
     | Any, t | t, Any -> `Order (t, t)
     | Int, Float | Float, Int -> `Order (Int, Float)
     (* arbitrary decision : allow int<->decimal but require explicit cast for floats *)
