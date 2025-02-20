@@ -32,13 +32,14 @@ struct
     | Datetime
     | Decimal
     | Enum of Enum_kind.t
-    | StringLiteral of string
+    | StringLiteral of string list
     | Any (* FIXME - Top and Bottom ? *)
     [@@deriving eq, show{with_path=false}]
     (* TODO NULL is currently typed as Any? which actually is a misnormer *)
 
     let show_kind = function 
       | Enum ctors -> sprintf "Enum (%s)" (String.concat ", " (Enum_kind.Ctors.elements ctors))
+      | StringLiteral l -> sprintf "StringLiteral (%s)" (String.concat ", " l)
       | k -> show_kind k
 
   type nullability =
@@ -76,15 +77,15 @@ struct
   (** @return (subtype, supertype) *)
   let order_kind x y =
     match x, y with
-    | StringLiteral _, StringLiteral _ -> `Order (Text, Text)
     | x, y when equal_kind x y -> `Equal
+    | StringLiteral a, StringLiteral b -> `Order (StringLiteral b, StringLiteral (a @ b))
     | Enum a, Enum b when Enum_kind.Ctors.subset a b -> `Order (Enum a, Enum b)
     | Enum a, Enum b when Enum_kind.Ctors.subset b a -> `Order (Enum b, Enum a)
-    | StringLiteral a, Enum b when Enum_kind.Ctors.subset (Enum_kind.Ctors.of_list [a]) b -> 
+    | StringLiteral a, Enum b when Enum_kind.Ctors.subset (Enum_kind.Ctors.of_list a) b -> 
         `Order (Enum b, StringLiteral a)  (* StringLiteral subtype of Enum *)
-    | Enum a, StringLiteral b when Enum_kind.Ctors.subset (Enum_kind.Ctors.of_list [b]) a -> 
+    | Enum a, StringLiteral b when Enum_kind.Ctors.subset (Enum_kind.Ctors.of_list b) a -> 
         `Order (Enum a, StringLiteral b)
-    | StringLiteral _, Text | Text, StringLiteral _ -> `Equal
+    | StringLiteral x, Text | Text, StringLiteral x -> `Order (Text, StringLiteral x)
     | StringLiteral x, Datetime | Datetime, StringLiteral x -> `Order (Datetime, StringLiteral x)
     | StringLiteral x, Blob | Blob, StringLiteral x -> `Order (Blob, StringLiteral x)
     | Any, t | t, Any -> `Order (t, t)

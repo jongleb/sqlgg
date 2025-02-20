@@ -138,7 +138,7 @@ module L = struct
   let as_api_type = as_lang_type
 end
 
-let rec get_column index attr =
+let get_column index attr =
   let rec print_column attr = match attr with
   | { domain={ t = Enum ctors; _ }; _ } when !Sqlgg_config.enum_as_poly_variant ->
     sprintf "(%s.get_column%s" (get_enum_name ctors)

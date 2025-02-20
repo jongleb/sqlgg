@@ -810,7 +810,7 @@ let test_select_exposed_alias = [
             true as flag
     ) as inner_x (a, b, c, d)
   ) as outer_x (str, num, price, flag, bonus) |} [
-    attr' "str" (StringLiteral "abc");
+    attr' "str" (StringLiteral ["abc"]);
     attr' "num" Int;
     attr' "price" Float;
     attr' "flag" Bool;
