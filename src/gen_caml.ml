@@ -216,20 +216,18 @@ let match_variant_pattern i name args ~is_poly =
      | l when List.for_all ((=) "_") l -> " _"
      | l -> sprintf " (%s)" (String.concat ", " l))
 
-let set_param index param =
+let rec set_param index param =
   let nullable = is_param_nullable param in
   let pname = show_param_name param index in
   let ptype = show_param_type param in
   let set_param_nullable = output "begin match %s with None -> T.set_param_null p | Some v -> %s p v end;" pname in
-  let rec go param = match param with
-  | { typ = { t=Enum _; _}; _ } as c when not !Sqlgg_config.enum_as_poly_variant -> go { c with typ = { c.typ with t = Text } }
+  match param with
+  | { typ = { t=Enum _; _}; _ } as c when not !Sqlgg_config.enum_as_poly_variant -> set_param index { c with typ = { c.typ with t = Text } }
   | { typ = { t=Enum ctors; _}; _ } when nullable -> set_param_nullable @@ (get_enum_name ctors) ^ ".set_param" 
   | { typ = { t=Enum ctors; _ }; _ } -> output "%s.set_param p %s;" (get_enum_name ctors) pname
-  | param when nullable -> set_param_nullable @@ sprintf "T.set_param_%s" (show_param_type param) 
-  | _ -> output "T.set_param_%s p %s;" ptype pname in
-  go param
+  | param' when nullable -> set_param_nullable @@ sprintf "T.set_param_%s" (show_param_type param') 
+  | _ -> output "T.set_param_%s p %s;" ptype pname
   
-
 let rec set_var index var =
   match var with
   | Single p -> set_param index p
