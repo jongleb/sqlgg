@@ -222,7 +222,7 @@ let set_param index param =
   let ptype = show_param_type param in
   let set_param_nullable = output "begin match %s with None -> T.set_param_null p | Some v -> %s p v end;" pname in
   let rec go param = match param with
-  | { typ = { t=Enum _; _}; _ } as c when !Sqlgg_config.enum_as_poly_variant -> go { c with typ = { c.typ with t = Text } }
+  | { typ = { t=Enum _; _}; _ } as c when not !Sqlgg_config.enum_as_poly_variant -> go { c with typ = { c.typ with t = Text } }
   | { typ = { t=Enum ctors; _}; _ } when nullable -> set_param_nullable @@ (get_enum_name ctors) ^ ".set_param" 
   | { typ = { t=Enum ctors; _ }; _ } -> output "%s.set_param p %s;" (get_enum_name ctors) pname
   | param when nullable -> set_param_nullable @@ sprintf "T.set_param_%s" (show_param_type param) 
