@@ -31,14 +31,14 @@ struct
     | Bool
     | Datetime
     | Decimal
-    | Union of Enum_kind.t
+    | Union of { ctors: Enum_kind.t; is_closed: bool }
     | StringLiteral of string
     | Any (* FIXME - Top and Bottom ? *)
     [@@deriving eq, show{with_path=false}]
     (* TODO NULL is currently typed as Any? which actually is a misnormer *)
 
     let show_kind = function 
-      | Union ctors -> sprintf "Union (%s)" (String.concat ", " (Enum_kind.Ctors.elements ctors))
+      | Union { ctors; _ } -> sprintf "Union (%s)" (String.concat ", " (Enum_kind.Ctors.elements ctors))
       (* | StringLiteral l -> sprintf "StringLiteral (%s)" l *)
       | k -> show_kind k
 
@@ -58,7 +58,7 @@ struct
 
   let make_strict { t; nullability=_ } = strict t
   
-  let make_enum_kind ctors = Union (Enum_kind.make ctors)
+  let make_enum_kind ctors = Union { ctors = (Enum_kind.make ctors); is_closed = true }
 
   let is_strict { nullability; _ } = nullability = Strict
 
@@ -78,13 +78,21 @@ struct
   let order_kind x y =  
     match x, y with
     | x, y when equal_kind x y -> `Equal
-    | StringLiteral a, StringLiteral b -> `StringLiteralUnion (Union (Enum_kind.make [a; b]))
-    | StringLiteral a, Union b | Union b, StringLiteral a when Enum_kind.Ctors.mem a b 
-      -> `Order (StringLiteral a, Union (Enum_kind.Ctors.add a b))
-    | StringLiteral a, Union b | Union b, StringLiteral a -> `StringLiteralUnion (Union (Enum_kind.Ctors.add a b))
-    | StringLiteral _  as x , Text | Text, (StringLiteral _ as x) -> `Order (Text, x)
-    | Union _  as x , Text | Text, (Union _ as x) -> `Order (x, Text)
-    | Union a, Union b when Enum_kind.Ctors.subset b a -> `Order (Union b, Union a)
+    | StringLiteral a, StringLiteral b -> 
+      `StringLiteralUnion (Union { ctors = (Enum_kind.make [a; b]); is_closed = false })
+
+    | StringLiteral a, Union { ctors = b; is_closed  } | Union { ctors = b; is_closed  }, StringLiteral a when Enum_kind.Ctors.mem a b 
+      -> `Order (StringLiteral a, Union { ctors = (Enum_kind.Ctors.add a b); is_closed })
+
+    | StringLiteral a, Union { ctors = b; is_closed = false  }  | Union { ctors = b; is_closed = false  }, StringLiteral a -> 
+      `StringLiteralUnion (Union { ctors = (Enum_kind.Ctors.add a b); is_closed = false; })
+
+    | StringLiteral _  as x , Text -> `Order (x, Text)
+    | Text, (StringLiteral _ as x) -> `Order (x, Text)
+
+    | Text, (Union _ as x) -> `Order (x, Text)
+    | Union { ctors = a; _ } as x1, (Union { ctors = b ;_ } as x2)  when Enum_kind.Ctors.subset b a -> `Order (x2, x1)
+
     | StringLiteral x, Datetime | Datetime, StringLiteral x -> `Order (Datetime, StringLiteral x)
     | StringLiteral x, Blob | Blob, StringLiteral x -> `Order (Blob, StringLiteral x)
     | Any, t | t, Any -> `Order (t, t)

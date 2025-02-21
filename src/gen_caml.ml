@@ -148,7 +148,7 @@ end
 
 let get_column index attr =
   let rec print_column attr = match attr with
-  | { domain={ t = Union ctors; _ }; _ } when !Sqlgg_config.enum_as_poly_variant ->
+  | { domain={ t = Union {ctors; _}; _ }; _ } when !Sqlgg_config.enum_as_poly_variant ->
     sprintf "(%s.get_column%s" (get_enum_name ctors)
   | { domain={ t = Union _; _ }; _ } as c -> print_column { c with domain = { c.domain with t = Text } }
   | _ -> sprintf "(T.get_column_%s%s" (L.as_lang_type attr.domain) in 
@@ -232,8 +232,8 @@ let rec set_param index param =
   let set_param_nullable = output "begin match %s with None -> T.set_param_null p | Some v -> %s p v end;" pname in
   match param with
   | { typ = { t=Union _; _}; _ } as c when not !Sqlgg_config.enum_as_poly_variant -> set_param index { c with typ = { c.typ with t = Text } }
-  | { typ = { t=Union ctors; _}; _ } when nullable -> set_param_nullable @@ (get_enum_name ctors) ^ ".set_param" 
-  | { typ = { t=Union ctors; _ }; _ } -> output "%s.set_param p %s;" (get_enum_name ctors) pname
+  | { typ = { t=Union {ctors; _}; _}; _ } when nullable -> set_param_nullable @@ (get_enum_name ctors) ^ ".set_param" 
+  | { typ = { t=Union {ctors; _}; _ }; _ } -> output "%s.set_param p %s;" (get_enum_name ctors) pname
   | param' when nullable -> set_param_nullable @@ sprintf "T.set_param_%s" (show_param_type param') 
   | _ -> output "T.set_param_%s p %s;" ptype pname
   
@@ -374,7 +374,7 @@ let output_params_binder index vars =
 let make_to_literal =
   let rec go domain = match domain with 
     | { Type.t = Union _; _ } when not !Sqlgg_config.enum_as_poly_variant -> go { domain with Type.t = Text }
-    | { Type.t = Union ctors; _ } -> sprintf "%s.to_literal" (get_enum_name ctors)
+    | { Type.t = Union { ctors; _ }; _ } -> sprintf "%s.to_literal" (get_enum_name ctors)
     | t -> sprintf "T.Types.%s.to_literal" (Sql.Type.type_name t) in go
 
 let gen_in_substitution var =
@@ -553,7 +553,7 @@ let generate_enum_modules stmts =
   let vars = List.concat_map (fun stmt -> stmt.Gen.vars) stmts in
 
   let get_enum typ = match typ.Sql.Type.t with 
-    | Union ctors -> Some ctors
+    | Union { ctors; _ } -> Some ctors
     | Unit _ | Int | Text | Blob | Float | Bool  | Datetime | Decimal | Any | StringLiteral  _ -> None
   in
 
