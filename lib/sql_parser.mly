@@ -513,7 +513,7 @@ choices: separated_nonempty_list(pair(parser_state_ident,NUM_BIT_OR),choice) { $
 datetime_value: | DATETIME_FUNC | DATETIME_FUNC LPAREN INTEGER? RPAREN { Value (strict Datetime) }
 
 strict_value:
-    | TEXT { StringLiteral [$1] }
+    | TEXT { StringLiteral $1 }
     | BLOB collate? { Blob }
     | INTEGER { Int }
     | FLOAT { Float }

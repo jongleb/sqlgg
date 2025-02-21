@@ -133,16 +133,24 @@ module L = struct
   let as_lang_type = function
   | { t = Blob; nullability } -> type_name { t = Text; nullability }
   | { t = StringLiteral _; nullability } -> type_name { t = Text; nullability }
-  | t -> type_name t
+  | { t = Unit _; _ }
+  | { t = Int; _ }
+  | { t = Text; _ }
+  | { t = Float; _ }
+  | { t = Bool; _ }
+  | { t = Datetime; _ }
+  | { t = Decimal; _ }
+  | { t = Union _; _ }
+  | { t = Any; _ } as t -> type_name t
 
   let as_api_type = as_lang_type
 end
 
 let get_column index attr =
   let rec print_column attr = match attr with
-  | { domain={ t = Enum ctors; _ }; _ } when !Sqlgg_config.enum_as_poly_variant ->
+  | { domain={ t = Union ctors; _ }; _ } when !Sqlgg_config.enum_as_poly_variant ->
     sprintf "(%s.get_column%s" (get_enum_name ctors)
-  | { domain={ t = Enum _; _ }; _ } as c -> print_column { c with domain = { c.domain with t = Text } }
+  | { domain={ t = Union _; _ }; _ } as c -> print_column { c with domain = { c.domain with t = Text } }
   | _ -> sprintf "(T.get_column_%s%s" (L.as_lang_type attr.domain) in 
   let column = print_column attr (if is_attr_nullable attr then "_nullable" else "") in 
   sprintf "%s stmt %u)" column index
@@ -223,9 +231,9 @@ let rec set_param index param =
   let ptype = show_param_type param in
   let set_param_nullable = output "begin match %s with None -> T.set_param_null p | Some v -> %s p v end;" pname in
   match param with
-  | { typ = { t=Enum _; _}; _ } as c when not !Sqlgg_config.enum_as_poly_variant -> set_param index { c with typ = { c.typ with t = Text } }
-  | { typ = { t=Enum ctors; _}; _ } when nullable -> set_param_nullable @@ (get_enum_name ctors) ^ ".set_param" 
-  | { typ = { t=Enum ctors; _ }; _ } -> output "%s.set_param p %s;" (get_enum_name ctors) pname
+  | { typ = { t=Union _; _}; _ } as c when not !Sqlgg_config.enum_as_poly_variant -> set_param index { c with typ = { c.typ with t = Text } }
+  | { typ = { t=Union ctors; _}; _ } when nullable -> set_param_nullable @@ (get_enum_name ctors) ^ ".set_param" 
+  | { typ = { t=Union ctors; _ }; _ } -> output "%s.set_param p %s;" (get_enum_name ctors) pname
   | param' when nullable -> set_param_nullable @@ sprintf "T.set_param_%s" (show_param_type param') 
   | _ -> output "T.set_param_%s p %s;" ptype pname
   
@@ -365,8 +373,8 @@ let output_params_binder index vars =
 
 let make_to_literal =
   let rec go domain = match domain with 
-    | { Type.t = Enum _; _ } when not !Sqlgg_config.enum_as_poly_variant -> go { domain with Type.t = Text }
-    | { Type.t = Enum ctors; _ } -> sprintf "%s.to_literal" (get_enum_name ctors)
+    | { Type.t = Union _; _ } when not !Sqlgg_config.enum_as_poly_variant -> go { domain with Type.t = Text }
+    | { Type.t = Union ctors; _ } -> sprintf "%s.to_literal" (get_enum_name ctors)
     | t -> sprintf "T.Types.%s.to_literal" (Sql.Type.type_name t) in go
 
 let gen_in_substitution var =
@@ -545,8 +553,8 @@ let generate_enum_modules stmts =
   let vars = List.concat_map (fun stmt -> stmt.Gen.vars) stmts in
 
   let get_enum typ = match typ.Sql.Type.t with 
-    | Enum ctors -> Some ctors
-    | Unit _ | Int | Text | Blob | Float | Bool  | Datetime | Decimal | Any | StringLiteral _ -> None
+    | Union ctors -> Some ctors
+    | Unit _ | Int | Text | Blob | Float | Bool  | Datetime | Decimal | Any | StringLiteral  _ -> None
   in
 
   let schemas_to_enums schemas = schemas |> List.filter_map (fun { domain; _ } -> get_enum domain) in

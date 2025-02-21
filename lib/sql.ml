@@ -9,9 +9,9 @@ struct
 
   module Enum_kind = struct
 
-    module Ctors = struct 
+    module Ctors =  struct 
       include Set.Make(String)
-
+  
       let pp fmt s = 
         Format.fprintf fmt "{%s}" 
           (String.concat "; " (elements s))  
@@ -31,15 +31,15 @@ struct
     | Bool
     | Datetime
     | Decimal
-    | Enum of Enum_kind.t
-    | StringLiteral of string list
+    | Union of Enum_kind.t
+    | StringLiteral of string
     | Any (* FIXME - Top and Bottom ? *)
     [@@deriving eq, show{with_path=false}]
     (* TODO NULL is currently typed as Any? which actually is a misnormer *)
 
     let show_kind = function 
-      | Enum ctors -> sprintf "Enum (%s)" (String.concat ", " (Enum_kind.Ctors.elements ctors))
-      | StringLiteral l -> sprintf "StringLiteral (%s)" (String.concat ", " l)
+      | Union ctors -> sprintf "Union (%s)" (String.concat ", " (Enum_kind.Ctors.elements ctors))
+      (* | StringLiteral l -> sprintf "StringLiteral (%s)" l *)
       | k -> show_kind k
 
   type nullability =
@@ -58,7 +58,7 @@ struct
 
   let make_strict { t; nullability=_ } = strict t
   
-  let make_enum_kind ctors = Enum (Enum_kind.make ctors)
+  let make_enum_kind ctors = Union (Enum_kind.make ctors)
 
   let is_strict { nullability; _ } = nullability = Strict
 
@@ -75,27 +75,26 @@ struct
   let is_unit = function { t = Unit _; _ } -> true | _ -> false
 
   (** @return (subtype, supertype) *)
-  let order_kind x y =
+  let order_kind x y =  
     match x, y with
     | x, y when equal_kind x y -> `Equal
-    | StringLiteral a, StringLiteral b -> `Order (StringLiteral b, StringLiteral (a @ b))
-    | Enum a, Enum b when Enum_kind.Ctors.subset a b -> `Order (Enum a, Enum b)
-    | Enum a, Enum b when Enum_kind.Ctors.subset b a -> `Order (Enum b, Enum a)
-    | StringLiteral a, Enum b when Enum_kind.Ctors.subset (Enum_kind.Ctors.of_list a) b -> 
-        `Order (Enum b, StringLiteral a)  (* StringLiteral subtype of Enum *)
-    | Enum a, StringLiteral b when Enum_kind.Ctors.subset (Enum_kind.Ctors.of_list b) a -> 
-        `Order (Enum a, StringLiteral b)
-    | StringLiteral x, Text | Text, StringLiteral x -> `Order (Text, StringLiteral x)
+    | StringLiteral a, StringLiteral b -> `StringLiteralUnion (Union (Enum_kind.make [a; b]))
+    | StringLiteral a, Union b | Union b, StringLiteral a when Enum_kind.Ctors.mem a b 
+      -> `Order (StringLiteral a, Union (Enum_kind.Ctors.add a b))
+    | StringLiteral a, Union b | Union b, StringLiteral a -> `StringLiteralUnion (Union (Enum_kind.Ctors.add a b))
+    | StringLiteral _  as x , Text | Text, (StringLiteral _ as x) -> `Order (Text, x)
+    | Union _  as x , Text | Text, (Union _ as x) -> `Order (x, Text)
+    | Union a, Union b when Enum_kind.Ctors.subset b a -> `Order (Union b, Union a)
     | StringLiteral x, Datetime | Datetime, StringLiteral x -> `Order (Datetime, StringLiteral x)
     | StringLiteral x, Blob | Blob, StringLiteral x -> `Order (Blob, StringLiteral x)
     | Any, t | t, Any -> `Order (t, t)
     | Int, Float | Float, Int -> `Order (Int, Float)
-    (* arbitrary decision : allow int<->decimal but require explicit cast for floats *)
     | Decimal, Int | Int, Decimal -> `Order (Int, Decimal)
     | Text, Blob | Blob, Text -> `Order (Text, Blob)
     | Int, Datetime | Datetime, Int -> `Order (Int, Datetime)
     | Text, Datetime | Datetime, Text -> `Order (Datetime, Text)
     | _ -> `No
+    
 
   let order_nullability x y =
     match x,y with
@@ -122,19 +121,30 @@ struct
   let common_type_ order x y =
     match order_nullability x.nullability y.nullability, order_kind x.t y.t with
     | _, `No -> None
-    | `Equal nullability, `Order pair -> Some {t = order pair; nullability}
+    | `Equal nullability, `Order pair -> `CommonType pair |> order |> Option.map (fun t -> { t = t; nullability })
     | `Equal nullability, `Equal -> Some { x with nullability }
     | (`Nullable_Strict|`Strict_Nullable), `Equal -> Some (nullable x.t) (* FIXME need nullability order? *)
-    | (`Nullable_Strict|`Strict_Nullable), `Order pair -> Some (nullable @@ order pair)
+    | (`Nullable_Strict|`Strict_Nullable), `Order pair -> `CommonType pair |> order |> Option.map nullable
+    | `Equal nullability, `StringLiteralUnion t -> `StringLiteralUnion t |> order |> Option.map (fun t -> { t = t; nullability })
+    | (`Nullable_Strict | `Strict_Nullable), `StringLiteralUnion t -> `StringLiteralUnion t |> order |> Option.map nullable
 
   let common_type_l_ order = function
   | [] -> None
   | t::ts -> List.fold_left (fun acc t -> match acc with None -> None | Some prev -> common_type_ order prev t) (Some t) ts
 
-  let subtype = common_type_ fst
-  let supertype = common_type_ snd
-  let common_subtype = common_type_l_ fst
-  let common_supertype = common_type_l_ snd
+  let get_subtype = function 
+  | `CommonType t -> Some (fst t)
+  | `StringLiteralUnion t -> Some t
+
+  let get_supertype = function 
+  | `CommonType t -> Some (snd t)
+  | `StringLiteralUnion t -> Some t
+
+  let subtype = common_type_ get_subtype
+  let supertype = common_type_ get_supertype
+  let common_subtype = common_type_l_ get_subtype
+
+  let common_supertype = common_type_l_ get_supertype
 
   let common_type = subtype
 
