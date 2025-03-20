@@ -58,7 +58,7 @@ let choose_name props kind index =
   | CreateIndex t -> sprintf "create_index_%s" (fix' t)
   | Update (Some t) -> sprintf "update_%s_%u" (fix t) index
   | Update None -> sprintf "update_%u" index
-  | Insert (_,t) -> sprintf "insert_%s_%u" (fix t) index
+  | Insert { table; _ } -> sprintf "insert_%s_%u" (fix table) index
   | Delete t -> sprintf "delete_%s_%u" (String.concat "_" @@ List.map fix t) index
   | Alter t -> sprintf "alter_%s_%u" (String.concat "_" @@ List.map fix t) index
   | Drop t -> sprintf "drop_%s" (fix t)

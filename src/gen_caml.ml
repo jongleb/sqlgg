@@ -186,9 +186,9 @@ let has_on_conflict schema =
 
 let output_schema_binder index schema kind =
   match schema, kind with
-  | [], Stmt.Insert (_, _) ->
-      if has_on_conflict schema then
-        "insert_with_on_conflict",""
+  | [], Stmt.Insert { has_on_duplicate; _ } ->
+      if has_on_duplicate || has_on_conflict schema then
+        "maybe_insert",""
       else
         "insert",""
   | [], _ -> "execute",""
@@ -539,7 +539,7 @@ let generate_stmt style index stmt =
     | None -> failwith "empty label in tuple substitution"
     | Some label ->
     match stmt.kind with
-    | Insert (_, _) when has_on_conflict stmt.schema ->
+    | Insert { has_on_duplicate; _ } when has_on_duplicate || has_on_conflict stmt.schema ->
         sprintf {|( match %s with [] -> IO.return { T.affected_rows = 0L; maybe_insert_id = None } | _ :: _ -> %s)|} label exec
     | _ ->
         sprintf {|( match %s with [] -> IO.return { T.affected_rows = 0L; insert_id = 0L } | _ :: _ -> %s)|} label exec

@@ -7,13 +7,15 @@ type insert_kind = Values | Assign [@@deriving show {with_path=false}]
 (** inferred inserted values to complete sql statement *)
 type inferred = (insert_kind * Sql.Schema.t) option [@@deriving show]
 
+type insert = { inferred: inferred; table: Sql.table_name; has_on_duplicate: bool } [@@deriving show]
+
 (** possible number of rows in query result *)
 type cardinality = [`Zero_one | `One | `Nat] [@@deriving show]
 
 let cardinality_to_string = show_cardinality
 
 type kind = | Select of cardinality
-            | Insert of inferred * Sql.table_name
+            | Insert of insert
             | Create of Sql.table_name
             | CreateIndex of string
             | Update of Sql.table_name option (** name for single-table UPDATEs *)

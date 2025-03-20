@@ -757,14 +757,14 @@ let rec eval (stmt:Sql.stmt) =
       params_of_assigns env (List.concat assigns), None
     in
     let params2 = params_of_assigns env (Option.default [] on_duplicate) in
-    [], params @ params2, Insert (inferred,table)
+    [], params @ params2, Insert { inferred; table; has_on_duplicate = Option.is_some on_duplicate }
   | Insert { target=table; action=`Param (names, param_id); on_duplicate; } ->
     let expect = values_or_all table names in
     let schema = List.map (fun attr -> { Schema.Source.Attr.sources=[table]; attr }) (Tables.get_schema table) in
     let env = { empty_env with tables = [Tables.get table]; schema; insert_schema = expect; } in
     let params = [ TupleList (param_id, Insertion expect) ] in
     let params2 = params_of_assigns env (Option.default [] on_duplicate) in
-    [], params @ params2, Insert (None, table)
+    [], params @ params2, Insert { inferred = None; table; has_on_duplicate = Option.is_some on_duplicate }
   | Insert { target=table; action=`Select (names, select); on_duplicate; } ->
     let expect = values_or_all table names in
     let env = { empty_env with tables = [Tables.get table]; 
@@ -778,7 +778,7 @@ let rec eval (stmt:Sql.stmt) =
       ((List.map (fun attr -> {sources=[]; attr;})) expect)
       (List.map (fun {attr; _} -> {sources=[]; attr}) schema)); (* test equal types once more (not really needed) *)
     let params2 = params_of_assigns env (Option.default [] on_duplicate) in
-    [], params @ params2, Insert (None,table)
+    [], params @ params2, Insert { inferred = None; table; has_on_duplicate = Option.is_some on_duplicate }
   | Insert { target=table; action=`Set ss; on_duplicate; } ->
     let expect = values_or_all table (Option.map (List.map (function ({cname; tname=None},_) -> cname | _ -> assert false)) ss) in
     let env = { empty_env with tables = [Tables.get table]; 
@@ -789,7 +789,7 @@ let rec eval (stmt:Sql.stmt) =
     | Some ss -> params_of_assigns env ss, None
     in
     let params2 = params_of_assigns env (Option.default [] on_duplicate) in
-    [], params @ params2, Insert (inferred,table)
+    [], params @ params2, Insert { inferred; table; has_on_duplicate = Option.is_some on_duplicate }
   | Delete (table, where) ->
     let t = Tables.get table in
     let p = get_params_opt { empty_env with tables=[t]; 
@@ -903,7 +903,7 @@ let common_prefix = function
 (* fill inferred sql for VALUES or SET *)
 let complete_sql kind sql =
   match kind with
-  | Stmt.Insert (Some (kind,schema), _) ->
+  | Stmt.Insert { inferred = Some (kind,schema); _ } ->
     let (pre,each,post) = match kind with
     | Values -> "(", (fun _ -> ""), ")"
     | Assign -> "", (fun name -> name ^" = "), ""
