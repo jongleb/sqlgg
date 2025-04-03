@@ -650,7 +650,7 @@ and eval_cte { cte_items; is_recursive } =
           let s1, p1, env, cardinality, all_resolved_cte_refs = eval_select env (fst stmt.select) in
           eval_compound ~env:{ env with tables = env.tables } (p1, s1, cardinality, stmt, all_resolved_cte_refs) 
         | CteSharedQuery shared_query_name -> 
-          let stmt = Shared_queries.get shared_query_name.ref_name in
+          let (_, stmt) = Shared_queries.get shared_query_name.ref_name in
           let s1, p1, env, cardinality, all_resolved_cte_refs = eval_select env (fst stmt.select) in
           eval_compound ~env:{ env with tables = env.tables } 
             (p1, s1, cardinality, stmt, shared_query_name :: all_resolved_cte_refs)
@@ -931,4 +931,4 @@ let complete_sql kind sql =
 let parse sql =
   let (schema,p1,kind,all_resolved_cte_refs) = eval @@ Parser.parse_stmt sql in
   let (sql,p2) = complete_sql kind sql in
-  (sql, schema, unify_params (p1 @ p2), kind)
+  (sql, schema, unify_params (p1 @ p2), kind, all_resolved_cte_refs)

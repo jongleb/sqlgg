@@ -608,8 +608,36 @@ let generate_enum_modules stmts =
   )
 
 let generate_enum_modules stmts = if !Sqlgg_config.enum_as_poly_variant then generate_enum_modules stmts
+
+let substitute_cte_refs stmt =
+  let sql = Props.get stmt.props "sql" |> Option.get in
+  let sql = List.fold_left (fun sql { Sql.ref_name; pos = (from, to_) } -> 
+    let (sql2, _) = Shared_queries.get ref_name in
+    let replacement = Printf.sprintf "(%s)" sql2 in
+    
+    let r = (String.slice ~last:from sql) ^  (Printf.sprintf "(%s)" sql2) ^ (String.slice ~first:to_ sql) in 
+    r
+  ) sql stmt.all_resolved_cte_refs in 
+  let props = Props.replace stmt.props "sql" sql in 
+  { stmt with props }
+
   
 let generate ~gen_io name stmts =
+
+  prerr_endline "BEFORE";
+
+   List.iter (fun x ->
+    prerr_endline @@  Printf.sprintf "stmt: %s" (show_stmt x);
+    prerr_endline @@  Printf.sprintf "sql#1: %s" (Props.get x.props "sql" |> Option.get);
+    ) stmts ;
+
+    prerr_endline "AFTER";
+
+  let stmts = List.map (fun x ->
+    let result = substitute_cte_refs x in
+    prerr_endline @@  Printf.sprintf "stmt: %s" (show_stmt result);
+    result
+    ) stmts in
 (*
   let types =
     String.concat " and " (List.map (fun s -> sprintf "%s = T.%s" s s) ["num";"text";"any"])

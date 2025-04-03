@@ -8,7 +8,13 @@ open Stmt
 
 type subst_mode = | Named | Unnamed | Oracle | PostgreSQL
 
-type stmt = { schema : Sql.Schema.t; vars : Sql.var list; kind : kind; props : Props.t; }
+type stmt = {
+  schema : Sql.Schema.t; 
+  vars : Sql.var list; 
+  kind : kind; 
+  props : Props.t; 
+  all_resolved_cte_refs: Sql.shared_query_ref_id list; 
+} [@@deriving show]
 
 (** defines substitution function for parameter literals *)
 let params_mode = ref None
@@ -188,18 +194,25 @@ let subst_postgresql index _ = "$" ^ string_of_int (index + 1)
 let subst_unnamed _ _ = "?"
 
 let get_sql stmt =
+  prerr_endline @@ "get_sql: " ^ show_stmt stmt;
   let sql = Props.get stmt.props "sql" |> Option.get in
+  prerr_endline @@ "sql: " ^ sql;
   let subst =
     match !params_mode with
-    | None -> None
+    | None -> prerr_endline "params mode None"; None
     | Some subst ->
+      prerr_endline @@ "params mode Some " ^ (match subst with
+        | Named -> "Named"
+        | Unnamed -> "Unnamed"
+        | Oracle -> "Oracle"
+        | PostgreSQL -> "PostgreSQL");
       Some (match subst with
       | Named -> subst_named
       | Unnamed -> subst_unnamed
       | Oracle -> subst_oracle
       | PostgreSQL -> subst_postgresql)
   in
-  substitute_vars sql stmt.vars subst
+  substitute_vars sql stmt.vars subst  
 
 let get_sql_string_only stmt =
   match get_sql stmt with
