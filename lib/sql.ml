@@ -402,6 +402,7 @@ let print_table out (name,schema) =
 
 (** optional name and start/end position in string *)
 type param_id = { label : string option; pos : pos; } [@@deriving show]
+type shared_query_ref_id = { ref_name : string; pos : pos } [@@deriving show]
 type param = { id : param_id; typ : Type.t; } [@@deriving show]
 let new_param id typ = { id; typ; }
 type params = param list [@@deriving show]
@@ -456,8 +457,9 @@ and select = {
   group : expr list;
   having : expr option;
 }
-and cte_item = { cte_name: string; cols: schema option; stmt: select_complete; }
-and cte = { cte_items: cte_item list; is_recursive: bool; }
+and cte_item = { cte_name: string; cols: schema option; stmt: cte_stmt; } [@@deriving show]
+and cte_stmt = CteInline of select_complete | CteSharedQuery of shared_query_ref_id [@@deriving show]
+and cte = { cte_items: cte_item list; is_recursive: bool; } [@@deriving show]
 and select_complete = {
   select : select * (compound_op * select) list;
   order : order;

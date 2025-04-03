@@ -267,6 +267,7 @@ let cmnt = "--" | "//" | "#"
 rule ruleStatement = parse
   | ['\n' ' ' '\r' '\t']+ as tok { `Space tok }
   | cmnt wsp* "[sqlgg]" wsp+ (ident+ as n) wsp* "=" wsp* ([^'\n']* as v) '\n' { `Prop (n,v) }
+  | cmnt wsp* "@SHARED_QUERY" wsp+ (ident+ as name) [^'\n']* '\n' { `SharedQuery name }
   | cmnt wsp* "@" (ident+ as name) [^'\n']* '\n' { `Prop ("name",name) }
   | '"' { let s = ruleInQuotes "" lexbuf in `Token (as_literal '"' s) }
   | "'" { let s = ruleInSingleQuotes "" lexbuf in `Token (as_literal '\'' s) }
@@ -317,6 +318,7 @@ ruleMain = parse
 
   | "?" { QSTN }
   | [':' '@'] (ident as str) { PARAM { label = Some str; pos = pos lexbuf } }
+  | '&'       (ident as ref_name) { SHARED_QUERY_REF { ref_name; pos = pos lexbuf } }
   | "::" { DOUBLECOLON }
 
   | '"' { keep_lexeme_start lexbuf (fun () -> ident (ruleInQuotes "" lexbuf)) }
