@@ -262,7 +262,7 @@ let rec resolve_columns env expr =
     | Fun { kind; parameters; is_over_clause } ->
       ResFun { kind; parameters = List.map each parameters; is_over_clause }  
     | SelectExpr (select, usage) ->
-      let (schema,p,_) = eval_select_full env select in
+      let (schema,p,_, _all_resolved_cte_refs) = eval_select_full env select in
       let schema = Schema.Source.from_schema schema in
       (* represet nested selects as functions with sql parameters as function arguments, some hack *)
       match schema, usage with
@@ -480,7 +480,7 @@ and get_params_opt env = function
 
 and get_params_l env l = flat_map (get_params env) l
 
-and do_join (env,params) ((schema1,params1,_tables),join_type,join_cond) =
+and do_join (env,params) ((schema1,params1,_tables,_resolved_cte_refs),join_type,join_cond) =
   let schema = Schema.Join.join join_type join_cond env.schema schema1 in
   let env = { env with schema } in
   let p = match join_cond with
@@ -489,11 +489,13 @@ and do_join (env,params) ((schema1,params1,_tables),join_type,join_cond) =
   in
   env, params @ params1 @ p
 
-and join env ((schema,p0,ts0),joins) =
+and join env ((schema,p0,ts0,resolved_cte_refs),joins) =
   assert (env.schema = []);
-  let all_tables = List.flatten (ts0 :: List.map (fun ((_,_,ts),_,_) -> ts) joins) in
+  let all_tables = List.flatten (ts0 :: List.map (fun ((_,_,ts, _),_,_) -> ts) joins) in
+  let all_resolved_cte_refs = List.flatten (resolved_cte_refs :: List.map (fun ((_,_,_,refs),_,_) -> refs) joins) in
   let env = { env with tables = env.tables @ all_tables; schema; } in
-  List.fold_left do_join (env, p0) joins
+  let join_type, join_cond = List.fold_left do_join (env, p0) joins in 
+  join_type, join_cond, all_resolved_cte_refs
 
 and params_of_assigns env ss =
   let exprs = resolve_column_assignments ~env ss in
@@ -534,10 +536,10 @@ and eval_nested env nested =
   (* FIXME resolved table schema depends on join (nullability with left), this is resolving too early *)
   match nested with
   | Some (t,l) -> join env (resolve_source env t, List.map (fun (x,jt,jc) -> resolve_source env x, jt, jc) l)
-  | None -> env, []
+  | None -> env, [], []
 
 and eval_select env { columns; from; where; group; having; } =
-  let (env,p2) = eval_nested env from in
+  let (env,p2,all_resolved_cte_refs) = eval_nested env from in
   let env = { env with query_has_grouping = List.length group > 0 } in
   let cardinality =
     if from = None then (if where = None then `One else `Zero_one)
@@ -557,7 +559,7 @@ and eval_select env { columns; from; where; group; having; } =
   let env = { env with schema = update_schema_with_aliases env.schema final_schema } in
   let p4 = get_params_l env group in
   let p5 = get_params_opt env having in
-  (final_schema, p1 @ p2 @ p3 @ p4 @ p5, env, cardinality)
+  (final_schema, p1 @ p2 @ p3 @ p4 @ p5, env, cardinality, all_resolved_cte_refs)
 
 (** @return final schema, params and tables that can be referenced by outside scope *)
 and resolve_source env (x, alias) =
@@ -572,22 +574,22 @@ and resolve_source env (x, alias) =
   end in
   match x with
   | `Select select ->
-    let (s,p,_) = eval_select_full env select in
+    let (s,p,_,resolved_cte_refs) = eval_select_full env select in
     let tbl_alias = Option.map (fun { table_name; _ } -> table_name) alias in
     let s = List.map (fun i -> { i with Schema.Source.Attr.sources = List.concat [option_list tbl_alias; i.Schema.Source.Attr.sources] }) s in
     let s, tables = resolve_schema_with_alias s in
-    s, p, tables
+    s, p, tables, resolved_cte_refs
   | `Nested s ->
-    let (env,p) = eval_nested env (Some s) in
+    let (env,p, all_resolved_cte_refs) = eval_nested env (Some s) in
     let s = infer_schema env [All] in
     if alias <> None then failwith "No alias allowed on nested tables";
-    s, p, env.tables
+    s, p, env.tables, all_resolved_cte_refs
   | `Table s ->
     let (name,s) = Tables_with_derived.get ~env s in
     let alias = Option.map (fun { table_name; _ } -> table_name) alias in
     let sources = (name :: option_list alias) in
     let s3 = List.map (fun attr -> { Schema.Source.Attr.attr; sources }) s  in
-    s3, [], List.map (fun name -> name, s) sources
+    s3, [], List.map (fun name -> name, s) sources, []
   | `ValueRows { row_constructor_list; row_order; row_limit; } ->
     (* 
       The columns of the table output from VALUES have the implicitly 
@@ -596,7 +598,7 @@ and resolve_source env (x, alias) =
     *)
     let exprs_to_cols = List.mapi (fun idx expr -> Expr (expr, Some (Printf.sprintf "column_%d" idx))) in
     let dummy_select exprs = { columns = exprs_to_cols exprs; from = None; where = None; group = []; having = None } in
-    let (s, p, _) = match row_constructor_list with
+    let (s, p, _, resolved_cte_refs) = match row_constructor_list with
       | RowExprList [] -> failwith "Each row of a VALUES clause must have at least one column"
       | RowExprList (exprs :: xs) ->
         let unions = List.map (fun exprs -> `Union, dummy_select exprs ) xs in
@@ -605,16 +607,16 @@ and resolve_source env (x, alias) =
         eval_select_full env { select_complete; cte = None }
       | RowParam { id; types; values_start_pos } ->
         List.map (fun t -> { attr = make_attribute' "" t; Schema.Source.Attr.sources = []}) 
-          types, [ TupleList (id, ValueRows { types; values_start_pos }) ], Stmt.Select `Nat
+          types, [ TupleList (id, ValueRows { types; values_start_pos }) ], Stmt.Select `Nat, []
     in
     let s, tables = resolve_schema_with_alias s in
-    s, p, tables
+    s, p, tables, resolved_cte_refs
 
 and eval_select_full env { select_complete; cte } =
-  let ctes, p1, resolved_cte_refs = Option.map_default eval_cte ([], [], []) cte in
+  let ctes, p1, rcr = Option.map_default eval_cte ([], [], []) cte in
   let env = { env with ctes = ctes @ env.ctes } in
-  let (s1, p2, env, cardinality) = eval_select env (fst @@ select_complete.select) in
-  eval_compound ~env:{ env with tables = env.tables; } (p1 @ p2, s1, cardinality, select_complete)
+  let (s1, p2, env, cardinality, rcr2) = eval_select env (fst @@ select_complete.select) in
+  eval_compound ~env:{ env with tables = env.tables; } (p1 @ p2, s1, cardinality, select_complete, rcr @ rcr2)
 
 and eval_cte { cte_items; is_recursive } = 
   let open Schema.Source in
@@ -622,7 +624,7 @@ and eval_cte { cte_items; is_recursive } =
     let env = { empty_env with ctes = acc_ctes } in
     let tbl_name = make_table_name cte.cte_name in
     let a1 = List.map (fun attr -> Attr.{ sources = []; attr }) in
-    let s1, p1, _kind, cte_kind =
+    let s1, p1, _kind, all_resolved_cte_refs =
       if is_recursive then 
       begin
         match cte.stmt with
@@ -635,36 +637,34 @@ and eval_cte { cte_items; is_recursive } =
           end
           in
           let stmt = { stmt_ with select = select, other } in
-          let s1, p1, env, cardinality = eval_select env (fst stmt.select) in
+          let s1, p1, env, cardinality, all_resolved_cte_refs = eval_select env (fst stmt.select) in
           (* UNIONed fields access by alias to itself cte *)
           let s2 = Schema.compound (Option.map_default a1 s1 cte.cols) s1 in
           let a2 = from_schema s2 in
-          let s1, p1, kind = eval_compound ~env:{ env with ctes = (tbl_name, a2) :: env.ctes } (p1, s1, cardinality, stmt) in 
-          s1, p1, kind, None
+          eval_compound ~env:{ env with ctes = (tbl_name, a2) :: env.ctes } (p1, s1, cardinality, stmt, all_resolved_cte_refs) 
         | CteSharedQuery _ -> failwith "Recursive CTEs with shared query currently are not supported"
       end    
       else (
         match cte.stmt with
         | CteInline stmt ->
-          let s1, p1, env, cardinality = eval_select env (fst stmt.select) in
-          let s1, p1, kind = eval_compound ~env:{ env with tables = env.tables } (p1, s1, cardinality, stmt) in
-          s1, p1, kind, None
+          let s1, p1, env, cardinality, all_resolved_cte_refs = eval_select env (fst stmt.select) in
+          eval_compound ~env:{ env with tables = env.tables } (p1, s1, cardinality, stmt, all_resolved_cte_refs) 
         | CteSharedQuery shared_query_name -> 
           let stmt = Shared_queries.get shared_query_name.ref_name in
-          let s1, p1, env, cardinality = eval_select env (fst stmt.select) in
-          let s1, p1, kind = eval_compound ~env:{ env with tables = env.tables } (p1, s1, cardinality, stmt) in
-          s1, p1, kind, Some shared_query_name
+          let s1, p1, env, cardinality, all_resolved_cte_refs = eval_select env (fst stmt.select) in
+          eval_compound ~env:{ env with tables = env.tables } 
+            (p1, s1, cardinality, stmt, shared_query_name :: all_resolved_cte_refs)
       )
     in
     let s2 = Schema.compound (Option.map_default a1 s1 cte.cols) s1 in
-    (tbl_name, from_schema s2) :: acc_ctes, acc_vars @ p1, acc_refs @ option_list cte_kind end
+    (tbl_name, from_schema s2) :: acc_ctes, acc_vars @ p1, acc_refs @ all_resolved_cte_refs end
   ([], [], []) cte_items  
 
 and eval_compound ~env result = 
-  let (p1, s1, cardinality, stmt) = result in
+  let (p1, s1, cardinality, stmt, all_resolved_cte_refs) = result in
   let { select=(_select, other); order; limit; _; } = stmt in
   let other = List.map snd other in
-  let (s2l, p2l) = List.split (List.map (fun (s,p,_,_) -> s,p) @@ List.map (eval_select env) other) in
+  let (s2l, p2l) = List.split (List.map (fun (s,p,_,_,_) -> s,p) @@ List.map (eval_select env) other) in
   let cardinality = if other = [] then cardinality else `Nat in
   (* ignoring tables in compound statements - they cannot be used in ORDER BY *)
   let final_schema = List.fold_left Schema.compound s1 s2l in
@@ -674,7 +674,7 @@ and eval_compound ~env result =
   let cardinality =
     if limit1 && cardinality = `Nat then `Zero_one
     else cardinality in
-  final_schema, ( p1 @ (List.flatten p2l) @ p3 @ p4 : var list), Stmt.Select cardinality  
+  final_schema, ( p1 @ (List.flatten p2l) @ p3 @ p4 : var list), Stmt.Select cardinality, all_resolved_cte_refs
 
 let update_tables ~env sources ss w =
   let schema = Schema.cross_all @@ List.map (fun (s,_,_) -> s) sources in
@@ -705,11 +705,11 @@ let rec eval (stmt:Sql.stmt) =
   match stmt with
   | Create (name,`Schema schema) ->
       Tables.add (name, schema);
-      ([],[],Create name)
+      ([],[],Create name,[])
   | Create (name,`Select select) ->
-      let (schema,params,_) = eval_select_full empty_env select in
+      let (schema,params,_,all_resolved_cte_refs) = eval_select_full empty_env select in
       Tables.add (name, from_schema schema);
-      ([],params,Create name)
+      ([],params,Create name,all_resolved_cte_refs)
   | Alter (name,actions) ->
       List.iter (function
       | `Add (col,pos) -> Tables.alter_add name col pos
@@ -719,16 +719,16 @@ let rec eval (stmt:Sql.stmt) =
       | `RenameTable new_name -> Tables.rename name new_name
       | `RenameIndex _ -> () (* indices are not tracked yet *)
       | `None -> ()) actions;
-      ([],[],Alter [name])
+      ([],[],Alter [name],[])
   | Rename l ->
     List.iter (fun (o,n) -> Tables.rename o n) l;
-    ([], [], Alter (List.map fst l)) (* to have sensible target for gen_xml *)
+    ([], [], Alter (List.map fst l),[]) (* to have sensible target for gen_xml *)
   | Drop name ->
       Tables.drop name;
-      ([],[],Drop name)
+      ([],[],Drop name,[])
   | CreateIndex (name,table,cols) ->
       Sql.Schema.project cols (Tables.get_schema table) |> ignore; (* just check *)
-      [],[],CreateIndex name
+      [],[],CreateIndex name,[]
   | Insert { target=table; action=`Values (names, values); on_duplicate; } ->
     let expect = values_or_all table names in
     let t = Tables.get_schema table in
@@ -752,14 +752,14 @@ let rec eval (stmt:Sql.stmt) =
       params_of_assigns env (List.concat assigns), None
     in
     let params2 = params_of_assigns env (Option.default [] on_duplicate) in
-    [], params @ params2, Insert (inferred,table)
+    [], params @ params2, Insert (inferred,table),[]
   | Insert { target=table; action=`Param (names, param_id); on_duplicate; } ->
     let expect = values_or_all table names in
     let schema = List.map (fun attr -> { Schema.Source.Attr.sources=[table]; attr }) (Tables.get_schema table) in
     let env = { empty_env with tables = [Tables.get table]; schema; insert_schema = expect; } in
     let params = [ TupleList (param_id, Insertion expect) ] in
     let params2 = params_of_assigns env (Option.default [] on_duplicate) in
-    [], params @ params2, Insert (None, table)
+    [], params @ params2, Insert (None, table),[]
   | Insert { target=table; action=`Select (names, select); on_duplicate; } ->
     let expect = values_or_all table names in
     let env = { empty_env with tables = [Tables.get table]; 
@@ -768,12 +768,12 @@ let rec eval (stmt:Sql.stmt) =
     } in
     let select_complete = annotate_select select.select_complete (List.map (fun a -> a.domain) expect) in
     let select = { select with select_complete } in
-    let (schema,params,_) = eval_select_full env select in
+    let (schema,params,_,all_resolved_cte_refs) = eval_select_full env select in
     ignore (Schema.compound
       ((List.map (fun attr -> {sources=[]; attr;})) expect)
       (List.map (fun {attr; _} -> {sources=[]; attr}) schema)); (* test equal types once more (not really needed) *)
     let params2 = params_of_assigns env (Option.default [] on_duplicate) in
-    [], params @ params2, Insert (None,table)
+    [], params @ params2, Insert (None,table), all_resolved_cte_refs
   | Insert { target=table; action=`Set ss; on_duplicate; } ->
     let expect = values_or_all table (Option.map (List.map (function ({cname; tname=None},_) -> cname | _ -> assert false)) ss) in
     let env = { empty_env with tables = [Tables.get table]; 
@@ -784,19 +784,19 @@ let rec eval (stmt:Sql.stmt) =
     | Some ss -> params_of_assigns env ss, None
     in
     let params2 = params_of_assigns env (Option.default [] on_duplicate) in
-    [], params @ params2, Insert (inferred,table)
+    [], params @ params2, Insert (inferred,table), []
   | Delete (table, where) ->
     let t = Tables.get table in
     let p = get_params_opt { empty_env with tables=[t]; 
       schema=List.map (fun attr -> { Schema.Source.Attr.sources=[t |> fst]; attr }) (t |> snd); 
       insert_schema=[]; set_tyvar_strict = true } where in
-    [], p, Delete [table]
+    [], p, Delete [table],[]
   | DeleteMulti (targets, tables, where) ->
     (* use dummy columns to verify targets match the provided tables  *)
     let select = ({ columns = [All]; from = Some tables; where; group = []; having = None }, []) in
     let select_complete = { select; order = []; limit = None} in
-    let _attrs, params, _ = eval_select_full empty_env {select_complete; cte=None } in
-    [], params, Delete targets
+    let _attrs, params, _, all_resolved_cte_refs = eval_select_full empty_env {select_complete; cte=None } in
+    [], params, Delete targets, all_resolved_cte_refs
   | Set (vars, stmt) ->
     let p =
       vars |> List.map (fun (_k,e) ->
@@ -805,8 +805,8 @@ let rec eval (stmt:Sql.stmt) =
         | _ -> get_params_of_res_expr (ensure_res_expr e)) |> List.concat
     in
     begin match stmt with
-    | None -> [], p, Other
-    | Some stmt -> let (schema,p2,kind) = eval stmt in (schema, p @ p2, kind)
+    | None -> [], p, Other, []
+    | Some stmt -> let (schema,p2,kind, all_resolved_cte_refs) = eval stmt in (schema, p @ p2, kind, all_resolved_cte_refs)
     end
   | Update (table,ss,w,o,lim) ->
     let f, s = Tables.get table in
@@ -815,16 +815,16 @@ let rec eval (stmt:Sql.stmt) =
     let params = update_tables ~env:empty_env [r,[],[(f, s)]] ss w in
     let env = { empty_env with schema = update_schema_with_aliases [] r } in
     let p3 = params_of_order o [] { env with tables = [(f, s)] } in
-    [], params @ p3 @ (List.map (fun p -> Single p) lim), Update (Some table)
+    [], params @ p3 @ (List.map (fun p -> Single p) lim), Update (Some table), []
   | UpdateMulti (tables,ss,w) ->
-    let sources = List.map (fun src -> resolve_source empty_env ((`Nested src), None)) tables in
+    let sources = List.map (fun src -> let (s, p, ts, _) = resolve_source empty_env ((`Nested src), None) in s, p, ts) tables in
     let params = update_tables ~env:empty_env sources ss w in
-    [], params, Update None
-  | Select select -> 
-    let (schema, a, b) = eval_select_full empty_env select in
-    from_schema schema , a ,b
+    [], params, Update None, []
+  | Select select ->
+    let (schema, a, b, all_resolved_cte_refs) = eval_select_full empty_env select in
+    from_schema schema , a ,b, all_resolved_cte_refs
   | CreateRoutine (name,_,_) ->
-    [], [], CreateRoutine name
+    [], [], CreateRoutine name, []
 
 (* FIXME unify each choice separately *)
 let unify_params l =
@@ -929,6 +929,6 @@ let complete_sql kind sql =
   | _ -> (sql,[])
 
 let parse sql =
-  let (schema,p1,kind) = eval @@ Parser.parse_stmt sql in
+  let (schema,p1,kind,all_resolved_cte_refs) = eval @@ Parser.parse_stmt sql in
   let (sql,p2) = complete_sql kind sql in
   (sql, schema, unify_params (p1 @ p2), kind)
