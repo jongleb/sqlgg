@@ -125,7 +125,7 @@ let rec is_grouping = function
 | InChoice (_, _, e) -> is_grouping e
 | Fun { kind ; parameters; _ } ->
   (* grouping function of zero or single parameter or function on grouping result *)
-  (Type.is_grouping kind && List.length parameters <= 1) || List.exists is_grouping parameters
+  (Type.is_grouping kind && List.length parameters <= 1) || List.exists is_grouping parameters  
 
 let exists_grouping columns =
   List.exists (function Expr (e,_) -> is_grouping e | All | AllOf _ -> false) columns
@@ -611,44 +611,54 @@ and resolve_source env (x, alias) =
     s, p, tables
 
 and eval_select_full env { select_complete; cte } =
-  let ctes, p1 = Option.map_default eval_cte ([], []) cte in
+  let ctes, p1, resolved_cte_refs = Option.map_default eval_cte ([], [], []) cte in
   let env = { env with ctes = ctes @ env.ctes } in
   let (s1, p2, env, cardinality) = eval_select env (fst @@ select_complete.select) in
   eval_compound ~env:{ env with tables = env.tables; } (p1 @ p2, s1, cardinality, select_complete)
 
 and eval_cte { cte_items; is_recursive } = 
   let open Schema.Source in
-  List.fold_left begin fun (acc_ctes, acc_vars) cte ->
+  List.fold_left begin fun (acc_ctes, acc_vars, acc_refs) cte ->
     let env = { empty_env with ctes = acc_ctes } in
     let tbl_name = make_table_name cte.cte_name in
     let a1 = List.map (fun attr -> Attr.{ sources = []; attr }) in
-    let s1, p1, _kind =
+    let s1, p1, _kind, cte_kind =
       if is_recursive then 
-      begin  
-        let { select = select, other; _ } = cte.stmt in
-        let other = other |> List.map begin fun cmb ->
-          match fst cmb with
-          | #cte_supported_compound_op -> cmb
-          | `Except | `Intersect ->
-            fail "%s: Recursive table reference in EXCEPT or INTERSECT operand is not allowed in CTEs" cte.cte_name
-        end
-        in
-        let stmt = { cte.stmt with select = select, other } in
-        let s1, p1, env, cardinality = eval_select env (fst stmt.select) in
-        (* UNIONed fields access by alias to itself cte *)
-        let s2 = Schema.compound (Option.map_default a1 s1 cte.cols) s1 in
-        let a2 = from_schema s2 in
-        eval_compound
-          ~env:{ env with ctes = (tbl_name, a2) :: env.ctes } 
-          (p1, s1, cardinality, stmt)
+      begin
+        match cte.stmt with
+        | CteInline ({ select = select, other; _ } as stmt_) ->
+          let other = other |> List.map begin fun cmb ->
+            match fst cmb with
+            | #cte_supported_compound_op -> cmb
+            | `Except | `Intersect ->
+              fail "%s: Recursive table reference in EXCEPT or INTERSECT operand is not allowed in CTEs" cte.cte_name
+          end
+          in
+          let stmt = { stmt_ with select = select, other } in
+          let s1, p1, env, cardinality = eval_select env (fst stmt.select) in
+          (* UNIONed fields access by alias to itself cte *)
+          let s2 = Schema.compound (Option.map_default a1 s1 cte.cols) s1 in
+          let a2 = from_schema s2 in
+          let s1, p1, kind = eval_compound ~env:{ env with ctes = (tbl_name, a2) :: env.ctes } (p1, s1, cardinality, stmt) in 
+          s1, p1, kind, None
+        | CteSharedQuery _ -> failwith "Recursive CTEs with shared query currently are not supported"
       end    
       else (
-        let s1, p1, env, cardinality = eval_select env (fst cte.stmt.select) in
-        eval_compound ~env:{ env with tables = env.tables } (p1, s1, cardinality, cte.stmt))
+        match cte.stmt with
+        | CteInline stmt ->
+          let s1, p1, env, cardinality = eval_select env (fst stmt.select) in
+          let s1, p1, kind = eval_compound ~env:{ env with tables = env.tables } (p1, s1, cardinality, stmt) in
+          s1, p1, kind, None
+        | CteSharedQuery shared_query_name -> 
+          let stmt = Shared_queries.get shared_query_name.ref_name in
+          let s1, p1, env, cardinality = eval_select env (fst stmt.select) in
+          let s1, p1, kind = eval_compound ~env:{ env with tables = env.tables } (p1, s1, cardinality, stmt) in
+          s1, p1, kind, Some shared_query_name
+      )
     in
     let s2 = Schema.compound (Option.map_default a1 s1 cte.cols) s1 in
-    (tbl_name, from_schema s2) :: acc_ctes, acc_vars @ p1 end
-  ([], []) cte_items  
+    (tbl_name, from_schema s2) :: acc_ctes, acc_vars @ p1, acc_refs @ option_list cte_kind end
+  ([], [], []) cte_items  
 
 and eval_compound ~env result = 
   let (p1, s1, cardinality, stmt) = result in

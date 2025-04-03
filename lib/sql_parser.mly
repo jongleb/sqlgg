@@ -28,7 +28,7 @@
 %token <string> IDENT TEXT BLOB
 %token <float> FLOAT
 %token <Sql.param_id> PARAM
-%token <string> SHARED_QUERY_REF
+%token <Sql.shared_query_ref_id> SHARED_QUERY_REF
 %token <int> LCURLY RCURLY
 %token LPAREN RPAREN COMMA EOF DOT NULL
 %token CONFLICT_ALGO
@@ -101,12 +101,12 @@ assign: name=IDENT EQUAL e=expr { name, e }
 cte_item: | cte_name=IDENT names=maybe_parenth(sequence(IDENT))? AS LPAREN stmt=select_stmt_plain RPAREN
             {
               let cols = Option.map (List.map (fun name -> make_attribute' name (depends Any))) names in
-              { cte_name; cols; stmt }
+              { cte_name; cols; stmt = CteInline stmt }
             }
-          | cte_name=IDENT names=maybe_parenth(sequence(IDENT))? AS shared_query_name=SHARED_QUERY_REF
+          | cte_name=IDENT names=maybe_parenth(sequence(IDENT))? AS shared_query_ref_id=SHARED_QUERY_REF
             {
               let cols = Option.map (List.map (fun name -> make_attribute' name (depends Any))) names in
-              { cte_name; cols; stmt = Shared_queries.get shared_query_name; }
+              { cte_name; cols; stmt = CteSharedQuery shared_query_ref_id; }
             }
 
 cte: is_recursive=cte_with cte_items=commas(cte_item) {{ cte_items; is_recursive }}
