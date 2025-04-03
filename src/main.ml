@@ -8,7 +8,7 @@ open Sqlgg
 module L = List
 module S = String
 
-let parse_one' (sql,props) =
+let parse_one' (sql, props) =
     if Sqlgg_config.debug1 () then Printf.eprintf "------\n%s\n%!" sql;
     let (sql,schema,vars,kind) = Syntax.parse sql in
     begin match kind, !Gen.params_mode with
@@ -17,6 +17,17 @@ let parse_one' (sql,props) =
     end;
     let props = Props.set props "sql" sql in
     { Gen.schema; vars; kind; props }
+
+(* let parse_shared ~shared_queries (sql, name) =
+    let props = [("shared_query", name)] in
+    if Sqlgg_config.debug1 () then Printf.eprintf "------\n%s\n%!" sql;
+    let (sql,schema,vars,kind) = Syntax.parse ~shared_queries sql in
+    begin match kind with
+    | Select _ -> ()
+    | _ -> Error.log "Cannot use shared with non-select statement"
+    end;
+    let props = Props.set props "sql" sql in
+    { Gen.schema; vars; kind; props }     *)
 
 (* Printexc.raise_with_backtrace is only available since 4.05.0 *)
 exception With_backtrace of exn * Printexc.raw_backtrace
@@ -69,7 +80,7 @@ let drop_while p e =
   done
 
 type token = [`Comment of string | `Token of string | `Char of char |
-              `Space of string | `Prop of string * string | `Semicolon ]
+              `Space of string | `Prop of string * string | `Semicolon | `SharedQuery of string]
 
 let get_statements ch =
   let lexbuf = Lexing.from_channel ch in
@@ -79,9 +90,10 @@ let get_statements ch =
     | `Eof -> raise Enum.No_more_elements
     | #token as x -> x)
   in
+
   let extract () =
     let b = Buffer.create 1024 in
-    let props = ref Props.empty in
+    let props = ref @@ `Props (Props.empty) in
     let answer () = Buffer.contents b, !props in
     let rec loop smth =
       match Enum.get tokens with
@@ -92,7 +104,13 @@ let get_statements ch =
         | `Char c -> Buffer.add_char b c; loop true
         | `Space _ when smth = false -> loop smth (* drop leading whitespaces *)
         | `Token s | `Space s -> Buffer.add_string b s; loop true
-        | `Prop (n,v) -> props := Props.set !props n v; loop smth
+        | `Prop (n,v) -> 
+          props := begin match !props with
+            | `Props p -> `Props (Props.set p n v) 
+            | `SharedQuery _ -> `Props (Props.set (Props.empty) n v)
+          end; 
+          loop smth
+        | `SharedQuery name -> props := `SharedQuery name; loop smth
         | `Semicolon -> Some (answer ())
     in
     loop false
@@ -101,13 +119,13 @@ let get_statements ch =
   let rec next () =
     match extract () with
     | None -> raise Enum.No_more_elements
-    | Some sql ->
-      begin match parse_one sql with
+    | Some (buffer, `Props sql) ->
+      begin match parse_one (buffer, sql) with
       | None -> next ()
       | Some stmt ->
           let open Sql in
           if not (Sql.Schema.is_unique stmt.schema) then
-            Printf.eprintf "Warning: this SQL statement will produce rowset with duplicate column names:\n%s\n" (fst sql);
+            Printf.eprintf "Warning: this SQL statement will produce rowset with duplicate column names:\n%s\n" buffer;
           match List.exists (fun a -> Type.is_unit a.domain) stmt.schema with
           | true -> Error.log "Output schema contains column of type Unit, which is not allowed"; next ()
           | false ->
@@ -117,6 +135,14 @@ let get_statements ch =
           | [] ->
             stmt
       end
+    | Some (buffer, `SharedQuery name) -> 
+      let stmt = Parser.parse_stmt buffer in
+      begin match stmt with
+      | Select { cte = Some _ ; _ } -> Error.log "Temporary ctes before shared query cannot be used";
+      | Select { cte = None; select_complete } -> Shared_queries.add name select_complete;
+      | _ -> Error.log "Cannot use shared with non-select statement"
+      end;
+      next ()
   in
   Enum.from next |> List.of_enum
 
