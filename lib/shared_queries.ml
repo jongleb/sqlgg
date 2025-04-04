@@ -1,4 +1,4 @@
-type  t = (string, Sql.select_complete) Hashtbl.t
+type  t = (string, string * Sql.select_complete) Hashtbl.t
 
 let shared_queries: t = Hashtbl.create 15
 

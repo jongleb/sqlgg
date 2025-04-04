@@ -611,18 +611,18 @@ and resolve_source env (x, alias) =
     s, p, tables
 
 and eval_select_full env { select_complete; cte } =
-  let ctes, p1, resolved_cte_refs = Option.map_default eval_cte ([], [], []) cte in
+  let ctes, p1 = Option.map_default eval_cte ([], []) cte in
   let env = { env with ctes = ctes @ env.ctes } in
   let (s1, p2, env, cardinality) = eval_select env (fst @@ select_complete.select) in
   eval_compound ~env:{ env with tables = env.tables; } (p1 @ p2, s1, cardinality, select_complete)
 
 and eval_cte { cte_items; is_recursive } = 
   let open Schema.Source in
-  List.fold_left begin fun (acc_ctes, acc_vars, acc_refs) cte ->
+  List.fold_left begin fun (acc_ctes, acc_vars) cte ->
     let env = { empty_env with ctes = acc_ctes } in
     let tbl_name = make_table_name cte.cte_name in
     let a1 = List.map (fun attr -> Attr.{ sources = []; attr }) in
-    let s1, p1, _kind, cte_kind =
+    let s1, p1, _kind =
       if is_recursive then 
       begin
         match cte.stmt with
@@ -639,26 +639,24 @@ and eval_cte { cte_items; is_recursive } =
           (* UNIONed fields access by alias to itself cte *)
           let s2 = Schema.compound (Option.map_default a1 s1 cte.cols) s1 in
           let a2 = from_schema s2 in
-          let s1, p1, kind = eval_compound ~env:{ env with ctes = (tbl_name, a2) :: env.ctes } (p1, s1, cardinality, stmt) in 
-          s1, p1, kind, None
+          eval_compound ~env:{ env with ctes = (tbl_name, a2) :: env.ctes } (p1, s1, cardinality, stmt) 
         | CteSharedQuery _ -> failwith "Recursive CTEs with shared query currently are not supported"
       end    
       else (
         match cte.stmt with
         | CteInline stmt ->
           let s1, p1, env, cardinality = eval_select env (fst stmt.select) in
-          let s1, p1, kind = eval_compound ~env:{ env with tables = env.tables } (p1, s1, cardinality, stmt) in
-          s1, p1, kind, None
-        | CteSharedQuery shared_query_name -> 
-          let stmt = Shared_queries.get shared_query_name.ref_name in
+          eval_compound ~env:{ env with tables = env.tables } (p1, s1, cardinality, stmt)
+        | CteSharedQuery shared_query_name ->
+          let (_, stmt) = Shared_queries.get shared_query_name.ref_name in
           let s1, p1, env, cardinality = eval_select env (fst stmt.select) in
           let s1, p1, kind = eval_compound ~env:{ env with tables = env.tables } (p1, s1, cardinality, stmt) in
-          s1, p1, kind, Some shared_query_name
+          s1, [SharedVarsGroup (p1, shared_query_name)], kind
       )
     in
     let s2 = Schema.compound (Option.map_default a1 s1 cte.cols) s1 in
-    (tbl_name, from_schema s2) :: acc_ctes, acc_vars @ p1, acc_refs @ option_list cte_kind end
-  ([], [], []) cte_items  
+    (tbl_name, from_schema s2) :: acc_ctes, acc_vars @ p1 end
+  ([], []) cte_items  
 
 and eval_compound ~env result = 
   let (p1, s1, cardinality, stmt) = result in
@@ -853,6 +851,7 @@ let unify_params l =
   let rec traverse = function
   | Single { id; typ; }
   | SingleIn { id; typ; _ } -> remember id.label typ
+  | SharedVarsGroup (vars, _)
   | ChoiceIn { vars; _ } -> List.iter traverse vars
   | OptionBoolChoice (p, l, _) ->
     check_choice_name p;
@@ -868,6 +867,7 @@ let unify_params l =
     let typ = match id.label with None -> typ | Some name -> try Hashtbl.find h name with _ -> assert false in
     SingleIn (new_param id (Type.undepend typ Strict)) (* if no other clues - input parameters are strict *)
   | ChoiceIn t -> ChoiceIn { t with vars = List.map map t.vars }
+  | SharedVarsGroup (vars, pos) -> SharedVarsGroup (List.map map vars, pos)
   | OptionBoolChoice (p, l, pos) -> OptionBoolChoice (p, (List.map map l), pos)
   | Choice (p, l) -> Choice (p, List.map (function Simple (n,l) -> Simple (n, Option.map (List.map map) l) | Verbatim _ as v -> v) l)
   | TupleList _ as x -> x
