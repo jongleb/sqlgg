@@ -82,7 +82,7 @@ and sql_dynamic_ctor = {
   is_poly: bool;
 }
 
-let substitute_vars s vars subst_param =
+let rec substitute_vars s vars subst_param =
   let rec loop acc i parami vars =
     match vars with
     | [] -> acc, i
@@ -171,6 +171,13 @@ let substitute_vars s vars subst_param =
       in
       let acc = Dynamic (name, pieces) :: Static (String.slice ~first:i ~last:f1 s) :: acc in
       loop acc f2 parami tl
+    | SharedVarsGroup (vars, id) :: tl ->
+        let (i1,i2) = id.pos in
+        assert (i2 > i1);
+        assert (i1 > i);
+        let (sql, _) = Shared_queries.get id.ref_name in
+        let sql = substitute_vars sql vars subst_param in
+        loop (List.rev sql @ Static (String.slice ~first:i ~last:i1 s) :: acc) i2 parami tl
   in
   let (acc,last) = loop [] 0 0 vars in
   let acc = List.rev (Static (String.slice ~first:last s) :: acc) in
@@ -247,6 +254,7 @@ let rec find_param_ids l =
       | Choice (id,_) -> [ id ]
       | OptionBoolChoice (id, _, _) -> [id]
       | ChoiceIn { param; vars; _ } -> find_param_ids vars @ [param]
+      | SharedVarsGroup (vars, _) -> find_param_ids vars
       | TupleList (id, _) -> [ id ])
     l
 
@@ -261,6 +269,7 @@ let rec params_only l =
     (function
       | Sql.Single p -> [p]
       | SingleIn _ -> []
+      | SharedVarsGroup (vars, _)
       | ChoiceIn { vars; _ } -> params_only vars
       | OptionBoolChoice _
       | Choice _ -> fail "dynamic choices not supported for this host language"

@@ -16,18 +16,7 @@ let parse_one' (sql, props) =
     | _ -> ()
     end;
     let props = Props.set props "sql" sql in
-    { Gen.schema; vars; kind; props }
-
-(* let parse_shared ~shared_queries (sql, name) =
-    let props = [("shared_query", name)] in
-    if Sqlgg_config.debug1 () then Printf.eprintf "------\n%s\n%!" sql;
-    let (sql,schema,vars,kind) = Syntax.parse ~shared_queries sql in
-    begin match kind with
-    | Select _ -> ()
-    | _ -> Error.log "Cannot use shared with non-select statement"
-    end;
-    let props = Props.set props "sql" sql in
-    { Gen.schema; vars; kind; props }     *)
+    { Gen.schema; vars; kind; props } 
 
 (* Printexc.raise_with_backtrace is only available since 4.05.0 *)
 exception With_backtrace of exn * Printexc.raw_backtrace
@@ -67,7 +56,7 @@ let parse_one (sql, props as x) =
       | _ -> exn
     in
 (*     Printexc.raise_with_backtrace exn bt *)
-    raise @@ With_backtrace (exn,bt)
+    raise @@ With_backtrace (exn,bt)   
 
 let parse_one (sql,props as x) =
   match Props.get props "noparse" with
@@ -139,7 +128,7 @@ let get_statements ch =
       let stmt = Parser.parse_stmt buffer in
       begin match stmt with
       | Select { cte = Some _ ; _ } -> Error.log "Temporary ctes before shared query cannot be used";
-      | Select { cte = None; select_complete } -> Shared_queries.add name select_complete;
+      | Select { cte = None; select_complete } -> Shared_queries.add name (buffer, select_complete);
       | _ -> Error.log "Cannot use shared with non-select statement"
       end;
       next ()

@@ -417,9 +417,12 @@ and var =
 | TupleList of param_id * tuple_list_kind
 (* It differs from Choice that in this case we should generate sql "TRUE", it doesn't seem reusable *)
 | OptionBoolChoice of param_id * var list * (pos * pos)
+| SharedVarsGroup of vars * shared_query_ref_id
 and tuple_list_kind = Insertion of schema | Where_in of Type.t list | ValueRows of { types: Type.t list; values_start_pos: int; }
 [@@deriving show]
-type vars = var list [@@deriving show]
+
+
+and vars = var list [@@deriving show]
 
 type alter_pos = [ `After of string | `Default | `First ]
 type alter_action = [
