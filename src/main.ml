@@ -26,51 +26,51 @@ let () = Printexc.(register_printer begin function
   | With_backtrace (exn,bt) -> Some (Printf.sprintf "%s\nBacktrace:\n%s" (to_string exn) (raw_backtrace_to_string bt))
   | _ -> None
 end)
-
+ 
 (** @return parsed statement or [None] in case of parsing failure.
     @raise exn for other errors (typing etc)
 *)
 let parse_one (sql, props as x) =
-  try
-    Some (parse_one' x)
-  with
-  | Parser_utils.Error (exn,(line,cnum,tok,tail)) ->
-    begin
-     let extra = match exn with
-     | Sql.Schema.Error (_,msg) -> msg
-     | exn -> Printexc.to_string exn
-     in
-     Error.log "==> %s" sql;
-     if cnum = String.length sql && tok = "" then
-       Error.log "Error: %s" extra
-     else
-       Error.log "Position %u:%u Tokens: %s%s\nError: %s" line cnum tok (String.slice ~last:32 tail) extra;
-     None
-    end
-  | exn ->
-    let bt = Printexc.get_raw_backtrace () in
-    Error.log "Failed %s: %s" (Option.default "" @@ Props.get props "name") sql;
-    let exn =
-      match exn with
-      | Prelude.At ((p1,p2),exn) -> Error.log "At : %s" (String.slice ~first:p1 ~last:p2 sql); exn
-      | _ -> exn
-    in
-(*     Printexc.raise_with_backtrace exn bt *)
-    raise @@ With_backtrace (exn,bt)   
-
-let parse_one (sql,props as x) =
   match Props.get props "noparse" with
   | Some _ -> Some { Gen.schema=[]; vars=[]; kind=Stmt.Other; props=Props.set props "sql" sql }
-  | None -> parse_one x
+  | None -> 
+    try
+      Some (parse_one' x)
+    with
+    | Parser_utils.Error (exn,(line,cnum,tok,tail)) ->
+      begin
+       let extra = match exn with
+       | Sql.Schema.Error (_,msg) -> msg
+       | exn -> Printexc.to_string exn
+       in
+       Error.log "==> %s" sql;
+       if cnum = String.length sql && tok = "" then
+         Error.log "Error: %s" extra
+       else
+         Error.log "Position %u:%u Tokens: %s%s\nError: %s" line cnum tok (String.slice ~last:32 tail) extra;
+       None
+      end
+    | exn ->
+      let bt = Printexc.get_raw_backtrace () in
+      Error.log "Failed %s: %s" (Option.default "" @@ Props.get props "name") sql;
+      let exn =
+        match exn with
+        | Prelude.At ((p1,p2),exn) -> Error.log "At : %s" (String.slice ~first:p1 ~last:p2 sql); exn
+        | _ -> exn
+      in
+  (*     Printexc.raise_with_backtrace exn bt *)
+      raise @@ With_backtrace (exn,bt)
 
 let drop_while p e =
   while Option.map p (Enum.peek e) = Some true do
     Enum.junk e
-  done
+  done  
 
 type token = [`Comment of string | `Token of string | `Char of char |
-              `Space of string | `Prop of string * string | `Semicolon | `SharedQuery of string]
+              `Space of string | `Semicolon | `Prop of string * string  | `OnlyExecutable of string * string | 
+              `ReusableAndExecutable of string * string | `OnlyReusable of string]
 
+              
 let get_statements ch =
   let lexbuf = Lexing.from_channel ch in
   let tokens = Enum.from (fun () ->
@@ -93,14 +93,16 @@ let get_statements ch =
         | `Char c -> Buffer.add_char b c; loop true
         | `Space _ when smth = false -> loop smth (* drop leading whitespaces *)
         | `Token s | `Space s -> Buffer.add_string b s; loop true
-        | `Prop (n,v) -> 
+        | `Prop (n,v) | `OnlyExecutable (n, v) | `ReusableAndExecutable(n, v) -> 
           props := begin match !props with
             | `Props p -> `Props (Props.set p n v) 
-            | `SharedQuery _ -> `Props (Props.set (Props.empty) n v)
+            | `OnlyReusable n -> `OnlyReusable n
+            | `OnlyExecutable p -> `OnlyExecutable (Props.set p n v) 
+            | `ReusableAndExecutable p -> `ReusableAndExecutable (Props.set p n v) 
           end; 
           loop smth
-        | `SharedQuery name -> props := `SharedQuery name; loop smth
         | `Semicolon -> Some (answer ())
+        | `OnlyReusable n -> props := `OnlyReusable n; loop smth
     in
     loop false
   in
@@ -108,7 +110,7 @@ let get_statements ch =
   let rec next () =
     match extract () with
     | None -> raise Enum.No_more_elements
-    | Some (buffer, `Props sql) ->
+    | Some (buffer, (`Props sql | `OnlyExecutable sql)) ->
       begin match parse_one (buffer, sql) with
       | None -> next ()
       | Some stmt ->
@@ -124,7 +126,7 @@ let get_statements ch =
           | [] ->
             stmt
       end
-    | Some (buffer, `SharedQuery name) -> 
+    | Some (buffer, `OnlyReusable name) -> 
       let stmt = Parser.parse_stmt buffer in
       begin match stmt with
       | Select { cte = Some _ ; _ } -> Error.log "Temporary ctes before shared query cannot be used";
@@ -132,6 +134,37 @@ let get_statements ch =
       | _ -> Error.log "Cannot use shared with non-select statement"
       end;
       next ()
+    | Some (buffer, `ReusableAndExecutable sql) ->
+      (* First process as a normal query *)
+      let result = begin match parse_one (buffer, sql) with
+      | None -> None
+      | Some stmt ->
+          let open Sql in
+          if not (Sql.Schema.is_unique stmt.schema) then
+            Printf.eprintf "Warning: this SQL statement will produce rowset with duplicate column names:\n%s\n" buffer;
+          match List.exists (fun a -> Type.is_unit a.domain) stmt.schema with
+          | true -> Error.log "Output schema contains column of type Unit, which is not allowed"; None
+          | false ->
+          (* FIXME iterate choice *)
+          match List.filter_map (function (i,Single p) when Type.is_unit p.typ -> Some (Gen.show_param_name p i) | _ -> None) @@ List.mapi (fun i p -> i,p)  stmt.vars with
+          | _::_ as l -> Error.log "Input parameter(s) of type Unit not allowed : %s" (String.concat " " l); None
+          | [] -> Some stmt
+      end in
+      
+      let name = Option.default "" @@ Props.get sql "name" in
+      if name <> "" then
+        begin
+          let stmt = Parser.parse_stmt buffer in
+          match stmt with
+          | Select { cte = Some _ ; _ } -> Error.log "Temporary ctes before shared query cannot be used";
+          | Select { cte = None; select_complete } -> Shared_queries.add name (buffer, select_complete);
+          | _ -> Error.log "Cannot use shared with non-select statement"
+        end;
+      
+      (* Return the result or continue *)
+      match result with
+      | Some stmt -> stmt
+      | None -> next ()
   in
   Enum.from next |> List.of_enum
 
