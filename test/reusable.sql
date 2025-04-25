@@ -11,7 +11,7 @@ CREATE TABLE products (
     FOREIGN KEY (category_id) REFERENCES categories(id)
 );
 
--- @abcd | only-reuse
+-- @abcd | include: reuse
 SELECT 
     1 as y, 
     4 + @five as y1
@@ -28,7 +28,7 @@ SELECT 1 + @test - @test2 + @test5 + x.y1 as y2
 FROM x;
 
 
--- @reuseme | reuse-and-execute
+-- @reuseme | include: reuse_and_execute
 WITH inner_cte AS (
         SELECT id, name, category_id 
         FROM products 

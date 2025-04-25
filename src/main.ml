@@ -128,9 +128,9 @@ module Include = struct
   type t = OnlyReusable | OnlyExecutable | ReusableAndExecutable
 
   let of_string = function
-    | "only-reuse" -> OnlyReusable
-    | "only-executable" -> OnlyExecutable
-    | "reuse-and-execute"-> ReusableAndExecutable
+    | "reuse" -> OnlyReusable
+    | "execute" -> OnlyExecutable
+    | "reuse_and_execute"-> ReusableAndExecutable
     | s -> failwith @@ Printf.sprintf "Unknown include option %s" s
 
   let of_string_opt s = try (Some (of_string s))
@@ -173,7 +173,10 @@ let get_statements ch =
     match extract_statement tokens with
     | None -> raise Enum.No_more_elements
     | Some (buffer, props) ->
-      let include_ = "include" |> Props.get props |> Option.map_default Include.of_string Include.OnlyExecutable in
+      let include_ = match Props.get props "include" with
+        | Some s -> Include.of_string s
+        | None -> Include.OnlyExecutable
+      in
       match include_ with
       | OnlyReusable -> 
         ignore (parse_select_one (buffer, props));
