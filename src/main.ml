@@ -196,8 +196,9 @@ let get_statements ch =
         | None -> Include.OnlyExecutable
       in
       match include_ with
-      | OnlyReusable -> 
-        ignore (parse_select_one (buffer, props));
+      | OnlyReusable ->
+        (* DDL with meta isn'r reusable, just skip comments *)
+        ignore (parse_select_one (get_sql_without_comments !comments buffer, props));
         next ();
       | OnlyExecutable -> 
         begin match parse_one (buffer, props) with
