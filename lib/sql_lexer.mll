@@ -266,8 +266,8 @@ let cmnt = "--" | "//" | "#"
 (* extract separate statements *)
 rule ruleStatement = parse
   | ['\n' ' ' '\r' '\t']+ as tok { `Space tok }
-  | cmnt (wsp* "[sqlgg]" wsp+ (ident+ as n) wsp* "=" wsp* ([^'\n']* as v)) as cc '\n' {  
-    if !Parser_state.is_in_statement then `Comment cc else `Props [(n,v)]
+  | cmnt (wsp* "[sqlgg]" wsp+ (ident+ as n) wsp* "=" wsp* ([^'\n']* as v) '\n') as cc {  
+    if !Parser_state.is_statement then `Comment cc else `Props [(n,v)]
   }
   | cmnt wsp* "@" (ident+ as name) wsp* "|" ([^'\n']* as v) '\n' 
     { 
@@ -404,7 +404,7 @@ ruleInDollarQuotes tag acc = parse
   | _		{ error lexbuf "ruleInDollarQuotes" }
 and
 ruleComment acc = parse
-  | '\n'	{ advance_line lexbuf; acc }
+  | '\n'	{ advance_line lexbuf; if !Parser_state.is_statement then (acc ^ lexeme lexbuf) else acc }
   | eof	        { acc }
   | [^'\n']+    { let s = lexeme lexbuf in ruleComment (acc ^ s) lexbuf; }
   | _		{ error lexbuf "ruleComment"; }

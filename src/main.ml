@@ -153,17 +153,17 @@ let get_statements ch =
     
     let rec loop () =
       match Enum.get tokens with
-      | None -> if !Parser_state.is_in_statement then Some (answer ()) else None
+      | None -> if !Parser_state.is_statement then Some (answer ()) else None
       | Some x ->
         match x with
-        | `Comment s -> if !Parser_state.is_in_statement then Buffer.add_string b s else ignore s; loop () (* do not include comments (option?) *)
-        | `Char c -> Buffer.add_char b c; Parser_state.is_in_statement := true; loop ()
-        | `Space _ when !Parser_state.is_in_statement = false -> loop () (* drop leading whitespaces *)
-        | `Token s | `Space s -> Buffer.add_string b s; Parser_state.is_in_statement := true; loop ()
+        | `Comment s -> if !Parser_state.is_statement then Buffer.add_string b s; loop () (* do not include comments (option?) *)
+        | `Char c -> Buffer.add_char b c; Parser_state.is_statement := true; loop ()
+        | `Space _ when !Parser_state.is_statement = false -> loop () (* drop leading whitespaces *)
+        | `Token s | `Space s -> Buffer.add_string b s; Parser_state.is_statement := true; loop ()
         | `Props p -> props := Props.set_all p !props; loop ()
         | `Semicolon -> Some (answer ())
     in
-    Parser_state.is_in_statement := false;
+    Parser_state.is_statement := false;
     try loop ()
     with e -> 
       Error.log "lexer failed (%s)" (Printexc.to_string e); 
