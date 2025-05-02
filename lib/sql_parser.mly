@@ -29,6 +29,7 @@
 %token <float> FLOAT
 %token <Sql.param_id> PARAM
 %token <Sql.shared_query_ref_id> SHARED_QUERY_REF
+%token <(string * string)> META_PROP
 %token <int> LCURLY RCURLY
 %token LPAREN RPAREN COMMA EOF DOT NULL
 %token CONFLICT_ALGO
@@ -356,7 +357,12 @@ column_def: name=IDENT t=sql_type? extra=column_def_extra*
     make_attribute name t extra
   }
 
-column_def1: c=column_def { `Attr c }
+column_def1: 
+            | metadata=list(META_PROP) c=column_def { 
+              let props = metadata in
+              List.iter (fun (k, v) -> prerr_endline (Printf.sprintf "k %s v %s" k v)) props;
+              `Attr c
+           }
            | pair(CONSTRAINT,IDENT?)? l=table_constraint_1 index_options { `Constraint l }
            | index_or_key l=table_index { `Index l }
            | either(FULLTEXT,SPATIAL) index_or_key? l=table_index { `Index l }

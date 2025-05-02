@@ -266,7 +266,9 @@ let cmnt = "--" | "//" | "#"
 (* extract separate statements *)
 rule ruleStatement = parse
   | ['\n' ' ' '\r' '\t']+ as tok { `Space tok }
-  | cmnt wsp* "[sqlgg]" wsp+ (ident+ as n) wsp* "=" wsp* ([^'\n']* as v) '\n' { `Props [(n,v)] }
+  | cmnt (wsp* "[sqlgg]" wsp+ (ident+ as n) wsp* "=" wsp* ([^'\n']* as v)) as cc '\n' {  
+    if !Parser_state.is_in_statement then `Comment cc else `Props [(n,v)]
+  }
   | cmnt wsp* "@" (ident+ as name) wsp* "|" ([^'\n']* as v) '\n' 
     { 
       let props = rulePropList [] (Lexing.from_string v) in
@@ -320,6 +322,7 @@ ruleMain = parse
   | '{'   { LCURLY (lexeme_start lexbuf) }
   | '}'   { RCURLY (lexeme_start lexbuf) }
 
+  | cmnt wsp* "[sqlgg]" wsp+ (ident+ as n) wsp* "=" wsp* ([^'\n']* as v) '\n' { META_PROP (n, v) }
   | cmnt { ignore (ruleComment "" lexbuf); ruleMain lexbuf }
   | "/*" { ignore (ruleCommentMulti "" lexbuf); ruleMain lexbuf }
 
