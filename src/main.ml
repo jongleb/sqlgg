@@ -149,14 +149,19 @@ let get_statements ch =
   let extract_statement tokens =
     let b = Buffer.create 1024 in
     let props = ref Props.empty in
-    let answer () = Buffer.contents b, !props in
+    let comments = ref [] in
+    let answer () = Buffer.contents b, !props, comments in
     
     let rec loop () =
       match Enum.get tokens with
       | None -> if !Parser_state.is_statement then Some (answer ()) else None
       | Some x ->
         match x with
-        | `Comment s -> if !Parser_state.is_statement then Buffer.add_string b s; loop () (* do not include comments (option?) *)
+        | `Comment s -> if !Parser_state.is_statement then begin 
+            let start_pos = Buffer.length b in
+            comments := (start_pos, String.length s) :: !comments;
+            Buffer.add_string b s;
+          end; loop () (* do not include comments (option?) *)
         | `Char c -> Buffer.add_char b c; Parser_state.is_statement := true; loop ()
         | `Space _ when !Parser_state.is_statement = false -> loop () (* drop leading whitespaces *)
         | `Token s | `Space s -> Buffer.add_string b s; Parser_state.is_statement := true; loop ()
@@ -170,10 +175,22 @@ let get_statements ch =
       None
   in
 
+  let get_sql_without_comments comments content =
+    let clean_content = ref content in
+    (* Sorted delete in reverse order to avoid breaking indexes. *)
+    let sorted_removals = List.sort ~cmp:(fun (p1, _) (p2, _) -> compare p2 p1) comments in
+    List.iter (fun (pos, len) ->
+      let before = String.sub !clean_content 0 pos in
+      let after = String.sub !clean_content (pos + len) 
+                   (String.length !clean_content - pos - len) in
+      clean_content := before ^ after
+    ) sorted_removals;
+    !clean_content in
+
   let rec next () =
     match extract_statement tokens with
     | None -> raise Enum.No_more_elements
-    | Some (buffer, props) ->
+    | Some (buffer, props, comments) ->
       let include_ = match Props.get props "include" with
         | Some s -> Include.of_string s
         | None -> Include.OnlyExecutable
@@ -185,12 +202,16 @@ let get_statements ch =
       | OnlyExecutable -> 
         begin match parse_one (buffer, props) with
         | None -> next ()
-        | Some stmt -> buffer |> get_statement_error stmt |> Option.map_default (fun _ -> next ()) stmt
+        | Some stmt -> 
+          let buffer = get_sql_without_comments !comments buffer in
+          let stmt = { stmt with props = Props.set props "sql" buffer } in
+          buffer |> get_statement_error stmt |> Option.map_default (fun _ -> next ()) stmt
         end
       | ReusableAndExecutable-> 
         match parse_select_one (buffer, props) with
         | None -> next ()
         | Some select_full -> 
+          let buffer = get_sql_without_comments !comments buffer in
           let (schema, vars, kind) = Syntax.eval_select select_full in
           let stmt = { Gen.schema; vars; kind; props = Props.set props "sql" buffer } in
           buffer |> get_statement_error stmt |> Option.map_default (fun _ -> next ()) stmt
