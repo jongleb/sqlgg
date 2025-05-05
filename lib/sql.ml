@@ -211,18 +211,30 @@ module Constraints = struct
   let pp fmt s = Format.fprintf fmt "%s" (show s)
 end
 
-type attr = {name : string; domain : Type.t; extra : Constraints.t; }
+module Meta = struct
+
+  type t = { module_: string option; }
   [@@deriving show {with_path=false}]
 
-let make_attribute name kind extra =
+  let of_props = function
+    | [] -> None
+    | props ->
+      let module_ = List.assoc_opt "module" props in
+      Some { module_ }
+end
+
+type attr = {name : string; domain : Type.t; extra : Constraints.t; meta: Meta.t option }
+  [@@deriving show {with_path=false}]
+
+let make_attribute name kind extra ~props =
   if Constraints.mem Null extra && Constraints.mem NotNull extra then fail "Column %s can be either NULL or NOT NULL, but not both" name;
   let domain = Type.{ t = Option.default Int kind; nullability = if List.exists (fun cstrt -> Constraints.mem cstrt extra) [NotNull; PrimaryKey]
     then Strict else Nullable } in
-  {name;domain;extra}
+  {name;domain;extra;meta=Meta.of_props props}
 
-let unnamed_attribute domain = {name="";domain;extra=Constraints.empty}
+let unnamed_attribute domain = {name="";domain;extra=Constraints.empty;meta=None}
 
-let make_attribute' ?(extra = Constraints.empty) name domain = { name; domain; extra }
+let make_attribute' ?(extra = Constraints.empty) ?(props = []) name domain = { name; domain; extra; meta = Meta.of_props props }
 
 module Schema =
 struct
@@ -395,7 +407,7 @@ type pos = (int * int) [@@deriving show]
 
 let print_table out (name,schema) =
   IO.write_line out (show_table_name name);
-  schema |> List.iter begin fun {name;domain;extra} ->
+  schema |> List.iter begin fun {name;domain;extra;_} ->
     IO.printf out "%10s %s %s\n" (Type.show domain) name (Constraints.show extra)
   end;
   IO.write_line out ""
@@ -424,7 +436,7 @@ and tuple_list_kind = Insertion of schema | Where_in of Type.t list * in_or_not_
 [@@deriving show]
 and vars = var list [@@deriving show]
 
-type alter_pos = [ `After of string | `Default | `First ]
+type alter_pos = [ `After of string | `Default | `First ]   [@@deriving show {with_path=false}]
 type alter_action = [
   | `Add of attr * alter_pos
   | `RenameTable of table_name
@@ -432,9 +444,9 @@ type alter_action = [
   | `RenameIndex of string * string
   | `Drop of string
   | `Change of string * attr * alter_pos
-  | `None ]
+  | `None ]   [@@deriving show {with_path=false}]
 
-type select_result = (schema * param list)
+type select_result = (schema * param list)   [@@deriving show {with_path=false}]
 
 type direction = [ `Fixed | `Param of param_id ] [@@deriving show]
 
@@ -523,7 +535,7 @@ type insert_action =
            | `Param of (string list option * param_id)
            | `Select of (string list option * select_full) ];
   on_duplicate : assignments option;
-}
+} [@@deriving show {with_path=false}]
 
 type stmt =
 | Create of table_name * [ `Schema of schema | `Select of select_full ]
@@ -539,7 +551,7 @@ type stmt =
 | UpdateMulti of nested list * assignments * expr option
 | Select of select_full
 | CreateRoutine of table_name * Type.kind option * (string * Type.kind * expr option) list (* table_name represents possibly namespaced function name *)
-
+[@@deriving show {with_path=false}]
 (*
 open Schema
 

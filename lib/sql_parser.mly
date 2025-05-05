@@ -351,18 +351,15 @@ alter_pos: AFTER col=IDENT { `After col }
          | { `Default }
 drop_behavior: CASCADE | RESTRICT { }
 
-column_def: name=IDENT t=sql_type? extra=column_def_extra*
+column_def: props=list(META_PROP) name=IDENT t=sql_type? extra=column_def_extra*
   {
     let extra = Constraints.of_list @@ List.filter_map identity extra in
-    make_attribute name t extra
+    List.iter (fun (k, v) -> prerr_endline (Printf.sprintf "k %s v %s" k v)) props;
+    make_attribute name t extra ~props
   }
 
 column_def1: 
-            | metadata=list(META_PROP) c=column_def { 
-              let props = metadata in
-              List.iter (fun (k, v) -> prerr_endline (Printf.sprintf "k %s v %s" k v)) props;
-              `Attr c
-           }
+           c=column_def { `Attr c }
            | pair(CONSTRAINT,IDENT?)? l=table_constraint_1 index_options { `Constraint l }
            | index_or_key l=table_index { `Index l }
            | either(FULLTEXT,SPATIAL) index_or_key? l=table_index { `Index l }

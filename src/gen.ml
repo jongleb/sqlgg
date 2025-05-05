@@ -6,9 +6,9 @@ open Sqlgg
 open Prelude
 open Stmt
 
-type subst_mode = | Named | Unnamed | Oracle | PostgreSQL
+type subst_mode = | Named | Unnamed | Oracle | PostgreSQL [@@deriving show {with_path=false}]
 
-type stmt = { schema : Sql.Schema.t; vars : Sql.var list; kind : kind; props : Props.t; }
+type stmt = { schema : Sql.Schema.t; vars : Sql.var list; kind : kind; props : Props.t; } [@@deriving show {with_path=false}]
 
 (** defines substitution function for parameter literals *)
 let params_mode = ref None
