@@ -13,6 +13,12 @@ let error _ callerID =
 
 let pos lexbuf = (lexeme_start lexbuf, lexeme_end lexbuf)
 
+let behind_line_pos pos =
+  { pos with pos_lnum = pos.pos_lnum - 1; pos_bol = pos.pos_cnum; }
+
+let behind_line lexbuf =
+  lexbuf.lex_curr_p <- behind_line_pos lexbuf.lex_curr_p
+
 let advance_line_pos pos =
   { pos with pos_lnum = pos.pos_lnum + 1; pos_bol = pos.pos_cnum; }
 
@@ -323,7 +329,7 @@ ruleMain = parse
   | '}'   { RCURLY (lexeme_start lexbuf) }
 
   | cmnt wsp* "[sqlgg]" wsp+ (ident+ as n) wsp* "=" wsp* ([^'\n']* as v) '\n' { META_PROP (n, v) }
-  | cmnt { ignore (ruleComment "" lexbuf); ruleMain lexbuf }
+  | cmnt { prerr_endline "CALL CMNT";  ignore (ruleComment "" lexbuf); ruleMain lexbuf }
   | "/*" { ignore (ruleCommentMulti "" lexbuf); ruleMain lexbuf }
 
   | "*" { ASTERISK }

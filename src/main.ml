@@ -67,7 +67,7 @@ let get_statement_error stmt sql =
         Error.log "Input parameter(s) of type Unit not allowed : %s" (String.concat " " l);
         Some (UnitInputParameter l)
 
-let parse_one' (sql, props) =
+let parse_one' (sql, props) ~comments =
     if Sqlgg_config.debug1 () then Printf.eprintf "------\n%s\n%!" sql;
     let (sql, schema, vars, kind) = Syntax.parse sql in
     begin match kind, !Gen.params_mode with
@@ -75,17 +75,17 @@ let parse_one' (sql, props) =
     | _ -> ()
     end;
     let props = Props.set props "sql" sql in
-    { Gen.schema; vars; kind; props }  
+    { Gen.schema; vars; kind; props; comments }  
 
 (** @return parsed statement or [None] in case of parsing failure.
     @raise exn for other errors (typing etc)
 *)
-let parse_one (sql, props as x) =
+let parse_one (sql, props as x) ~comments =
   match Props.get props "noparse" with
-  | Some _ -> Some { Gen.schema=[]; vars=[]; kind=Stmt.Other; props=Props.set props "sql" sql }
+  | Some _ -> Some { Gen.schema=[]; vars=[]; kind=Stmt.Other; props=Props.set props "sql" sql; comments }
   | None -> 
     try
-      Some (parse_one' x)
+      Some (parse_one' x ~comments)
     with
     | Parser_utils.Error (exn, (line, cnum, tok, tail)) ->
         handle_parsing_error sql exn (line, cnum, tok, tail)
@@ -150,7 +150,7 @@ let get_statements ch =
     let b = Buffer.create 1024 in
     let props = ref Props.empty in
     let comments = ref [] in
-    let answer () = Buffer.contents b, !props, comments in
+    let answer () = Buffer.contents b, !props, List.rev !comments in
     
     let rec loop () =
       match Enum.get tokens with
@@ -158,9 +158,9 @@ let get_statements ch =
       | Some x ->
         match x with
         | `Comment s -> if !Parser_state.is_statement then begin 
-            let start_pos = Buffer.length b in
-            comments := (start_pos, String.length s) :: !comments;
-            Buffer.add_string b s;
+          let start_pos = Buffer.length b in
+          comments := (start_pos, start_pos + String.length s) :: !comments;
+          Buffer.add_string b s;
           end; loop () (* do not include comments (option?) *)
         | `Char c -> Buffer.add_char b c; Parser_state.is_statement := true; loop ()
         | `Space _ when !Parser_state.is_statement = false -> loop () (* drop leading whitespaces *)
@@ -175,18 +175,6 @@ let get_statements ch =
       None
   in
 
-  let get_sql_without_comments comments content =
-    let clean_content = ref content in
-    (* Sorted delete in reverse order to avoid breaking indexes. *)
-    let sorted_removals = List.sort ~cmp:(fun (p1, _) (p2, _) -> compare p2 p1) comments in
-    List.iter (fun (pos, len) ->
-      let before = String.sub !clean_content 0 pos in
-      let after = String.sub !clean_content (pos + len) 
-                   (String.length !clean_content - pos - len) in
-      clean_content := before ^ after
-    ) sorted_removals;
-    !clean_content in
-
   let rec next () =
     match extract_statement tokens with
     | None -> raise Enum.No_more_elements
@@ -198,23 +186,27 @@ let get_statements ch =
       match include_ with
       | OnlyReusable ->
         (* DDL with meta isn'r reusable, just skip comments *)
-        ignore (parse_select_one (get_sql_without_comments !comments buffer, props));
+        ignore (parse_select_one (buffer, props));
         next ();
       | OnlyExecutable -> 
-        begin match parse_one (buffer, props) with
+        prerr_endline "Executable statement";
+        begin match parse_one (buffer, props) ~comments with
         | None -> next ()
         | Some stmt -> 
-          let buffer = get_sql_without_comments !comments buffer in
-          let stmt = { stmt with props = Props.set props "sql" buffer } in
+          let _, v = List.find (fun (k, _) -> k = "sql") stmt.props in 
+          prerr_endline v;
+          let _, v = List.find (fun (k, _) -> k = "sql") (Props.update props "sql" buffer) in 
+          prerr_endline v;
+          let stmt = { stmt with props = Props.update props "sql" buffer; } in
+          prerr_endline @@ Gen.show_stmt stmt;
           buffer |> get_statement_error stmt |> Option.map_default (fun _ -> next ()) stmt
         end
       | ReusableAndExecutable-> 
         match parse_select_one (buffer, props) with
         | None -> next ()
         | Some select_full -> 
-          let buffer = get_sql_without_comments !comments buffer in
           let (schema, vars, kind) = Syntax.eval_select select_full in
-          let stmt = { Gen.schema; vars; kind; props = Props.set props "sql" buffer } in
+          let stmt = { Gen.schema; vars; kind; props = Props.set props "sql" buffer; comments } in
           buffer |> get_statement_error stmt |> Option.map_default (fun _ -> next ()) stmt
   in
   Enum.from next |> List.of_enum

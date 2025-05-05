@@ -8,7 +8,13 @@ open Stmt
 
 type subst_mode = | Named | Unnamed | Oracle | PostgreSQL [@@deriving show {with_path=false}]
 
-type stmt = { schema : Sql.Schema.t; vars : Sql.var list; kind : kind; props : Props.t; } [@@deriving show {with_path=false}]
+type stmt = { 
+  schema : Sql.Schema.t; 
+  vars : Sql.var list; 
+  kind : kind; 
+  props : Props.t;
+  comments: Sql.pos list;
+} [@@deriving show {with_path=false}]
 
 (** defines substitution function for parameter literals *)
 let params_mode = ref None
@@ -205,6 +211,46 @@ let subst_oracle index p = ":" ^ (show_param_name p index)
 let subst_postgresql index _ = "$" ^ string_of_int (index + 1)
 let subst_unnamed _ _ = "?"
 
+let subsitute_comments comments sql =
+  (* Если комментариев нет, возвращаем исходный SQL *)
+  if List.length comments = 0 then sql
+  else
+    (* Определяем функцию для удаления комментариев из строки *)
+    let remove_comments s =
+      (* Сортируем комментарии в обратном порядке, чтобы смещения позиций не влияли на результат *)
+      let sorted_comments = List.sort  ~cmp:(fun (s1, _) (s2, _) -> compare s2 s1) comments in
+      List.fold_left (fun curr_sql (start, finish) ->
+        let len = String.length curr_sql in
+        if start >= len || finish <= 0 then
+          curr_sql (* Комментарий не влияет на эту часть *)
+        else
+          (* Вырезаем комментарий *)
+          let before = if start > 0 then String.sub curr_sql 0 start else "" in
+          let after = if finish < len then String.sub curr_sql finish (len - finish) else "" in
+          before ^ after
+      ) s sorted_comments
+    in
+    (* Реализация для различных типов элементов sql *)
+    let rec process_parts = function
+      | [] -> []
+      | Static s :: rest -> Static (remove_comments s) :: process_parts rest
+      | SubstIn param :: rest -> SubstIn param :: process_parts rest
+      | DynamicIn (name, kind, sqls) :: rest -> 
+          (* Для DynamicIn нужно обработать вложенные SQL части *)
+          DynamicIn (name, kind, process_parts sqls) :: process_parts rest
+      | Dynamic (name, ctors) :: rest ->
+          (* Для Dynamic нужно обработать SQL части в каждом конструкторе *)
+          let new_ctors = List.map (fun ctor ->
+            {ctor with sql = process_parts ctor.sql}
+          ) ctors in
+          Dynamic (name, new_ctors) :: process_parts rest
+      | SubstTuple (id, kind) :: rest -> 
+          SubstTuple (id, kind) :: process_parts rest
+    in
+    
+    (* Обрабатываем все части SQL *)
+    process_parts sql
+
 let get_sql stmt =
   let sql = Props.get stmt.props "sql" |> Option.get in
   let subst =
@@ -217,7 +263,10 @@ let get_sql stmt =
       | Oracle -> subst_oracle
       | PostgreSQL -> subst_postgresql)
   in
-  substitute_vars sql stmt.vars subst
+  let sql_with_vars = substitute_vars sql stmt.vars subst in
+  
+  (* Затем удаляем комментарии *)
+  subsitute_comments stmt.comments sql_with_vars
 
 let get_sql_string_only stmt =
   match get_sql stmt with
