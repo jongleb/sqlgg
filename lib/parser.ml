@@ -8,5 +8,5 @@ module T_SQL_parser =
   end
 
 module T = Parser_utils.Make (T_SQL_parser)
-
-let parse_stmt stmt = T.parse_buf_exn (Lexing.from_string stmt)
+  
+let parse_stmt feeder_queue = T.parse_buf_exn (Lexing.from_function (Stmt_elements.queue_byte_feeder ~feeder_queue))

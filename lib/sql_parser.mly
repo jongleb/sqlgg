@@ -351,10 +351,10 @@ alter_pos: AFTER col=IDENT { `After col }
          | { `Default }
 drop_behavior: CASCADE | RESTRICT { }
 
-column_def: props=list(META_PROP) name=IDENT t=sql_type? extra=column_def_extra*
+column_def: name=IDENT t=sql_type? extra=column_def_extra*
   {
     let extra = Constraints.of_list @@ List.filter_map identity extra in
-    List.iter (fun (k, v) -> prerr_endline (Printf.sprintf "k %s v %s" k v)) props;
+    let props = Parser_state.read_props() in
     make_attribute name t extra ~props
   }
 

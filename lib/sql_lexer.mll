@@ -13,12 +13,6 @@ let error _ callerID =
 
 let pos lexbuf = (lexeme_start lexbuf, lexeme_end lexbuf)
 
-let behind_line_pos pos =
-  { pos with pos_lnum = pos.pos_lnum - 1; pos_bol = pos.pos_cnum; }
-
-let behind_line lexbuf =
-  lexbuf.lex_curr_p <- behind_line_pos lexbuf.lex_curr_p
-
 let advance_line_pos pos =
   { pos with pos_lnum = pos.pos_lnum + 1; pos_bol = pos.pos_cnum; }
 
@@ -272,8 +266,8 @@ let cmnt = "--" | "//" | "#"
 (* extract separate statements *)
 rule ruleStatement = parse
   | ['\n' ' ' '\r' '\t']+ as tok { `Space tok }
-  | cmnt (wsp* "[sqlgg]" wsp+ (ident+ as n) wsp* "=" wsp* ([^'\n']* as v) '\n') as cc {  
-    if !Parser_state.is_statement then `Comment cc else `Props [(n,v)]
+  | cmnt wsp* "[sqlgg]" wsp+ (ident+ as n) wsp* "=" wsp* ([^'\n']* as v) '\n' {  
+    if !Parser_state.is_statement then `InStatementProp (n, v) else `Props [(n,v)]
   }
   | cmnt wsp* "@" (ident+ as name) wsp* "|" ([^'\n']* as v) '\n' 
     { 
@@ -319,7 +313,7 @@ and
 ruleMain = parse
   | wsp   { ruleMain lexbuf }
   (* update line number *)
-  | '\n'  { advance_line lexbuf; ruleMain lexbuf}
+  | '\n'  { ruleMain lexbuf }
 
   | '('                { LPAREN }
   | ')'                { RPAREN }
@@ -328,18 +322,7 @@ ruleMain = parse
   | '{'   { LCURLY (lexeme_start lexbuf) }
   | '}'   { RCURLY (lexeme_start lexbuf) }
 
-  | cmnt wsp* "[sqlgg]" wsp+ (ident+ as n) wsp* "=" wsp* ([^'\n']* as v) '\n' { META_PROP (n, v) }
-  | cmnt { 
-    let start_p = lexbuf.lex_start_p in
-    let curr_p = lexbuf.lex_curr_p in
-
-    ignore @@ ruleComment "" lexbuf;
-
-    lexbuf.lex_start_p <- start_p;
-    lexbuf.lex_curr_p <- curr_p;
-
-    ruleMain lexbuf
-  }
+  | cmnt { ignore (ruleComment "" lexbuf); ruleMain lexbuf }
   | "/*" { ignore (ruleCommentMulti "" lexbuf); ruleMain lexbuf }
 
   | "*" { ASTERISK }
@@ -420,24 +403,9 @@ ruleInDollarQuotes tag acc = parse
   | _		{ error lexbuf "ruleInDollarQuotes" }
 and
 ruleComment acc = parse
-| '\n'	{ 
-      (* Не вызываем advance_line, но сохраняем содержимое *)
-      let result = if !Parser_state.is_statement then (acc ^ lexeme lexbuf) else acc in
-      (* Запоминаем позицию конца комментария *)
-      let pos_end = lexeme_end lexbuf in
-      (* Добавляем позицию комментария в список *)
-      result 
-    }
-  | eof	        { 
-      (* Запоминаем позицию конца комментария *)
-      let pos_end = lexeme_end lexbuf in
-      (* Добавляем позицию комментария в список *)
-      acc 
-    }
-  | [^'\n']+    { 
-      let s = lexeme lexbuf in 
-      ruleComment (acc ^ s) lexbuf pos_start; 
-    }
+  | '\n'	{ advance_line lexbuf; acc }
+  | eof	        { acc }
+  | [^'\n']+    { let s = lexeme lexbuf in ruleComment (acc ^ s) lexbuf; }
   | _		{ error lexbuf "ruleComment"; }
 and
 ruleCommentMulti acc = parse

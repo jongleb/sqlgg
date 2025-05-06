@@ -945,8 +945,9 @@ let complete_sql kind sql =
   | _ -> (sql,[])
 
 let parse sql =
+  let sql' = Stmt_elements.elements_to_sql sql in
   let (schema,p1,kind) = eval @@ Parser.parse_stmt sql in
-  let (sql,p2) = complete_sql kind sql in
+  let (sql,p2) = complete_sql kind sql' in
   (sql, schema, unify_params (p1 @ p2), kind)
   
 let eval_select select_full  = 
