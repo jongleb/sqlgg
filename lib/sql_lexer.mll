@@ -329,7 +329,17 @@ ruleMain = parse
   | '}'   { RCURLY (lexeme_start lexbuf) }
 
   | cmnt wsp* "[sqlgg]" wsp+ (ident+ as n) wsp* "=" wsp* ([^'\n']* as v) '\n' { META_PROP (n, v) }
-  | cmnt { prerr_endline "CALL CMNT";  ignore (ruleComment "" lexbuf); ruleMain lexbuf }
+  | cmnt { 
+    let start_p = lexbuf.lex_start_p in
+    let curr_p = lexbuf.lex_curr_p in
+
+    ignore @@ ruleComment "" lexbuf;
+
+    lexbuf.lex_start_p <- start_p;
+    lexbuf.lex_curr_p <- curr_p;
+
+    ruleMain lexbuf
+  }
   | "/*" { ignore (ruleCommentMulti "" lexbuf); ruleMain lexbuf }
 
   | "*" { ASTERISK }
@@ -410,9 +420,24 @@ ruleInDollarQuotes tag acc = parse
   | _		{ error lexbuf "ruleInDollarQuotes" }
 and
 ruleComment acc = parse
-  | '\n'	{ advance_line lexbuf; if !Parser_state.is_statement then (acc ^ lexeme lexbuf) else acc }
-  | eof	        { acc }
-  | [^'\n']+    { let s = lexeme lexbuf in ruleComment (acc ^ s) lexbuf; }
+| '\n'	{ 
+      (* Не вызываем advance_line, но сохраняем содержимое *)
+      let result = if !Parser_state.is_statement then (acc ^ lexeme lexbuf) else acc in
+      (* Запоминаем позицию конца комментария *)
+      let pos_end = lexeme_end lexbuf in
+      (* Добавляем позицию комментария в список *)
+      result 
+    }
+  | eof	        { 
+      (* Запоминаем позицию конца комментария *)
+      let pos_end = lexeme_end lexbuf in
+      (* Добавляем позицию комментария в список *)
+      acc 
+    }
+  | [^'\n']+    { 
+      let s = lexeme lexbuf in 
+      ruleComment (acc ^ s) lexbuf pos_start; 
+    }
   | _		{ error lexbuf "ruleComment"; }
 and
 ruleCommentMulti acc = parse
@@ -434,4 +459,3 @@ ruleCommentMulti acc = parse
     | Ident -> token
 
 }
-

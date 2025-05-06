@@ -67,7 +67,7 @@ let get_statement_error stmt sql =
         Error.log "Input parameter(s) of type Unit not allowed : %s" (String.concat " " l);
         Some (UnitInputParameter l)
 
-let parse_one' (sql, props) ~comments =
+let parse_one' (sql, props) =
     if Sqlgg_config.debug1 () then Printf.eprintf "------\n%s\n%!" sql;
     let (sql, schema, vars, kind) = Syntax.parse sql in
     begin match kind, !Gen.params_mode with
@@ -75,17 +75,17 @@ let parse_one' (sql, props) ~comments =
     | _ -> ()
     end;
     let props = Props.set props "sql" sql in
-    { Gen.schema; vars; kind; props; comments }  
+    { Gen.schema; vars; kind; props; }  
 
 (** @return parsed statement or [None] in case of parsing failure.
     @raise exn for other errors (typing etc)
 *)
-let parse_one (sql, props as x) ~comments =
+let parse_one (sql, props as x) =
   match Props.get props "noparse" with
-  | Some _ -> Some { Gen.schema=[]; vars=[]; kind=Stmt.Other; props=Props.set props "sql" sql; comments }
+  | Some _ -> Some { Gen.schema=[]; vars=[]; kind=Stmt.Other; props=Props.set props "sql" sql; }
   | None -> 
     try
-      Some (parse_one' x ~comments)
+      Some (parse_one' x)
     with
     | Parser_utils.Error (exn, (line, cnum, tok, tail)) ->
         handle_parsing_error sql exn (line, cnum, tok, tail)
@@ -190,7 +190,7 @@ let get_statements ch =
         next ();
       | OnlyExecutable -> 
         prerr_endline "Executable statement";
-        begin match parse_one (buffer, props) ~comments with
+        begin match parse_one (buffer, props) with
         | None -> next ()
         | Some stmt -> 
           let _, v = List.find (fun (k, _) -> k = "sql") stmt.props in 
@@ -206,7 +206,7 @@ let get_statements ch =
         | None -> next ()
         | Some select_full -> 
           let (schema, vars, kind) = Syntax.eval_select select_full in
-          let stmt = { Gen.schema; vars; kind; props = Props.set props "sql" buffer; comments } in
+          let stmt = { Gen.schema; vars; kind; props = Props.set props "sql" buffer;  } in
           buffer |> get_statement_error stmt |> Option.map_default (fun _ -> next ()) stmt
   in
   Enum.from next |> List.of_enum
