@@ -122,6 +122,7 @@ type token = [
   | `Space of string 
   | `Semicolon 
   | `Props of (string * string) list
+  | `InStatementProp of (string * string)
 ]
 
 module Include = struct
@@ -151,19 +152,31 @@ let get_statements ch =
     let props = ref Props.empty in
     let answer () = Buffer.contents b, !props in
     
-    let rec loop smth =
+    let rec loop () =
       match Enum.get tokens with
-      | None -> if smth then Some (answer ()) else None
+      | None -> if !Parser_state.is_statement then Some (answer ()) else None
       | Some x ->
         match x with
-        | `Comment s -> ignore s; loop smth (* do not include comments (option?) *)
-        | `Char c -> Buffer.add_char b c; loop true
-        | `Space _ when smth = false -> loop smth (* drop leading whitespaces *)
-        | `Token s | `Space s -> Buffer.add_string b s; loop true
-        | `Props p -> props := Props.set_all p !props; loop smth
+        | `Comment s -> ignore s; loop ()
+        | `Char c ->
+          Buffer.add_char b c;
+          Parser_state.is_statement := true; 
+          loop ()
+        | `Space _ when !Parser_state.is_statement = false -> loop ()
+        | `Token s | `Space s ->
+          Buffer.add_string b s;
+          Parser_state.is_statement := true; 
+          loop ()
+        | `Props p -> props := Props.set_all p !props; loop ()
         | `Semicolon -> Some (answer ())
+        | `InStatementProp (n, v) -> 
+          let start_pos = Buffer.length b in
+          let lex_pos = { lexbuf.lex_curr_p with pos_cnum = lexbuf.lex_abs_pos + start_pos } in
+          Parser_state.add_metadata lex_pos n v;
+          loop()
     in
-    try loop false 
+    Parser_state.is_statement := false;
+    try loop ()
     with e -> 
       Error.log "lexer failed (%s)" (Printexc.to_string e); 
       None

@@ -219,6 +219,19 @@ let get_sql stmt =
   in
   substitute_vars sql stmt.vars subst
 
+  let remove_meta_data str =
+    str
+    |> String.split_on_char '\n'
+    |> List.filter (fun line ->
+        let t = String.trim line in
+        let t_no_spaces = String.concat "" (String.split_on_char ' ' t) in
+        not (
+          String.starts_with ~prefix:"--[sqlgg]" t_no_spaces ||
+          String.starts_with ~prefix:"//" t_no_spaces ||
+          String.starts_with ~prefix:"#[sqlgg]" t_no_spaces
+        ))
+    |> String.concat "\n"
+
 let get_sql_string_only stmt =
   match get_sql stmt with
   | Static s :: [] -> s

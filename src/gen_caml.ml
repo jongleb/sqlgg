@@ -255,10 +255,10 @@ let rec set_param index param =
   | { typ = { t=Union {ctors; _}; _ }; _ } -> output "%s.set_param p %s;" (get_enum_name ctors) pname
   | param' when nullable -> set_param_nullable @@ sprintf "T.set_param_%s" (show_param_type param') 
   | _ -> output "T.set_param_%s p %s;" ptype pname
-  
+
 let rec set_var index var =
   match var with
-  | Single p -> set_param index p
+  | Single p -> prerr_endline @@ Int.to_string @@ fst @@ p.id.pos; prerr_endline @@ Int.to_string @@ snd @@ p.id.pos; set_param index p
   | SharedVarsGroup (vars, _) -> List.iter (set_var index) vars
   | TupleList (p, Where_in _) -> set_var index (ChoiceIn { param = p; vars = []; kind = `In })
   | SingleIn _ | TupleList _ -> ()
