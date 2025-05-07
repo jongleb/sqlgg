@@ -149,9 +149,7 @@ let get_statements ch =
   let extract_statement tokens =
     let b = Buffer.create 1024 in
     let props = ref Props.empty in
-    let answer () = 
-      Hashtbl.reset Parser_state.stmt_metadata;
-      Buffer.contents b, !props in
+    let answer () = Buffer.contents b, !props in
 
     let internal_props = ref Props.empty in
     
@@ -173,6 +171,7 @@ let get_statements ch =
         | `Props p -> props := Props.set_all p !props; loop smth
         | `Semicolon -> Some (answer ())
     in
+    Hashtbl.reset Parser_state.stmt_metadata;
     try loop false
     with e -> 
       Error.log "lexer failed (%s)" (Printexc.to_string e); 
