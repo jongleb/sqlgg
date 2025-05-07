@@ -148,6 +148,7 @@ end
 
 let get_column index attr =
   let rec print_column attr = match attr with
+  | { meta = Some { module_ = Some m }; _ } -> sprintf "(%s.get_column%s" m
   | { domain={ t = Union {ctors; _}; _ }; _ } when !Sqlgg_config.enum_as_poly_variant ->
     sprintf "(%s.get_column%s" (get_enum_name ctors)
   | { domain={ t = Union _; _ }; _ } as c -> print_column { c with domain = { c.domain with t = Text } }
@@ -442,7 +443,7 @@ let gen_tuple_substitution ~is_row label schema =
 
 let make_schema_of_tuple_types label =
   List.mapi (fun idx domain -> {
-    name=(sprintf "%s_%Ln" label idx); domain; extra = Constraints.empty
+    name=(sprintf "%s_%Ln" label idx); domain; extra = Constraints.empty; meta = None;
   })   
 
 let make_sql l =

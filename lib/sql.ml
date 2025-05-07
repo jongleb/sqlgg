@@ -211,18 +211,30 @@ module Constraints = struct
   let pp fmt s = Format.fprintf fmt "%s" (show s)
 end
 
-type attr = {name : string; domain : Type.t; extra : Constraints.t; }
+module Meta = struct
+
+  type t = { module_: string option; }
   [@@deriving show {with_path=false}]
 
-let make_attribute name kind extra =
-  if Constraints.mem Null extra && Constraints.mem NotNull extra then fail "Column %s can be either NULL or NOT NULL, but not both" name;
-  let domain = Type.{ t = Option.default Int kind; nullability = if List.exists (fun cstrt -> Constraints.mem cstrt extra) [NotNull; PrimaryKey]
-    then Strict else Nullable } in
-  {name;domain;extra}
+  let of_props = function
+    | [] -> None
+    | props ->
+      let module_ = List.assoc_opt "module" props in
+      Some { module_ }
+end
 
-let unnamed_attribute domain = {name="";domain;extra=Constraints.empty}
+type attr = {name : string; domain : Type.t; extra : Constraints.t; meta: Meta.t option }
+  [@@deriving show {with_path=false}]
 
-let make_attribute' ?(extra = Constraints.empty) name domain = { name; domain; extra }
+  let make_attribute name kind extra ~props =
+    if Constraints.mem Null extra && Constraints.mem NotNull extra then fail "Column %s can be either NULL or NOT NULL, but not both" name;
+    let domain = Type.{ t = Option.default Int kind; nullability = if List.exists (fun cstrt -> Constraints.mem cstrt extra) [NotNull; PrimaryKey]
+      then Strict else Nullable } in
+    {name;domain;extra;meta=Meta.of_props props}
+
+    let unnamed_attribute domain = {name="";domain;extra=Constraints.empty;meta=None}
+
+    let make_attribute' ?(extra = Constraints.empty) ?(props = []) name domain = { name; domain; extra; meta = Meta.of_props props }
 
 module Schema =
 struct

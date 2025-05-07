@@ -353,11 +353,9 @@ drop_behavior: CASCADE | RESTRICT { }
 column_def: name=IDENT t=sql_type? extra=column_def_extra*
   {
     let rule_start_pos_cnum = $startpos.Lexing.pos_cnum in
-    let attached_metadata = List.concat @@ Hashtbl.find_all Parser_state.stmt_metadata rule_start_pos_cnum in
-    prerr_endline @@ Printf.sprintf "COLUMN: %s" (Int.to_string @@ rule_start_pos_cnum);
-    prerr_endline @@ Printf.sprintf "COUNT: %d" @@ List.length attached_metadata;
+    let props = List.concat @@ Hashtbl.find_all Parser_state.stmt_metadata rule_start_pos_cnum in
     let extra = Constraints.of_list @@ List.filter_map identity extra in
-    make_attribute name t extra
+    make_attribute name t extra ~props
   }
 
 column_def1: c=column_def { `Attr c }
