@@ -258,7 +258,7 @@ let rec set_param index param =
 
 let rec set_var index var =
   match var with
-  | Single p -> prerr_endline @@ Int.to_string @@ fst @@ p.id.pos; prerr_endline @@ Int.to_string @@ snd @@ p.id.pos; set_param index p
+  | Single p -> set_param index p
   | SharedVarsGroup (vars, _) -> List.iter (set_var index) vars
   | TupleList (p, Where_in _) -> set_var index (ChoiceIn { param = p; vars = []; kind = `In })
   | SingleIn _ | TupleList _ -> ()

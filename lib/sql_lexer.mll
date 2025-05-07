@@ -263,15 +263,11 @@ let alpha = ['a'-'z' 'A'-'Z']
 let ident = (alpha) (alpha | digit | '_' )*
 let wsp = [' ' '\r' '\t']
 let cmnt = "--" | "//" | "#"
-let sqlgg = cmnt wsp* "[sqlgg]"
 
 (* extract separate statements *)
 rule ruleStatement = parse
   | ['\n' ' ' '\r' '\t']+ as tok { `Space tok }
-  | sqlgg as s {
-    let (n, v) = ruleSqlggMeta lexbuf in
-    if !Parser_state.is_statement then `InStatementProp (n, v) else `Props [(n,v)]
-  }
+  | cmnt wsp* "[sqlgg]" wsp+ (ident+ as n) wsp* "=" wsp* ([^'\n']* as v) '\n' { `Props [(n,v)] }
   | cmnt wsp* "@" (ident+ as name) wsp* "|" ([^'\n']* as v) '\n' 
     { 
       let props = rulePropList [] (Lexing.from_string v) in
@@ -289,10 +285,6 @@ rule ruleStatement = parse
   | ';' { `Semicolon }
   | [^ ';'] as c { `Char c }
   | eof { `Eof }
-and
-ruleSqlggMeta = parse
-  | wsp+ (ident+ as n) wsp* "=" wsp* ([^'\n']* as v) '\n' { (n, v) }
-  | _ { error lexbuf "ruleSqlggMeta" }
 (* Parse a list of key:value properties *)
 and
 rulePropList acc = parse

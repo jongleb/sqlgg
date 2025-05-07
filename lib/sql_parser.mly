@@ -29,7 +29,6 @@
 %token <float> FLOAT
 %token <Sql.param_id> PARAM
 %token <Sql.shared_query_ref_id> SHARED_QUERY_REF
-%token <(string * string)> META_PROP
 %token <int> LCURLY RCURLY
 %token LPAREN RPAREN COMMA EOF DOT NULL
 %token CONFLICT_ALGO
@@ -318,7 +317,7 @@ having: HAVING e=expr { e }
 column1:
        | table_name DOT ASTERISK { Sql.AllOf $1 }
        | ASTERISK { Sql.All }
-       | list(META_PROP) e=expr m=maybe_as { Sql.Expr (e,m) }
+       | e=expr m=maybe_as { Sql.Expr (e,m) }
 
 maybe_as: AS? name=IDENT { Some name }
         | { None }
@@ -354,7 +353,9 @@ drop_behavior: CASCADE | RESTRICT { }
 column_def: name=IDENT t=sql_type? extra=column_def_extra*
   {
     let rule_start_pos_cnum = $startpos.Lexing.pos_cnum in
-    let attached_metadata = Parser_state.get_metadata_before rule_start_pos_cnum in
+    let attached_metadata = List.concat @@ Hashtbl.find_all Parser_state.stmt_metadata rule_start_pos_cnum in
+    prerr_endline @@ Printf.sprintf "COLUMN: %s" (Int.to_string @@ rule_start_pos_cnum);
+    prerr_endline @@ Printf.sprintf "COUNT: %d" @@ List.length attached_metadata;
     let extra = Constraints.of_list @@ List.filter_map identity extra in
     make_attribute name t extra
   }

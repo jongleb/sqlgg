@@ -122,7 +122,6 @@ type token = [
   | `Space of string 
   | `Semicolon 
   | `Props of (string * string) list
-  | `InStatementProp of (string * string)
 ]
 
 module Include = struct
@@ -150,38 +149,35 @@ let get_statements ch =
   let extract_statement tokens =
     let b = Buffer.create 1024 in
     let props = ref Props.empty in
-    let answer () = Buffer.contents b, !props in
+    let answer () = 
+      Hashtbl.reset Parser_state.stmt_metadata;
+      Buffer.contents b, !props in
+
+    let internal_props = ref Props.empty in
     
-    let rec loop () =
+    let rec loop smth =
       match Enum.get tokens with
-      | None -> if !Parser_state.is_statement then Some (answer ()) else None
+      | None -> if smth then Some (answer ()) else None
       | Some x ->
         match x with
-        | `Comment s -> ignore s; loop ()
-        | `Char c ->
-          Buffer.add_char b c;
-          Parser_state.is_statement := true; 
-          loop ()
-        | `Space _ when !Parser_state.is_statement = false -> loop ()
-        | `Token s | `Space s ->
-          Buffer.add_string b s;
-          Parser_state.is_statement := true; 
-          loop ()
-        | `Props p -> props := Props.set_all p !props; loop ()
+        | `Comment s -> ignore s; loop smth (* do not include comments (option?) *)
+        | `Char c -> 
+          if List.length !internal_props > 0 then (
+            Hashtbl.add Parser_state.stmt_metadata (Buffer.length b) !internal_props;
+            internal_props := Props.empty;
+          );
+          Buffer.add_char b c; loop true
+        | `Space _ when smth = false -> loop smth (* drop leading whitespaces *)
+        | `Token s | `Space s -> Buffer.add_string b s; loop true
+        | `Props p when smth -> internal_props := Props.set_all p !internal_props; loop smth
+        | `Props p -> props := Props.set_all p !props; loop smth
         | `Semicolon -> Some (answer ())
-        | `InStatementProp (n, v) -> 
-          let start_pos = Buffer.length b in
-          let lex_pos = { lexbuf.lex_curr_p with pos_cnum = lexbuf.lex_abs_pos + start_pos } in
-          Parser_state.add_metadata lex_pos n v;
-          loop()
     in
-    Parser_state.is_statement := false;
-    try loop ()
+    try loop false
     with e -> 
       Error.log "lexer failed (%s)" (Printexc.to_string e); 
       None
   in
-
   let rec next () =
     match extract_statement tokens with
     | None -> raise Enum.No_more_elements
