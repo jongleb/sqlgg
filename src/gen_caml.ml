@@ -148,13 +148,16 @@ end
 
 let get_column index attr =
   let rec print_column attr = match attr with
-  | { meta = Some { module_ = Some m }; _ } -> sprintf "(%s.get_column%s" m
   | { domain={ t = Union {ctors; _}; _ }; _ } when !Sqlgg_config.enum_as_poly_variant ->
-    sprintf "(%s.get_column%s" (get_enum_name ctors)
+    sprintf "%s.get_column%s" (get_enum_name ctors)
   | { domain={ t = Union _; _ }; _ } as c -> print_column { c with domain = { c.domain with t = Text } }
-  | _ -> sprintf "(T.get_column_%s%s" (L.as_lang_type attr.domain) in 
-  let column = print_column attr (if is_attr_nullable attr then "_nullable" else "") in 
-  sprintf "%s stmt %u)" column index
+  | _ -> sprintf "T.get_column_%s%s" (L.as_lang_type attr.domain) in 
+  let column_suffix = if is_attr_nullable attr then "_nullable" else "" in
+  let base_column = print_column attr column_suffix in
+  match attr.meta with
+  | Some { module_ = Some m } -> sprintf "(%s.get_column @@ %s stmt %u)" m base_column index
+  | Some { module_ = None }
+  | None -> sprintf "(%s stmt %u)" base_column index
 
 module T = Translate(L)
 
