@@ -213,28 +213,32 @@ end
 
 module Meta = struct
 
-  type t = { module_: string option; }
-  [@@deriving show {with_path=false}]
+  type t = (string, string) Hashtbl.t
 
-  let of_props = function
-    | [] -> None
-    | props ->
-      let module_ = List.assoc_opt "module" props in
-      Some { module_ }
+  let of_list list = list |> List.to_seq |> Hashtbl.of_seq
+
+  let empty () = Hashtbl.create 20
+
+  let find_opt = Hashtbl.find_opt
+
+  let pp =
+    let open Format in
+    fun fmt t ->
+      Hashtbl.iter (fun k v -> fprintf fmt "%s=%s\n" k v) t
 end
 
-type attr = {name : string; domain : Type.t; extra : Constraints.t; meta: Meta.t option }
+type attr = {name : string; domain : Type.t; extra : Constraints.t; meta: Meta.t }
   [@@deriving show {with_path=false}]
 
-  let make_attribute name kind extra ~props =
+  let make_attribute name kind extra ~meta =
     if Constraints.mem Null extra && Constraints.mem NotNull extra then fail "Column %s can be either NULL or NOT NULL, but not both" name;
     let domain = Type.{ t = Option.default Int kind; nullability = if List.exists (fun cstrt -> Constraints.mem cstrt extra) [NotNull; PrimaryKey]
       then Strict else Nullable } in
-    {name;domain;extra;meta=Meta.of_props props}
+    {name;domain;extra;meta=Meta.of_list meta}
 
-    let unnamed_attribute domain = {name="";domain;extra=Constraints.empty;meta=None}
+    let unnamed_attribute domain = {name="";domain;extra=Constraints.empty;meta=Meta.empty()}
 
-    let make_attribute' ?(extra = Constraints.empty) ?(props = []) name domain = { name; domain; extra; meta = Meta.of_props props }
+    let make_attribute' ?(extra = Constraints.empty) ?(meta = []) name domain = { name; domain; extra; meta = Meta.of_list meta }
 
 module Schema =
 struct

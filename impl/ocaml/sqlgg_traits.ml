@@ -160,3 +160,27 @@ module type M_io = sig
     with type execute_response := execute_response
 
 end
+
+module type M_default_types = M with type Types.Bool.t = bool
+  and type Types.Int.t = int64
+  and type Types.Float.t = float
+  and type Types.Text.t = string
+  and type Types.Blob.t = string
+  and type Types.Decimal.t = float
+  and type Types.Datetime.t = float
+  and type Types.Any.t = string
+
+module type M_io_default_types = sig 
+  include M_io
+  
+  module IO : Sqlgg_io.M
+
+  include FNS
+    with type params := params
+    with type result := result
+    with type 'a io_future := 'a IO.future
+    with type 'a connection := 'a connection
+    with type statement := statement
+    with type row := row
+    with type execute_response := execute_response
+end
