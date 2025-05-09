@@ -159,6 +159,10 @@ module L = struct
   let as_api_type = as_lang_type
 end
 
+let get_repr_name attr = sprintf "%s_from_%s"
+  (L.as_runtime_repr_name attr)
+  (L.as_lang_type attr)
+
 let get_column index attr =
   let rec print_column attr = match attr with
   | { domain={ t = Union {ctors; _}; _ }; _ } when !Sqlgg_config.enum_as_poly_variant ->
@@ -169,7 +173,10 @@ let get_column index attr =
   let module_ = Sql.Meta.find_opt attr.meta "module" in
   let base_column = print_column attr column_suffix in
   match module_ with
-  | Some m -> sprintf "(%s.get_column @@ %s stmt %u)" m base_column index
+  | Some m ->
+    let repr = Sql.Meta.find_opt attr.meta "repr"  in
+    sprintf "(%s.get_column @@ %s %s stmt %u)" m 
+     (Option.map_default (fun _ -> Printf.sprintf "%s @@" (get_repr_name attr.domain)) "" repr) base_column index
   | None -> sprintf "(%s stmt %u)" base_column index
 
 module T = Translate(L)
@@ -670,7 +677,7 @@ let generate_root_functor ~gen_io name stmts =
     List.iter (fun i ->
        "module" |> Sql.Meta.find_opt i.meta
         |> Option.may(fun _ ->
-          let repr = "repr" |> Sql.Meta.find_opt i.meta in
+          let repr = Sql.Meta.find_opt i.meta "repr" in
           match repr with
           | Some repr ->
               Hashtbl.add use_repr i.domain repr
@@ -695,9 +702,8 @@ let generate_root_functor ~gen_io name stmts =
     indented (fun () ->
       output "include %s" traits_module_name;
       Hashtbl.iter (fun i _ ->
-        output "val %s_from_%s: %s.t -> %s"
-          (L.as_runtime_repr_name i)
-          (L.as_lang_type i)
+        output "val %s: %s.t -> %s"
+          (get_repr_name i)
           (L.as_lang_type i)
           (L.as_runtime_repr_name i)
       ) use_repr;
