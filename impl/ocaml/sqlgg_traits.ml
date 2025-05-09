@@ -171,7 +171,7 @@ module type M_default_types = M with type Types.Bool.t = bool
   and type Types.Any.t = string
 
 module type M_io_default_types = sig 
-  include M_io
+  include M_default_types
   
   module IO : Sqlgg_io.M
 
