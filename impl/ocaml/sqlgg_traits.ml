@@ -112,6 +112,21 @@ module type M = sig
   val get_column_Decimal_nullable : row -> int -> Decimal.t option
   val get_column_Datetime_nullable : row -> int -> Datetime.t option
 
+  val get_column_bool : row -> int -> bool
+  val get_column_regular_bool_nullable : row -> int -> bool option
+  
+  val get_column_int64 : row -> int -> int64
+  val get_column_int64_nullable : row -> int -> int64 option
+  
+  val get_column_float : row -> int -> float
+  val get_column_float_nullable : row -> int -> float option
+  
+  val get_column_decimal : row -> int -> float
+  val get_column_decimal_nullable : row -> int -> float option
+  
+  val get_column_datetime : row -> int -> string
+  val get_column_datetime_nullable : row -> int -> string option
+
   val start_params : statement -> int -> params
 
   (** [set_param_* stmt index val]. [index] is 0-based,

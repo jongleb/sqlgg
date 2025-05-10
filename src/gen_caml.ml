@@ -159,25 +159,30 @@ module L = struct
   let as_api_type = as_lang_type
 end
 
-let get_repr_name attr = sprintf "%s_from_%s"
-  (L.as_runtime_repr_name attr)
-  (L.as_lang_type attr)
-
 let get_column index attr =
-  let rec print_column attr = match attr with
-  | { domain={ t = Union {ctors; _}; _ }; _ } when !Sqlgg_config.enum_as_poly_variant ->
-    sprintf "%s.get_column%s" (get_enum_name ctors)
-  | { domain={ t = Union _; _ }; _ } as c -> print_column { c with domain = { c.domain with t = Text } }
-  | _ -> sprintf "T.get_column_%s%s" (L.as_lang_type attr.domain) in 
-  let column_suffix = if is_attr_nullable attr then "_nullable" else "" in
-  let module_ = Sql.Meta.find_opt attr.meta "module" in
-  let base_column = print_column attr column_suffix in
-  match module_ with
-  | Some m ->
-    let repr = Sql.Meta.find_opt attr.meta "repr"  in
-    sprintf "(%s.get_column @@ %s %s stmt %u)" m 
-     (Option.map_default (fun _ -> Printf.sprintf "%s @@" (get_repr_name attr.domain)) "" repr) base_column index
-  | None -> sprintf "(%s stmt %u)" base_column index
+  let nullable_suffix = if is_attr_nullable attr then "_nullable" else "" in
+  let format_t_get_column type_name =
+    sprintf "(T.get_column_%s%s stmt %u)" type_name nullable_suffix index
+  in
+  let rec format_column_expr attr =
+    match attr with
+    | { domain={ t = Union {ctors; _}; _ }; _ } when !Sqlgg_config.enum_as_poly_variant ->
+      sprintf "(%s.get_column%s stmt %u)" (get_enum_name ctors) nullable_suffix index
+    | { domain={ t = Union _; _ }; _ } as c ->
+      format_column_expr { c with domain = { c.domain with t = Text } }
+    | _ ->
+      match Sql.Meta.find_opt attr.meta "module" with
+      | None ->
+        let lang_type_name = L.as_lang_type attr.domain in
+        format_t_get_column lang_type_name
+      | Some m ->
+        let runtime_repr_name = L.as_runtime_repr_name attr.domain in
+        let inner_get_column_expr =
+          format_t_get_column runtime_repr_name
+        in
+        sprintf "(%s.get_column%s %s)" m nullable_suffix inner_get_column_expr
+  in
+  format_column_expr attr
 
 module T = Translate(L)
 
@@ -279,7 +284,7 @@ let rec set_param index param =
   | { typ = { t=Union {ctors; _}; _ }; _ } -> output "%s.set_param p %s;" (get_enum_name ctors) pname
   | param' when nullable -> set_param_nullable @@ sprintf "T.set_param_%s" (show_param_type param') 
   | _ -> output "T.set_param_%s p %s;" ptype pname
-
+  
 let rec set_var index var =
   match var with
   | Single p -> set_param index p
@@ -466,7 +471,7 @@ let gen_tuple_substitution ~is_row label schema =
 
 let make_schema_of_tuple_types label =
   List.mapi (fun idx domain -> {
-    name=(sprintf "%s_%Ln" label idx); domain; extra = Constraints.empty; meta = Meta.empty();
+    name=(sprintf "%s_%Ln" label idx); domain; extra = Constraints.empty; meta = Meta.empty()
   })   
 
 let make_sql l =
@@ -661,62 +666,6 @@ let generate_enum_modules stmts =
   )
 
 let generate_enum_modules stmts = if !Sqlgg_config.enum_as_poly_variant then generate_enum_modules stmts
-
-(* This function generates the root functor definition based on provided statements. *)
-let generate_root_functor ~gen_io name stmts =
-  let (base_traits, io) = (* Renamed traits to base_traits *)
-    match gen_io with
-    | true -> "Sqlgg_traits.M_io", "T.IO"
-    | false -> "Sqlgg_traits.M", "Sqlgg_io.Blocking"
-  in
-
-  let use_default = ref false in
-  let use_repr = Hashtbl.create 20 in
-
-  List.iter (fun stmt ->
-    List.iter (fun i ->
-       "module" |> Sql.Meta.find_opt i.meta
-        |> Option.may(fun _ ->
-          let repr = Sql.Meta.find_opt i.meta "repr" in
-          match repr with
-          | Some repr ->
-              Hashtbl.add use_repr i.domain repr
-          | None ->
-              use_default := true
-        )
-    ) stmt.Gen.schema
-  ) stmts;
-
-  let traits_module_name = if !use_default then base_traits ^ "_default_types" else base_traits in
-
-  let functor_traits_param_name =
-    if Hashtbl.length use_repr = 0 then
-      traits_module_name
-    else
-      "Traits_with_transformations"
-  in
-
-  if Hashtbl.length use_repr > 0 then begin
-    empty_line ();
-    output "module type Traits_with_transformations = sig";
-    indented (fun () ->
-      output "include %s" traits_module_name;
-      Hashtbl.iter (fun i _ ->
-        output "val %s: %s.t -> %s"
-          (get_repr_name i)
-          (L.as_lang_type i)
-          (L.as_runtime_repr_name i)
-      ) use_repr;
-    );
-    output "end";
-    empty_line ()
-  end;
-
-  output "module %s (T : %s) = struct" (String.capitalize_ascii name) functor_traits_param_name;
-  empty_line ();
-  inc_indent ();
-  output "module IO = %s" io
-
   
 let generate ~gen_io name stmts =
 (*
@@ -724,7 +673,15 @@ let generate ~gen_io name stmts =
     String.concat " and " (List.map (fun s -> sprintf "%s = T.%s" s s) ["num";"text";"any"])
   in
 *)
-  generate_root_functor ~gen_io name stmts;
+  let (traits, io) =
+    match gen_io with
+    | true -> "Sqlgg_traits.M_io", "T.IO"
+    | false -> "Sqlgg_traits.M", "Sqlgg_io.Blocking"
+  in
+  output "module %s (T : %s) = struct" (String.capitalize_ascii name) traits;
+  empty_line ();
+  inc_indent ();
+  output "module IO = %s" io;
   generate_enum_modules stmts;
   empty_line ();
   List.iteri (generate_stmt `Direct) stmts;
