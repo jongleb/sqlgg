@@ -1015,6 +1015,45 @@
       attr' ~meta:["module", "HelloWorld"] ~nullability:Nullable "subquery_col_1" Int;
       attr' ~extra:[NotNull;] "col_2" Int;
     ] [];
+
+    tt {|
+      SELECT (SELECT MAX(col_1) FROM table_37) as col_plus_max
+      FROM table_37
+    |} [
+      attr' ~meta:["module", "HelloWorld"] ~nullability:Nullable "col_plus_max" Int;
+    ] [];
+
+    tt {|
+      SELECT 
+        (
+          SELECT MAX(
+            (
+              SELECT col_1 as col_val 
+              FROM table_37 
+              WHERE col_1 > (SELECT MIN(col_1) FROM table_37)
+              LIMIT 1
+            )
+          )
+        ) as deeply_nested_query
+      FROM table_37
+    |} [
+      attr' ~meta:["module", "HelloWorld"] ~nullability:Nullable "deeply_nested_query" Int;
+    ] [];
+
+    tt {|
+      SELECT 
+        (
+          SELECT MAX(x.col_val) 
+          FROM (
+            SELECT col_1 as col_val 
+            FROM table_37 
+            WHERE col_1 > (SELECT MIN(col_1) FROM table_37)
+          ) as x
+        ) as deeply_nested_query
+      FROM table_37
+    |} [
+      attr' ~meta:["module", "HelloWorld"] ~nullability:Nullable "deeply_nested_query" Int;
+    ] [];
   ]
 
 
@@ -1022,7 +1061,7 @@
     Gen.params_mode := Some Named;
     let tests =
     [
-      (* "simple" >::: test;
+      "simple" >::: test;
       "multi-table UPDATE" >::: test2;
       "gotchas" >::: test3;
       "single-row SELECT" >::: test4;
@@ -1045,7 +1084,7 @@
       "test_select_exposed_alias" >::: test_select_exposed_alias;
       "test_enum_as_variant" >::: test_enum_as_variant;
       "test_enum_literal" >:: test_enum_literal;
-      "test_add_with_window_function" >::: test_add_with_window_function; *)
+      "test_add_with_window_function" >::: test_add_with_window_function;
       "test_meta_propagation" >::: test_meta_propagation;
     ]
     in

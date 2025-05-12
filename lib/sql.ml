@@ -247,7 +247,7 @@ type attr = {name : string; domain : Type.t; extra : Constraints.t; meta: Meta.t
       then Strict else Nullable } in
     {name;domain;extra;meta=Meta.of_list meta}
 
-    let unnamed_attribute ?(meta = Meta.empty()) domain  = {name="";domain;extra=Constraints.empty;meta}
+    let unnamed_attribute ?(meta = Meta.empty()) domain = {name="";domain;extra=Constraints.empty;meta}
 
     let make_attribute' ?(extra = Constraints.empty) ?(meta = []) name domain = { name; domain; extra; meta = Meta.of_list meta }
 
@@ -477,7 +477,7 @@ type col_name = {
 } [@@deriving show]
 type source_alias = { table_name : table_name; column_aliases : schema option } [@@deriving show]
 and limit = param list * bool
-and nested = source * (source * Schema.Join.typ * join_condition) list
+and nested = source * (source * Schema.Join.typ * join_condition) list [@@deriving show]
 and source = [ `Select of select_full | `Table of table_name | `Nested of nested | `ValueRows of row_values ] * source_alias option (* alias *)
 and join_condition = expr Schema.Join.condition
 and select = {

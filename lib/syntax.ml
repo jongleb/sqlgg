@@ -37,7 +37,7 @@ type enum_ctor_value_data = { ctor_name: string; pos: pos; } [@@deriving show]
 type res_expr =
   | ResValue of Type.t (** literal value *)
   | ResParam of param
-  | ResSelect of Type.t * Sql.Meta.t * vars
+  | ResSelect of Type.t * vars
   | ResInTupleList of { param_id: param_id; res_in_tuple_list: res_in_tuple_list; kind: in_or_not_in; pos: pos }
   | ResInparam of param
   | ResChoices of param_id * res_expr choices
@@ -89,7 +89,7 @@ let values_or_all table names =
 let rec get_params_of_res_expr (e:res_expr) =
   let rec loop acc e =
     match e with
-    | ResSelect (_, _, p) -> (List.rev p) @ acc
+    | ResSelect (_, p) -> (List.rev p) @ acc
     | ResParam p -> Single p::acc
     | ResOptionActions{ choice_id; res_choice; pos; kind} -> 
       OptionActionChoice (choice_id, get_params_of_res_expr res_choice, pos, kind) :: acc
@@ -285,7 +285,7 @@ let rec resolve_columns env expr =
       let schema = Schema.Source.from_schema schema in
       (* represet nested selects as functions with sql parameters as function arguments, some hack *)
       match schema, usage with
-      | [ {domain; meta; _} ], `AsValue -> 
+      | [ {domain; _} ], `AsValue -> 
         (* This function should be raised? *)
         let rec with_count = function 
           | Fun { kind = Agg Count; is_over_clause = false; _ }
@@ -310,9 +310,9 @@ let rec resolve_columns env expr =
         | ({ columns = [_]; _ }, _) -> default_null
         | _ -> raise (Schema.Error (schema, "nested sub-select used as an expression returns more than one column"))
         in
-        ResSelect (typ, meta, p)
+        ResSelect (typ, p)
       | s, `AsValue -> raise (Schema.Error (s, "only one column allowed for SELECT operator in this expression"))
-      | _, `Exists -> ResSelect (Type.depends Any, Meta.empty (), p)
+      | _, `Exists -> ResSelect (Type.depends Any, p)
   in
   each expr
 
@@ -325,7 +325,7 @@ and assign_types env expr =
     | ResValue t -> e, `Ok t
     | ResParam p -> e, `Ok p.typ
     | ResInparam p -> e, `Ok p.typ
-    | ResSelect (t, _, _) -> e, `Ok t
+    | ResSelect (t, _) -> e, `Ok t
     | ResOptionActions choice ->
       let (res_choice, t) = typeof choice.res_choice in
       let t =
@@ -465,14 +465,16 @@ and resolve_types env expr =
 
 and infer_schema env columns =
 (*   let all = tables |> List.map snd |> List.flatten in *)
-  let rec propagate_meta e = match e with
+  let rec propagate_meta ~env = function
     | Column col -> 
       let result = resolve_column ~env col in 
       result.attr.meta
     (* aggregated columns, ie: max, min *)
-    | Fun { kind = Agg Self; parameters = [e]; _ }
+    | Fun { kind = Agg Self; parameters = [e]; _ } -> propagate_meta ~env e
     (* Or for subselect which always requests only one column, TODO: consider CTE in subselect, perhaps a rare occurrence *)
-    | SelectExpr ({ select_complete = { select = ({columns = [Expr(e, _)]; _}, _); _ }; _ }, _) -> propagate_meta e
+    | SelectExpr ({ select_complete = { select = ({columns = [Expr(e, _)]; from; _}, _); _ }; _ }, _) -> 
+      let (env,_) = eval_nested env from in
+      propagate_meta ~env e
     | Value _ 
     (* TODO: implement for custom props *) 
     | Param _ | Inparam _ | Choices _| InChoice _
@@ -487,7 +489,7 @@ and infer_schema env columns =
         match e with
         | Column col -> resolve_column ~env col
         | e -> { 
-          attr = unnamed_attribute ~meta:(propagate_meta e) (resolve_types env e |> snd |> get_or_failwith);
+          attr = unnamed_attribute ~meta:(propagate_meta ~env e) (resolve_types env e |> snd |> get_or_failwith);
           sources = [] 
         }
       in
@@ -615,8 +617,8 @@ and resolve_source env (x, alias) =
     let s = List.map (fun i -> { i with Schema.Source.Attr.sources = List.concat [option_list tbl_alias; i.Schema.Source.Attr.sources] }) s in
     let s, tables = resolve_schema_with_alias s in
     s, p, tables
-  | `Nested s ->
-    let (env,p) = eval_nested env (Some s) in
+  | `Nested from ->
+    let (env,p) = eval_nested env (Some from) in
     let s = infer_schema env [All] in
     if alias <> None then failwith "No alias allowed on nested tables";
     s, p, env.tables
