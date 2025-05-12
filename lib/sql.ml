@@ -247,7 +247,7 @@ type attr = {name : string; domain : Type.t; extra : Constraints.t; meta: Meta.t
       then Strict else Nullable } in
     {name;domain;extra;meta=Meta.of_list meta}
 
-    let unnamed_attribute domain = {name="";domain;extra=Constraints.empty;meta=Meta.empty()}
+    let unnamed_attribute ?(meta = Meta.empty()) domain  = {name="";domain;extra=Constraints.empty;meta}
 
     let make_attribute' ?(extra = Constraints.empty) ?(meta = []) name domain = { name; domain; extra; meta = Meta.of_list meta }
 
