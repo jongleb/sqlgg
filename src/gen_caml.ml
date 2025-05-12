@@ -177,10 +177,10 @@ let get_column index attr =
         format_t_get_column lang_type_name
       | Some m ->
         let runtime_repr_name = L.as_runtime_repr_name attr.domain in
-        let inner_get_column_expr =
-          format_t_get_column runtime_repr_name
-        in
-        sprintf "(%s.get_column%s %s)" m nullable_suffix inner_get_column_expr
+        let inner_get_column_expr = format_t_get_column runtime_repr_name in
+        let get_column = "get_column" in
+        let get_column_name = get_column |> Sql.Meta.find_opt attr.meta |> Option.default get_column in
+        sprintf "(%s.%s%s %s)" m get_column_name nullable_suffix inner_get_column_expr
   in
   format_column_expr attr
 

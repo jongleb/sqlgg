@@ -137,16 +137,7 @@ module Include = struct
     with Failure _ -> None
 end
 
-
-let get_statements ch =
-  let lexbuf = Lexing.from_channel ch in
-  let tokens = Enum.from (fun () ->
-    if lexbuf.Lexing.lex_eof_reached then raise Enum.No_more_elements else
-    match Sql_lexer.ruleStatement lexbuf with
-    | `Eof -> raise Enum.No_more_elements
-    | #token as x -> x)
-  in
-  let extract_statement tokens =
+let extract_statement' tokens = 
     let b = Buffer.create 1024 in
     let props = ref Props.empty in
     let answer () = Buffer.contents b, !props in
@@ -161,7 +152,7 @@ let get_statements ch =
         | `Comment s -> ignore s; loop smth (* do not include comments (option?) *)
         | `Char c -> 
           if List.length !internal_props > 0 then (
-            Hashtbl.add Parser_state.stmt_metadata (Buffer.length b) !internal_props;
+            Parser_state.Stmt_metadata.add (Buffer.length b) !internal_props;
             internal_props := Props.empty;
           );
           Buffer.add_char b c; loop true
@@ -171,14 +162,22 @@ let get_statements ch =
         | `Props p -> props := Props.set_all p !props; loop smth
         | `Semicolon -> Some (answer ())
     in
-    Hashtbl.reset Parser_state.stmt_metadata;
+    Hashtbl.reset Parser_state.Stmt_metadata.stmt_metadata;
     try loop false
     with e -> 
       Error.log "lexer failed (%s)" (Printexc.to_string e); 
       None
+
+let get_statements ch =
+  let lexbuf = Lexing.from_channel ch in
+  let tokens = Enum.from (fun () ->
+    if lexbuf.Lexing.lex_eof_reached then raise Enum.No_more_elements else
+    match Sql_lexer.ruleStatement lexbuf with
+    | `Eof -> raise Enum.No_more_elements
+    | #token as x -> x)
   in
   let rec next () =
-    match extract_statement tokens with
+    match extract_statement' tokens with
     | None -> raise Enum.No_more_elements
     | Some (buffer, props) ->
       let include_ = match Props.get props "include" with

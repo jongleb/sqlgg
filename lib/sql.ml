@@ -213,18 +213,29 @@ end
 
 module Meta = struct
 
-  type t = (string, string) Hashtbl.t
-
-  let of_list list = list |> List.to_seq |> Hashtbl.of_seq
-
-  let empty () = Hashtbl.create 20
-
-  let find_opt = Hashtbl.find_opt
-
-  let pp =
-    let open Format in
-    fun fmt t ->
-      Hashtbl.iter (fun k v -> fprintf fmt "%s=%s\n" k v) t
+  module StringMap = Map.Make(String)
+  
+  type t = string StringMap.t
+  
+  let of_list list = List.fold_left (fun map (k, v) -> StringMap.add k v map) StringMap.empty list
+  
+  let empty () = StringMap.empty
+  
+  let find_opt k map = StringMap.find_opt map k
+  let pp fmt t =
+    if StringMap.is_empty t then
+      Format.fprintf fmt "{}"
+    else begin
+      Format.fprintf fmt "{";
+      let first_key = fst (StringMap.min_binding t) in
+      StringMap.iter (fun k v ->
+        if k = first_key then
+          Format.fprintf fmt "%s = %s" k v
+        else
+          Format.fprintf fmt "; %s = %s" k v
+      ) t;
+      Format.fprintf fmt "}"
+    end
 end
 
 type attr = {name : string; domain : Type.t; extra : Constraints.t; meta: Meta.t }
@@ -411,7 +422,7 @@ type pos = (int * int) [@@deriving show]
 
 let print_table out (name,schema) =
   IO.write_line out (show_table_name name);
-  schema |> List.iter begin fun {name;domain;extra} ->
+  schema |> List.iter begin fun {name;domain;extra;_} ->
     IO.printf out "%10s %s %s\n" (Type.show domain) name (Constraints.show extra)
   end;
   IO.write_line out ""
