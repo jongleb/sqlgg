@@ -1006,15 +1006,15 @@
       attr' ~extra:[NotNull;] "col_2" Int;
     ] [];
 
-    (* tt {|
+    tt {|
       SELECT 
         (SELECT col_1 FROM table_37 LIMIT 1) as subquery_col_1,
         col_2 
       FROM table_37
     |} [
-      attr' ~meta:["module", "HelloWorld"] ~extra:[PrimaryKey;] "subquery_col_1" Int;
+      attr' ~meta:["module", "HelloWorld"] ~nullability:Nullable "subquery_col_1" Int;
       attr' ~extra:[NotNull;] "col_2" Int;
-    ] []; *)
+    ] [];
   ]
 
 

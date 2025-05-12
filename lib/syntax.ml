@@ -469,10 +469,15 @@ and infer_schema env columns =
     | Column col -> 
       let result = resolve_column ~env col in 
       result.attr.meta
-    | Fun { kind = Agg Self; parameters = [e]; _ } -> propagate_meta e
-    (* | SelectExpr (_, `AsValue) -> 
-      { attr = unnamed_attribute (resolve_types env e |> snd |> get_or_failwith); sources = [] } *)
-    | _ -> Meta.empty ()
+    (* aggregated columns, ie: max, min *)
+    | Fun { kind = Agg Self; parameters = [e]; _ }
+    (* Or for subselect which always requests only one column, TODO: consider CTE in subselect, perhaps a rare occurrence *)
+    | SelectExpr ({ select_complete = { select = ({columns = [Expr(e, _)]; _}, _); _ }; _ }, _) -> propagate_meta e
+    | Value _ 
+    (* TODO: implement for custom props *) 
+    | Param _ | Inparam _ | Choices _| InChoice _
+    | Fun _ | SelectExpr _ | Inserted _ | InTupleList _
+    | OptionActions _ -> Meta.empty ()
   in
   let resolve1 = function
     | All -> env.schema
@@ -481,9 +486,10 @@ and infer_schema env columns =
       let col =
         match e with
         | Column col -> resolve_column ~env col
-        | _ -> 
-          let meta = propagate_meta e in
-          { attr = unnamed_attribute ~meta (resolve_types env e |> snd |> get_or_failwith); sources = [] }
+        | e -> { 
+          attr = unnamed_attribute ~meta:(propagate_meta e) (resolve_types env e |> snd |> get_or_failwith);
+          sources = [] 
+        }
       in
       let col = Option.map_default (fun n -> {col with attr = { col.attr with name = n }}) col name in
       [ col ]
