@@ -37,7 +37,7 @@ type enum_ctor_value_data = { ctor_name: string; pos: pos; } [@@deriving show]
 (* expr with all name references resolved to values or "functions" *)
 type res_expr =
   | ResValue of Type.t (** literal value *)
-  | ResParam of param
+  | ResParam of param * Meta.t
   | ResSelect of Type.t * vars
   | ResInTupleList of { param_id: param_id; res_in_tuple_list: res_in_tuple_list; kind: in_or_not_in; pos: pos }
   | ResInparam of param
@@ -99,7 +99,7 @@ let rec get_params_of_res_expr (e:res_expr) =
       let acc = match case with Some e -> loop acc e | None -> acc in
       let acc = List.fold_left (fun acc { when_; then_ } -> loop (loop acc when_) then_) acc branches in
       Option.map_default (loop acc) acc else_
-    | ResParam p -> Single p::acc
+    | ResParam (p, m) -> Single (p, m) ::acc
     | ResOptionActions{ choice_id; res_choice; pos; kind} -> 
       OptionActionChoice (choice_id, get_params_of_res_expr res_choice, pos, kind) :: acc
     | ResInTupleList { param_id; res_in_tuple_list = ResTyped types; kind; pos } -> TupleList (param_id, Where_in (types, kind, pos)) :: acc
@@ -268,6 +268,29 @@ let rec resolve_columns env expr =
     eprintf "schema: "; Sql.Schema.print (Schema.Source.from_schema env.schema);
     Tables.print stderr env.tables;
   end;
+  let get_meta_of_schema_expr ~env expr =
+    let rec gather = function 
+      | Param p -> Some p.id
+      | Inparam p -> Some p.id
+      | Choices (p, _) -> Some p
+      | InChoice (p, _, _) -> Some p
+      | OptionActions { choice; _ } -> gather choice 
+      | _ -> failwith "" in
+    let hashtable = Hashtbl.create 10 in
+    let fn hshtbl = function 
+      | Sql.Fun { parameters = ([Column a; b] | [b; Column a]); kind = Comparison; _ } ->
+        Option.may (fun pid -> 
+          Option.may (fun l -> Hashtbl.add hshtbl l (resolve_column ~env a).attr.meta ) pid.label
+        ) (gather b)
+      | _ -> () in
+    fn hashtable expr;
+    hashtable
+  in
+  let hashtable = get_meta_of_schema_expr ~env expr in
+  let get_meta_pid x = match Option.map (Hashtbl.find_opt hashtable) x.id.label with 
+    | Some (Some m) -> m
+    | _ -> Meta.empty ()
+  in
   let rec each e =
     match e with
     | Value x -> ResValue x
@@ -282,7 +305,7 @@ let rec resolve_columns env expr =
     | Inserted name ->
       let attr = try Schema.find env.insert_schema name with Schema.Error (_,s) -> fail "for inserted values : %s" s in
       ResValue attr.domain
-    | Param x -> ResParam x
+    | Param x -> ResParam (x, get_meta_pid x)
     | InTupleList { exprs; param_id; kind; pos } -> 
       let res_exprs = List.map (fun expr ->
         let res_expr = each expr in
@@ -356,14 +379,14 @@ and assign_types env expr =
   let assign_params inferred x =
     let open Type in
     match x with
-    | ResParam { id; typ; } when is_any typ -> ResParam (new_param id inferred)
+    | ResParam ({ id; typ; }, m) when is_any typ -> ResParam (new_param id inferred, m)
     | ResInparam { id; typ; } when is_any typ -> ResInparam (new_param id inferred)
     | x -> x
   in
   let rec typeof_ (e:res_expr) = (* FIXME simplify *)
     match e with
     | ResValue t -> e, `Ok t
-    | ResParam p -> e, `Ok p.typ
+    | ResParam (p, _) -> e, `Ok p.typ
     | ResInparam p -> e, `Ok p.typ
     | ResSelect (t, _) -> e, `Ok t
     | ResOptionActions choice ->
@@ -621,7 +644,7 @@ and params_of_order order final_schema env =
 
 and ensure_res_expr = function
   | Value x -> ResValue x
-  | Param x -> ResParam x
+  | Param x -> ResParam (x, Meta.empty ())
   | Inparam x -> ResInparam x
   | Case { case; branches; else_ }-> 
     let res_case = Option.map ensure_res_expr case in
@@ -779,7 +802,7 @@ and eval_compound ~env result =
   (* ignoring tables in compound statements - they cannot be used in ORDER BY *)
   let final_schema = List.fold_left Schema.compound s1 s2l in
   let p3 = params_of_order order final_schema env in
-  let (p4,limit1) = match limit with Some (p,x) -> List.map (fun p -> Single p) p, x | None -> [],false in
+  let (p4,limit1) = match limit with Some (p,x) -> List.map (fun p -> Single (p, Meta.empty())) p, x | None -> [],false in
   (* Schema.check_unique schema; *)
   let cardinality =
     if limit1 && cardinality = `Nat then `Zero_one
@@ -923,7 +946,7 @@ let rec eval (stmt:Sql.stmt) =
     let params = update_tables ~env:empty_env [r,[],[(f, s)]] ss w in
     let env = { empty_env with schema = update_schema_with_aliases [] r } in
     let p3 = params_of_order o [] { env with tables = [(f, s)] } in
-    [], params @ p3 @ (List.map (fun p -> Single p) lim), Update (Some table)
+    [], params @ p3 @ (List.map (fun p -> Single (p, Meta.empty())) lim), Update (Some table)
   | UpdateMulti (tables,ss,w) ->
     let sources = List.map (fun src -> resolve_source empty_env ((`Nested src), None)) tables in
     let params = update_tables ~env:empty_env sources ss w in
@@ -959,7 +982,7 @@ let unify_params l =
     | None -> fail "incompatible types for parameter %S : %s and %s" name (Type.show t) (Type.show t')
   in
   let rec traverse = function
-  | Single { id; typ; }
+  | Single ({ id; typ; }, _)
   | SingleIn { id; typ; _ } -> remember id.label typ
   | SharedVarsGroup (vars, _)
   | ChoiceIn { vars; _ } -> List.iter traverse vars
@@ -968,9 +991,9 @@ let unify_params l =
   | TupleList _ -> ()
   in
   let rec map = function
-  | Single { id; typ; } ->
+  | Single ({ id; typ; }, m) ->
     let typ = match id.label with None -> typ | Some name -> try Hashtbl.find h name with _ -> assert false in
-    Single (new_param id (Type.undepend typ Strict)) (* if no other clues - input parameters are strict *)
+    Single (new_param id (Type.undepend typ Strict), m) (* if no other clues - input parameters are strict *)
   | SingleIn { id; typ; } ->
     let typ = match id.label with None -> typ | Some name -> try Hashtbl.find h name with _ -> assert false in
     SingleIn (new_param id (Type.undepend typ Strict)) (* if no other clues - input parameters are strict *)
@@ -1027,7 +1050,7 @@ let complete_sql kind sql =
       let pos_end = pos_start + String.length attr_ref in
       (* autoincrement is special - nullable on insert, strict otherwise *)
       let typ = if Constraints.mem Autoincrement attr.extra then Sql.Type.nullable attr.domain.t else attr.domain in
-      let param = Single (new_param {label=Some attr_name; pos=(pos_start,pos_end)} typ) in
+      let param = Single (new_param {label=Some attr_name; pos=(pos_start,pos_end)} typ, Meta.empty()) in
       B.add_string b attr_ref_prefix;
       B.add_string b attr_ref;
       tuck params param;
@@ -1038,6 +1061,7 @@ let complete_sql kind sql =
 
 let parse sql =
   let (schema,p1,kind) = eval @@ Parser.parse_stmt sql in
+  prerr_endline @@ show_vars @@ p1;
   let (sql,p2) = complete_sql kind sql in
   (sql, schema, unify_params (p1 @ p2), kind)
   

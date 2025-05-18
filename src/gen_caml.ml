@@ -249,7 +249,7 @@ let match_variant_pattern i name args ~is_poly =
             then ((seen_wildcards, seen_names, all_wc), None)
             else ((label :: seen_wildcards, seen_names, all_wc), Some "_") in
         match arg with
-        | Sql.Single param | SingleIn param -> make_wildcard_param param.id.label
+        | Sql.Single (param, _) | SingleIn param -> make_wildcard_param param.id.label
         | SharedVarsGroup _
         | Choice ({ label = None; _ }, _)
         | TupleList ({ label = None; _ }, _) 
@@ -287,7 +287,7 @@ let rec set_param index param =
   
 let rec set_var index var =
   match var with
-  | Single p -> set_param index p
+  | Single (p, _) -> set_param index p
   | SharedVarsGroup (vars, _) -> List.iter (set_var index) vars
   | TupleList (p, Where_in _) -> set_var index (ChoiceIn { param = p; vars = []; kind = `In })
   | SingleIn _ | TupleList _ -> ()
@@ -617,7 +617,7 @@ let generate_enum_modules stmts =
   let schemas_to_enums schemas = schemas |> List.filter_map (fun { domain; _ } -> get_enum domain) in
 
   let rec vars_to_enums vars = List.concat_map (function
-    | Single { typ; _ }
+    | Single ({ typ; _ }, _)
     | SingleIn { typ; _ } -> typ |> get_enum |> option_list
     | SharedVarsGroup (vars, _)
     | OptionActionChoice (_, vars, _, _)

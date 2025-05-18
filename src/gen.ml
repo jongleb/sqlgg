@@ -86,7 +86,7 @@ let substitute_vars s vars subst_param =
   let rec loop s acc i parami vars =
     match vars with
     | [] -> acc, i
-    | Sql.Single param :: tl ->
+    | Sql.Single (param, _) :: tl ->
       let (i1,i2) = param.id.pos in
       assert (i2 > i1);
       assert (i1 > i);
@@ -261,7 +261,7 @@ let rec find_param_ids l =
   List.concat @@
   List.map
     (function
-      | Sql.Single p | SingleIn p -> [ p.id ]
+      | Sql.Single (p, _) | SingleIn p -> [ p.id ]
       | Choice (id,_) -> [ id ]
       | OptionActionChoice (id, _, _, _) -> [id]
       | ChoiceIn { param; vars; _ } -> find_param_ids vars @ [param]
@@ -278,7 +278,7 @@ let rec params_only l =
   List.concat @@
   List.map
     (function
-      | Sql.Single p -> [p]
+      | Sql.Single (p, _) -> [p]
       | SingleIn _ -> []
       | SharedVarsGroup (vars, _)
       | ChoiceIn { vars; _ } -> params_only vars

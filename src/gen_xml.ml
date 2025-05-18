@@ -95,7 +95,7 @@ let rec params_only l =
   List.concat @@
   List.map
     (function
-      | Sql.Single p -> [p]
+      | Sql.Single (p, _) -> [p]
       | OptionActionChoice (_, v, _, _) -> params_only v
       | SingleIn _ -> []
       | SharedVarsGroup (vars, _)

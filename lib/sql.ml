@@ -441,7 +441,7 @@ type ctor =
 | Simple of param_id * var list option
 | Verbatim of string * string
 and var =
-| Single of param
+| Single of param * Meta.t
 | SingleIn of param
 | ChoiceIn of { param: param_id; kind : in_or_not_in; vars: var list }
 | Choice of param_id * ctor list
