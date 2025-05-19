@@ -160,6 +160,13 @@ let set_param_Float stmt v = bind_param (S.Data.FLOAT v) stmt
 let set_param_Decimal = set_param_Float
 let set_param_Datetime = set_param_Float
 
+let set_param_bool = set_param_Bool
+let set_param_int64 = set_param_Int
+let set_param_float = set_param_Float
+let set_param_decimal = set_param_Float
+let set_param_string = set_param_Text
+let set_param_datetime = set_param_Float
+
 let no_params _ = ()
 
 let try_finally final f x =

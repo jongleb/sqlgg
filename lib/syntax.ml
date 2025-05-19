@@ -268,20 +268,43 @@ let rec resolve_columns env expr =
     eprintf "schema: "; Sql.Schema.print (Schema.Source.from_schema env.schema);
     Tables.print stderr env.tables;
   end;
+    (* | Value of Type.t (** literal value *)
+  | Param of param
+  | Inparam of param
+  | Choices of param_id * expr choices
+  | InChoice of param_id * in_or_not_in * expr
+  | Fun of fun_
+  | SelectExpr of select_full * [ `AsValue | `Exists ]
+  | Column of col_name
+  | Inserted of string (** inserted value *)
+  | InTupleList of { exprs: expr list; param_id: param_id; kind: in_or_not_in; pos: pos }
+   (* pos - full syntax pos from {, to }?, pos is only sql, that inside {}?
+      to use it during the substitution and to not depend on the magic numbers there.
+   *) 
+  | OptionActions of { choice: expr; pos: (pos * pos); kind: option_actions_kind }
+  | Case of case *)
   let get_meta_of_schema_expr ~env expr =
     let rec gather = function 
       | Param p -> Some p.id
       | Inparam p -> Some p.id
       | Choices (p, _) -> Some p
       | InChoice (p, _, _) -> Some p
-      | OptionActions { choice; _ } -> gather choice 
-      | _ -> failwith "" in
+      | OptionActions { choice; _ } -> gather choice
+      | Fun _ | SelectExpr _ 
+      | Inserted _ | InTupleList _
+      | Value _ |Column _ | Case _ -> None
+    in
     let hashtable = Hashtbl.create 10 in
-    let fn hshtbl = function 
+    let rec fn hshtbl = function 
       | Sql.Fun { parameters = ([Column a; b] | [b; Column a]); kind = Comparison; _ } ->
         Option.may (fun pid -> 
           Option.may (fun l -> Hashtbl.add hshtbl l (resolve_column ~env a).attr.meta ) pid.label
         ) (gather b)
+      | Sql.Fun { parameters; _ } -> List.iter (fn hshtbl) parameters
+      | Case { case; branches; else_ } ->
+        Option.may (fn hshtbl) case;
+        List.iter (fun { Sql.when_; then_ } -> fn hshtbl when_; fn hshtbl then_) branches;
+        Option.may (fn hshtbl) else_
       | _ -> () in
     fn hashtable expr;
     hashtable
@@ -1061,7 +1084,6 @@ let complete_sql kind sql =
 
 let parse sql =
   let (schema,p1,kind) = eval @@ Parser.parse_stmt sql in
-  prerr_endline @@ show_vars @@ p1;
   let (sql,p2) = complete_sql kind sql in
   (sql, schema, unify_params (p1 @ p2), kind)
   
