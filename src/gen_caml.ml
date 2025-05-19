@@ -451,7 +451,7 @@ let gen_in_substitution meta var =
   sprintf {code| "(" ^ String.concat ", " (List.map %s %s) ^ ")"|code}
     (match Sql.Meta.find_opt meta "module" with
     | None -> make_to_literal var.typ
-    | Some m -> sprintf "(fun v -> T.Types.%s.%s_to_literal (%s.set_param))" (Sql.Type.type_name var.typ) (L.as_runtime_repr_name var.typ) m)
+    | Some m -> sprintf "(fun v -> T.Types.%s.%s_to_literal (%s.set_param v))" (Sql.Type.type_name var.typ) (L.as_runtime_repr_name var.typ) m)
     (Option.get var.id.label)
 
 let gen_tuple_printer ~is_row _label schema =
