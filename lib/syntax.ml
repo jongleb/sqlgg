@@ -284,20 +284,20 @@ let rec resolve_columns env expr =
       let set_param col expr = expr |> extract_parameter_id |> Option.may @@ fun pid -> 
         Option.may (fun l -> Hashtbl.add hashtable l (resolve_column ~env col).attr.meta ) pid.label
       in
-      let rec go = function 
+      let rec aux = function 
       | Sql.Fun { parameters = ([Column a; b] | [b; Column a]); kind = Comparison; _ } -> set_param a b
       | Sql.Fun { parameters = ([Column a; (Inparam _) as b] | [(Inparam _) as b; Column a]); _ } -> set_param a b
-      | Sql.Fun { parameters; _ } -> List.iter go parameters
+      | Sql.Fun { parameters; _ } -> List.iter aux parameters
       | Case { case; branches; else_ } ->
-        Option.may go case;
-        List.iter (fun { Sql.when_; then_ } -> go when_; go then_) branches;
-        Option.may go else_
-      | OptionActions { choice; _ } -> go choice
-      | InChoice (_, _, e) -> go e
-      | Choices (_, l) -> List.iter (fun (_, e) -> Option.may go e) l
+        Option.may aux case;
+        List.iter (fun { Sql.when_; then_ } -> aux when_; aux then_) branches;
+        Option.may aux else_
+      | OptionActions { choice; _ } -> aux choice
+      | InChoice (_, _, e) -> aux e
+      | Choices (_, l) -> List.iter (fun (_, e) -> Option.may aux e) l
       | Value _ | Param _ | Inparam _
       | SelectExpr (_, _) | Column _ | Inserted _ | InTupleList _ -> () in
-    go expr in
+    aux expr in
     extract_meta_from_col expr;
     hashtable
   in
