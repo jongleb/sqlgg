@@ -268,21 +268,6 @@ let rec resolve_columns env expr =
     eprintf "schema: "; Sql.Schema.print (Schema.Source.from_schema env.schema);
     Tables.print stderr env.tables;
   end;
-    (* | Value of Type.t (** literal value *)
-  | Param of param
-  | Inparam of param
-  | Choices of param_id * expr choices
-  | InChoice of param_id * in_or_not_in * expr
-  | Fun of fun_
-  | SelectExpr of select_full * [ `AsValue | `Exists ]
-  | Column of col_name
-  | Inserted of string (** inserted value *)
-  | InTupleList of { exprs: expr list; param_id: param_id; kind: in_or_not_in; pos: pos }
-   (* pos - full syntax pos from {, to }?, pos is only sql, that inside {}?
-      to use it during the substitution and to not depend on the magic numbers there.
-   *) 
-  | OptionActions of { choice: expr; pos: (pos * pos); kind: option_actions_kind }
-  | Case of case *)
   let get_meta_of_schema_expr ~env expr =
     let rec gather = function 
       | Param p -> Some p.id
@@ -305,6 +290,7 @@ let rec resolve_columns env expr =
         Option.may (fn hshtbl) case;
         List.iter (fun { Sql.when_; then_ } -> fn hshtbl when_; fn hshtbl then_) branches;
         Option.may (fn hshtbl) else_
+      | OptionActions { choice; _ } -> fn hshtbl choice
       | _ -> () in
     fn hashtable expr;
     hashtable

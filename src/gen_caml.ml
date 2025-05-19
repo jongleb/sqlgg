@@ -280,24 +280,31 @@ let match_variant_pattern i name args ~is_poly =
 let rec set_param ~meta index param =
   let nullable = is_param_nullable param in
   let pname = show_param_name param index in
-  let ptype = show_param_type param in
-  let set_param_nullable = output "begin match %s with None -> T.set_param_null p | Some v -> %s p v end;" pname in
+  let handle_nullable formatter =
+    output "begin match %s with None -> () | Some v -> %s end;" pname (formatter "v")
+  in
   match param with
-  | { typ = { t=Union _; _}; _ } as c when not !Sqlgg_config.enum_as_poly_variant -> set_param ~meta index { c with typ = { c.typ with t = Text } }
-  | { typ = { t=Union {ctors; _}; _}; _ } when nullable -> set_param_nullable @@ (get_enum_name ctors) ^ ".set_param" 
-  | { typ = { t=Union {ctors; _}; _ }; _ } -> output "%s.set_param p %s;" (get_enum_name ctors) pname
+  | { typ = { t=Union _; _}; _ } as c when not !Sqlgg_config.enum_as_poly_variant ->
+      set_param ~meta index { c with typ = { c.typ with t = Text } }
+  | { typ = { t=Union {ctors; _}; _}; _ } when nullable ->
+      handle_nullable (sprintf "%s.set_param p %s" (get_enum_name ctors))
+  | { typ = { t=Union {ctors; _}; _ }; _ } ->
+      output "%s.set_param p %s;" (get_enum_name ctors) pname
   | param' ->
     let meta = Sql.Meta.find_opt meta "module" in
+    let base_type = L.as_runtime_repr_name param'.typ in
+    let runtime_repr_name = L.as_runtime_repr_name_set_param param'.typ in
     match meta with
-    | None -> if nullable then set_param_nullable @@ sprintf "T.set_param_%s" (show_param_type param') 
-      else output "T.set_param_%s p %s;" ptype pname
-    | Some m -> 
-      let runtime_repr_name = L.as_runtime_repr_name_set_param param'.typ in
-      if nullable then
-         set_param_nullable @@ sprintf "T.set_param_%s" (sprintf "%s.set_param_%s" m runtime_repr_name ) 
-      else
-        output "%s.set_param_%s p %s;" m runtime_repr_name pname
-
+    | None ->
+        if nullable then
+          handle_nullable (sprintf "T.set_param_%s p %s" base_type)
+        else
+          output "T.set_param_%s p %s;" base_type pname
+    | Some m ->
+        if nullable then
+          handle_nullable (sprintf "T.set_param_%s p @@ %s.set_param_%s %s" base_type m runtime_repr_name)
+        else
+          output "T.set_param_%s p @@ %s.set_param_%s %s;" base_type m runtime_repr_name pname
   
 let rec set_var index var =
   match var with
