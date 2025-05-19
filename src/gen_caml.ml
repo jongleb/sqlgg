@@ -280,31 +280,25 @@ let match_variant_pattern i name args ~is_poly =
 let rec set_param ~meta index param =
   let nullable = is_param_nullable param in
   let pname = show_param_name param index in
-  let handle_nullable formatter =
-    output "begin match %s with None -> () | Some v -> %s end;" pname (formatter "v")
-  in
+  let ptype = show_param_type param in
+  let set_param_nullable v r = output "begin match %s with None -> T.set_param_null p | Some %s -> %s end;" pname v r in
   match param with
-  | { typ = { t=Union _; _}; _ } as c when not !Sqlgg_config.enum_as_poly_variant ->
-      set_param ~meta index { c with typ = { c.typ with t = Text } }
-  | { typ = { t=Union {ctors; _}; _}; _ } when nullable ->
-      handle_nullable (sprintf "%s.set_param p %s" (get_enum_name ctors))
-  | { typ = { t=Union {ctors; _}; _ }; _ } ->
-      output "%s.set_param p %s;" (get_enum_name ctors) pname
+  | { typ = { t=Union _; _}; _ } as c when not !Sqlgg_config.enum_as_poly_variant -> set_param ~meta index { c with typ = { c.typ with t = Text } }
+  | { typ = { t=Union {ctors; _}; _}; _ } when nullable -> set_param_nullable "v" @@ (get_enum_name ctors) ^ ".set_param p v"
+  | { typ = { t=Union {ctors; _}; _ }; _ } -> output "%s.set_param p %s;" (get_enum_name ctors) pname
   | param' ->
-    let meta = Sql.Meta.find_opt meta "module" in
-    let base_type = L.as_runtime_repr_name param'.typ in
-    let runtime_repr_name = L.as_runtime_repr_name_set_param param'.typ in
-    match meta with
-    | None ->
-        if nullable then
-          handle_nullable (sprintf "T.set_param_%s p %s" base_type)
-        else
-          output "T.set_param_%s p %s;" base_type pname
+    let module_ = Sql.Meta.find_opt meta "module" in
+    match module_ with
+    | None -> if nullable then set_param_nullable "v" @@ sprintf "T.set_param_%s %s" (show_param_type param') "p v"
+      else output "T.set_param_%s p %s;" ptype pname
     | Some m ->
-        if nullable then
-          handle_nullable (sprintf "T.set_param_%s p @@ %s.set_param_%s %s" base_type m runtime_repr_name)
-        else
-          output "T.set_param_%s p @@ %s.set_param_%s %s;" base_type m runtime_repr_name pname
+      let set_param = "set_param" in
+      let set_param_name = set_param |> Sql.Meta.find_opt meta |> Option.default set_param in
+      let runtime_repr_name = L.as_runtime_repr_name_set_param param'.typ in
+      if nullable then
+         set_param_nullable pname @@ sprintf "T.set_param_%s p (%s)" runtime_repr_name (sprintf "%s.%s v" m set_param_name)
+      else
+        output "T.set_param_%s p (%s)" runtime_repr_name (sprintf "%s.%s %s" m set_param_name pname)
   
 let rec set_var index var =
   match var with
