@@ -156,9 +156,6 @@ module L = struct
   | { t = Datetime; _ }
   | { t = Decimal; _ } -> "float"
 
-  let as_runtime_repr_name_set_param = function
-  | { t = Datetime; _ } -> "datetime"
-  | x -> as_runtime_repr_name x
 
   let as_api_type = as_lang_type
 end
@@ -253,7 +250,7 @@ let match_variant_pattern i name args ~is_poly =
             then ((seen_wildcards, seen_names, all_wc), None)
             else ((label :: seen_wildcards, seen_names, all_wc), Some "_") in
         match arg with
-        | Sql.Single (param, _) | SingleIn param -> make_wildcard_param param.id.label
+        | Sql.Single (param, _) | SingleIn (param, _) -> make_wildcard_param param.id.label
         | SharedVarsGroup _
         | Choice ({ label = None; _ }, _)
         | TupleList ({ label = None; _ }, _) 
@@ -294,7 +291,7 @@ let rec set_param ~meta index param =
     | Some m ->
       let set_param = "set_param" in
       let set_param_name = set_param |> Sql.Meta.find_opt meta |> Option.default set_param in
-      let runtime_repr_name = L.as_runtime_repr_name_set_param param'.typ in
+      let runtime_repr_name = L.as_runtime_repr_name param'.typ in
       if nullable then
          set_param_nullable pname @@ sprintf "T.set_param_%s p (%s)" runtime_repr_name (sprintf "%s.%s v" m set_param_name)
       else
@@ -449,10 +446,12 @@ let make_to_literal =
     | { Type.t = Union { ctors; _ }; _ } -> sprintf "%s.to_literal" (get_enum_name ctors)
     | t -> sprintf "T.Types.%s.to_literal" (Sql.Type.type_name t) in go
 
-let gen_in_substitution var =
+let gen_in_substitution meta var =
   if Option.is_none var.id.label then failwith "empty label in IN param";
   sprintf {code| "(" ^ String.concat ", " (List.map %s %s) ^ ")"|code}
-    (make_to_literal var.typ)
+    (match Sql.Meta.find_opt meta "module" with
+    | None -> make_to_literal var.typ
+    | Some m -> sprintf "(fun v -> T.Types.%s.%s_to_literal (%s.set_param))" (Sql.Type.type_name var.typ) (L.as_runtime_repr_name var.typ) m)
     (Option.get var.id.label)
 
 let gen_tuple_printer ~is_row _label schema =
@@ -498,9 +497,9 @@ let make_sql l =
       if app then bprintf b " ^ ";
       Buffer.add_string b (quote s);
       loop true tl
-    | SubstIn param :: tl ->
+    | SubstIn (param, m) :: tl ->
       if app then bprintf b " ^ ";
-      Buffer.add_string b (gen_in_substitution param);
+      Buffer.add_string b (gen_in_substitution m param);
       loop true tl
     | DynamicIn (name, in_or_not_in, sqls) :: tl ->
       if app then bprintf b " ^ ";
@@ -633,7 +632,7 @@ let generate_enum_modules stmts =
 
   let rec vars_to_enums vars = List.concat_map (function
     | Single ({ typ; _ }, _)
-    | SingleIn { typ; _ } -> typ |> get_enum |> option_list
+    | SingleIn ({ typ; _ }, _) -> typ |> get_enum |> option_list
     | SharedVarsGroup (vars, _)
     | OptionActionChoice (_, vars, _, _)
     | ChoiceIn { vars; _ } -> vars_to_enums vars

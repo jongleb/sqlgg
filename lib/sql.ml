@@ -442,7 +442,7 @@ type ctor =
 | Verbatim of string * string
 and var =
 | Single of param * Meta.t
-| SingleIn of param
+| SingleIn of param * Meta.t
 | ChoiceIn of { param: param_id; kind : in_or_not_in; vars: var list }
 | Choice of param_id * ctor list
 | TupleList of param_id * tuple_list_kind

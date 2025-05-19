@@ -71,7 +71,7 @@ let choose_name props kind index =
 type sql =
     Static of string
   | Dynamic of Sql.param_id * sql_dynamic_ctor list 
-  | SubstIn of Sql.param
+  | SubstIn of Sql.param * Sql.Meta.t
   | DynamicIn of Sql.param_id * [`In | `NotIn] * sql list
   | SubstTuple of Sql.param_id * Sql.tuple_list_kind
 
@@ -100,11 +100,11 @@ let substitute_vars s vars subst_param =
           parami + 1
       in
       loop s acc i2 parami tl
-    | SingleIn param :: tl ->
+    | SingleIn (param,m ):: tl ->
       let (i1,i2) = param.id.pos in
       assert (i2 > i1);
       assert (i1 > i);
-      let acc = SubstIn param :: Static (String.slice ~first:i ~last:i1 s) :: acc in
+      let acc = SubstIn (param, m) :: Static (String.slice ~first:i ~last:i1 s) :: acc in
       loop s acc i2 parami tl
     | ChoiceIn { param = name; kind; vars } :: tl ->
       let (i1,i2) = name.pos in
@@ -261,7 +261,7 @@ let rec find_param_ids l =
   List.concat @@
   List.map
     (function
-      | Sql.Single (p, _) | SingleIn p -> [ p.id ]
+      | Sql.Single (p, _) | SingleIn (p, _) -> [ p.id ]
       | Choice (id,_) -> [ id ]
       | OptionActionChoice (id, _, _, _) -> [id]
       | ChoiceIn { param; vars; _ } -> find_param_ids vars @ [param]
@@ -291,7 +291,7 @@ let rec inparams_only l =
   List.concat @@
   List.map
     (function
-      | Sql.SingleIn p -> [p]
+      | Sql.SingleIn (p, _) -> [p]
       | ChoiceIn { vars; _ } -> inparams_only vars
       | _ -> [])
     l

@@ -40,23 +40,27 @@ module type Types = sig
     include Value 
     val get_bool : field -> bool
     val set_bool: bool -> value
+    val bool_to_literal : bool -> string
   end
   module Int : sig 
     include Value
     val get_int64 : field -> int64
     val set_int64: int64 -> value
+    val int64_to_literal : int64 -> string
   end
   (* you probably want better type, e.g. (int*int) or Z.t *)
   module Float : sig
     include Value
     val get_float : field -> float
     val set_float: float -> value
+    val float_to_literal : float -> string
   end
   (* you probably want better type, e.g. (int*int) or Z.t *)
   module Text : sig 
     include Value
     val get_string : field -> string
     val set_string: string -> value
+    val string_to_literal : string -> string
   end
   module Blob : sig
     include Value
@@ -66,11 +70,13 @@ module type Types = sig
     include Value
     val get_string : field -> string
     val set_float: float -> value
+    val float_to_literal : float -> string
   end
   module Decimal : sig 
     include Value
     val get_float : field -> float
     val set_float: float -> value
+    val float_to_literal : float -> string
   end
   module Any : Value
   module Make_enum : functor (E : Enum) -> Value with type t = E.t
@@ -130,6 +136,7 @@ struct
     end) 
     let get_int64 = of_field
     let set_int64 = to_value
+    let int64_to_literal = to_literal
   end
 
   module Bool = struct 
@@ -141,6 +148,7 @@ struct
     end)
     let get_bool = of_field
     let set_bool = to_value
+    let bool_to_literal = to_literal
   end
 
   module Float = struct 
@@ -157,6 +165,7 @@ struct
     end)
     let get_float = of_field
     let set_float = to_value
+    let float_to_literal = to_literal
   end
 
   (* you probably want better type, e.g. (int*int) or Z.t *)
@@ -188,6 +197,7 @@ struct
     end) 
     let get_string = of_field
     let set_string = to_value
+    let string_to_literal = to_literal
   end
 
   module Blob = struct 
@@ -238,6 +248,7 @@ struct
 
     let get_string f = f |> of_field |> to_literal
     let set_float t = `Time (M.Time.utc_timestamp t)
+    let float_to_literal t = t |> M.Time.utc_timestamp |> to_literal
   end
 
   module Any = Make(struct

@@ -77,13 +77,31 @@ module type M = sig
 
   (** datatypes *)
   module Types : sig
-    module Bool : Value
-    module Int : Value
-    module Float : Value
-    module Text : Value
+    module Bool : sig
+      include Value
+      val bool_to_literal : bool -> string
+    end
+    module Int : sig 
+      include Value
+      val int64_to_literal : int64 -> string
+    end
+    module Float : sig
+      include Value
+      val float_to_literal : float -> string
+    end
+    module Text : sig
+      include Value
+      val string_to_literal : string -> string
+    end
     module Blob : Value
-    module Decimal : Value
-    module Datetime : Value
+    module Decimal : sig
+      include Value
+      val float_to_literal : float -> string
+    end
+    module Datetime : sig 
+      include Value
+      val float_to_literal : float -> string
+    end
     module Any : Value
   end
 
