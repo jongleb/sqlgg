@@ -269,42 +269,40 @@ let rec resolve_columns env expr =
     Tables.print stderr env.tables;
   end;
   let get_meta_of_schema_expr ~env expr =
-    let rec gather = function 
+    let rec extract_parameter_id = function 
       | Param p -> Some p.id
       | Inparam p -> Some p.id
       | Choices (p, _) -> Some p
       | InChoice (p, _, _) -> Some p
-      | OptionActions { choice; _ } -> gather choice
+      | OptionActions { choice; _ } -> extract_parameter_id choice
       | Fun _ | SelectExpr _ 
       | Inserted _ | InTupleList _
       | Value _ | Column _ | Case _ -> None
     in
     let hashtable = Hashtbl.create 10 in
-    let rec fn hshtbl = function 
-      | Sql.Fun { parameters = ([Column a; b] | [b; Column a]); kind = Comparison; _ } ->
-        Option.may (fun pid -> 
-          Option.may (fun l -> Hashtbl.add hshtbl l (resolve_column ~env a).attr.meta ) pid.label
-        ) (gather b)
-      | Sql.Fun { parameters = ([Column a; (Inparam _) as b] | [(Inparam _) as b; Column a]); _ } ->
-        Option.may (fun pid -> 
-          Option.may (fun l -> Hashtbl.add hshtbl l (resolve_column ~env a).attr.meta ) pid.label
-        ) (gather b)
-      | Sql.Fun { parameters; _ } -> List.iter (fn hshtbl) parameters
+    let extract_meta_from_col expr = 
+      let set_param col expr = expr |> extract_parameter_id |> Option.may @@ fun pid -> 
+        Option.may (fun l -> Hashtbl.add hashtable l (resolve_column ~env col).attr.meta ) pid.label
+      in
+      let rec go = function 
+      | Sql.Fun { parameters = ([Column a; b] | [b; Column a]); kind = Comparison; _ } -> set_param a b
+      | Sql.Fun { parameters = ([Column a; (Inparam _) as b] | [(Inparam _) as b; Column a]); _ } -> set_param a b
+      | Sql.Fun { parameters; _ } -> List.iter go parameters
       | Case { case; branches; else_ } ->
-        Option.may (fn hshtbl) case;
-        List.iter (fun { Sql.when_; then_ } -> fn hshtbl when_; fn hshtbl then_) branches;
-        Option.may (fn hshtbl) else_
-      | OptionActions { choice; _ } -> fn hshtbl choice
-      | InChoice (_, _, e) -> fn hshtbl e
-      | _ -> () in
-    fn hashtable expr;
+        Option.may go case;
+        List.iter (fun { Sql.when_; then_ } -> go when_; go then_) branches;
+        Option.may go else_
+      | OptionActions { choice; _ } -> go choice
+      | InChoice (_, _, e) -> go e
+      | Choices (_, l) -> List.iter (fun (_, e) -> Option.may go e) l
+      | Value _ | Param _ | Inparam _
+      | SelectExpr (_, _) | Column _ | Inserted _ | InTupleList _ -> () in
+    go expr in
+    extract_meta_from_col expr;
     hashtable
   in
   let hashtable = get_meta_of_schema_expr ~env expr in
-  let get_meta_pid x = match Option.map (Hashtbl.find_opt hashtable) x.id.label with 
-    | Some (Some m) -> m
-    | _ -> Meta.empty ()
-  in
+  let get_meta_pid x = Option.default (Meta.empty()) @@ Stdlib.Option.bind x.id.label (Hashtbl.find_opt hashtable) in
   let rec each e =
     match e with
     | Value x -> ResValue x
