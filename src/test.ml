@@ -1172,8 +1172,11 @@ let test_type_mapping_params _ =
         (
           function
           | Single (p, m) -> (p, m) 
-          | SingleIn (p, m) -> (p, m) | SharedVarsGroup _ | OptionActionChoice _ 
-          | Choice _ | ChoiceIn _ | TupleList _ -> assert false
+          | SingleIn (p, m) -> (p, m) 
+          | ChoiceIn { vars = [ SingleIn (p, m) ]; _ } -> (p, m)
+          | ChoiceIn _
+          | SharedVarsGroup _ | OptionActionChoice _ 
+          | Choice _   | TupleList _ -> assert false
           ) 
         stmt.Gen.vars) in
 
@@ -1228,7 +1231,56 @@ let test_type_mapping_params _ =
   assert_params_with_meta stmt [
     (named "id" Int, ["module", "HelloWorld"]); 
     (named "txt2" Text, ["module", "Txt_module_name"])
-  ]
+  ];
+
+  let stmt = parse {|
+    SELECT id, txt2
+    FROM test39
+    JOIN test40 ON test39.txt = test40.txt2 AND test40.txt2 = @txt2
+  |} in
+  assert_equal 
+    ~msg:"schema" 
+    ~printer:Sql.Schema.to_string 
+    [
+      attr' ~extra:[PrimaryKey] ~meta:["module", "HelloWorld"] "id" Int;
+      attr' ~extra:[NotNull] ~meta:["module", "Txt_module_name"] "txt2" Text;
+    ] 
+    stmt.schema;
+  assert_params_with_meta stmt [
+    (named "txt2" Text, ["module", "Txt_module_name"])
+  ];
+
+  let stmt = parse {|
+    SELECT txt2
+    FROM test40
+    WHERE txt2 IN @txt2
+  |} in
+  assert_params_with_meta stmt [
+    (named "txt2" Text, ["module", "Txt_module_name"])
+  ];
+  
+  let stmt = parse {|
+    SELECT id, txt2
+    FROM test39
+    JOIN test40 ON (test39.txt, test40.txt2) IN @txt2
+  |} in
+
+  assert_equal 
+    ~msg:"params with meta" 
+    ~cmp:(fun p1 p2 -> match List.hd p1, List.hd p2 with
+      | TupleList ({ label; _ }, Where_in (l1, _, _)), TupleList ({ label = label2; _ }, Where_in (l2, _, _)) -> 
+        label = label2 && l1 = l2
+      | _ -> false
+    )
+    ~printer:show_vars
+    stmt.vars 
+    [
+      TupleList ({ label = Some "txt2"; pos = (0, 0) }, Where_in ([
+        Type.strict Text, Meta.empty ();
+        Type.strict Text, Meta.of_list ["module", "Txt_module_name"];
+      ], `In, (0, 0)));
+    ]
+  
 
 let run () =
   Gen.params_mode := Some Named;
