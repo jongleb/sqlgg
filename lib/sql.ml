@@ -238,6 +238,8 @@ module Meta = struct
       ) t;
       Format.fprintf fmt "}"
     end
+
+  let equal = StringMap.equal String.equal
 end
 
 type attr = {name : string; domain : Type.t; extra : Constraints.t; meta: Meta.t }
