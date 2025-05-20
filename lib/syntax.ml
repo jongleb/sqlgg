@@ -39,21 +39,22 @@ type res_expr =
   | ResValue of Type.t (** literal value *)
   | ResParam of param * Meta.t
   | ResSelect of Type.t * vars
-  | ResInTupleList of { param_id: param_id; res_in_tuple_list: res_in_tuple_list; kind: in_or_not_in; pos: pos }
+  | ResInTupleList of { param_id: param_id; res_in_tuple_list: res_in_tuple_list; kind: in_or_not_in; pos: pos; }
   | ResInparam of param * Meta.t
   | ResChoices of param_id * res_expr choices
   | ResInChoice of param_id * in_or_not_in * res_expr
   | ResFun of res_fun (** function kind (return type and flavor), arguments *)
   | ResOptionActions of { choice_id: param_id; res_choice: res_expr; pos: (pos * pos); kind: Sql.option_actions_kind }
   | ResCase of { case: res_expr option; branches: case_branch list; else_: res_expr option }
-  [@@deriving show]
+  [@@deriving show] 
 
 and case_branch = { when_: res_expr; then_: res_expr; } [@@deriving show]
 
 and res_fun = { kind: Type.func ; parameters: res_expr list; is_over_clause: bool; } [@@deriving show]  
   
 and res_in_tuple_list = 
-  ResTyped of Type.t list | Res of res_expr list
+  ResTyped of (Type.t * Meta.t) list | Res of (res_expr * Meta.t) list
+
 let empty_env = { query_has_grouping = false; 
   tables = []; schema = []; 
   insert_schema = []; 
@@ -280,14 +281,25 @@ let rec resolve_columns env expr =
       | Value _ | Column _ | Case _ -> None
     in
     let hashtable = Hashtbl.create 10 in
+    let in_tuple_list_hashtable = Hashtbl.create 5 in
     let extract_meta_from_col expr = 
       let set_param col expr = expr |> extract_parameter_id |> Option.may @@ fun pid -> 
         Option.may (fun l -> Hashtbl.add hashtable l (resolve_column ~env col).attr.meta ) pid.label
       in
       let rec aux = function 
-      | Sql.Fun { parameters = ([Column a; b] | [b; Column a]); kind = Comparison; _ } -> set_param a b
-      | Sql.Fun { parameters = ([Column a; (Inparam _) as b] | [(Inparam _) as b; Column a]); _ } -> set_param a b
-      | Sql.Fun { parameters; _ } -> List.iter aux parameters
+      (* col_name = @param *)
+      | Sql.Fun { parameters = ([Column a; b] | [b; Column a]); kind = Comparison; _ }
+      (* col_name IN @param *)
+      | Fun { parameters = ([Column a; (Inparam _) as b] | [(Inparam _) as b; Column a]); _ } -> set_param a b
+      (* (col_name, ..., any_expr, col_name2) IN @param *)
+      | InTupleList { exprs; param_id; _ } -> 
+        let meta_list = List.map (function
+          | Column col -> (resolve_column ~env col).attr.meta 
+          | _ -> Meta.empty()
+        ) exprs in
+        Option.may(fun k -> Hashtbl.add in_tuple_list_hashtable k meta_list) param_id.label;
+        List.iter aux exprs
+      | Fun { parameters; _ } -> List.iter aux parameters
       | Case { case; branches; else_ } ->
         Option.may aux case;
         List.iter (fun { Sql.when_; then_ } -> aux when_; aux then_) branches;
@@ -296,12 +308,12 @@ let rec resolve_columns env expr =
       | InChoice (_, _, e) -> aux e
       | Choices (_, l) -> List.iter (fun (_, e) -> Option.may aux e) l
       | Value _ | Param _ | Inparam _
-      | SelectExpr (_, _) | Column _ | Inserted _ | InTupleList _ -> () in
+      | SelectExpr (_, _) | Column _ | Inserted _ -> () in
     aux expr in
     extract_meta_from_col expr;
-    hashtable
+    hashtable, in_tuple_list_hashtable
   in
-  let hashtable = get_meta_of_schema_expr ~env expr in
+  let hashtable, in_tuple_list_hashtable = get_meta_of_schema_expr ~env expr in
   let get_meta_pid x = Option.default (Meta.empty()) @@ Stdlib.Option.bind x.id.label (Hashtbl.find_opt hashtable) in
   let rec each e =
     match e with
@@ -333,6 +345,9 @@ let rec resolve_columns env expr =
         | ResOptionActions _
         | ResInChoice _ -> fail "unsupported expression %s kind for WHERE e IN @tuplelist" (show_res_expr res_expr)
       ) exprs in
+      let meta_list = Option.default (List.init (List.length exprs) (fun _ -> Meta.empty())) 
+        @@ Stdlib.Option.bind param_id.label (Hashtbl.find_opt in_tuple_list_hashtable) in
+      let res_exprs = List.combine res_exprs meta_list in
       ResInTupleList {param_id; res_in_tuple_list = Res res_exprs; kind; pos }
     | Inparam x -> ResInparam (x, get_meta_pid x)
     | InChoice (n, k, x) -> ResInChoice (n, k, each x)
@@ -412,11 +427,11 @@ and assign_types env expr =
     | ResInTupleList { param_id; res_in_tuple_list; kind; pos } -> 
       (match res_in_tuple_list with 
       | Res res_exprs -> ResInTupleList { param_id; 
-        res_in_tuple_list = ResTyped (List.map (fun expr ->
+        res_in_tuple_list = ResTyped (List.map (fun (expr, meta) ->
           let typ = expr |> typeof |> snd |> get_or_failwith in 
           if Type.is_any typ then 
               fail "If you need to have a field as parameter in the left part you should specify a type"
-          else typ
+          else typ, meta
         ) res_exprs); kind; pos }, `Ok (Type.strict Bool) 
       | ResTyped _ -> assert false
       )

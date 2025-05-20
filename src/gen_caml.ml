@@ -440,18 +440,19 @@ let output_params_binder index vars =
   | vars -> output_params_binder index vars
 
 
-let make_to_literal =
+let make_to_literal meta typ =
   let rec go domain = match domain with 
     | { Type.t = Union _; _ } when not !Sqlgg_config.enum_as_poly_variant -> go { domain with Type.t = Text }
     | { Type.t = Union { ctors; _ }; _ } -> sprintf "%s.to_literal" (get_enum_name ctors)
-    | t -> sprintf "T.Types.%s.to_literal" (Sql.Type.type_name t) in go
+    | t -> match Sql.Meta.find_opt meta "module" with
+      | None -> sprintf "T.Types.%s.to_literal" (Sql.Type.type_name t)
+      | Some m -> sprintf "(fun v -> T.Types.%s.%s_to_literal (%s.set_param v))" (Sql.Type.type_name t) (L.as_runtime_repr_name t) m
+  in go typ
 
 let gen_in_substitution meta var =
   if Option.is_none var.id.label then failwith "empty label in IN param";
   sprintf {code| "(" ^ String.concat ", " (List.map %s %s) ^ ")"|code}
-    (match Sql.Meta.find_opt meta "module" with
-    | None -> make_to_literal var.typ
-    | Some m -> sprintf "(fun v -> T.Types.%s.%s_to_literal (%s.set_param v))" (Sql.Type.type_name var.typ) (L.as_runtime_repr_name var.typ) m)
+    (make_to_literal meta var.typ)
     (Option.get var.id.label)
 
 let gen_tuple_printer ~is_row _label schema =
@@ -464,10 +465,10 @@ let gen_tuple_printer ~is_row _label schema =
     (String.concat " " @@
      List.mapi
      (fun idx attr ->
-        let { name; domain; _ } = attr in
+        let { name; domain; meta; _ } = attr in
         (if idx = 0 then "" else {|Buffer.add_string _sqlgg_b ", "; |}) ^
         sprintf {|Buffer.add_string _sqlgg_b (%s);|}
-          (let to_literal = sprintf "%s %s" (make_to_literal domain) in
+          (let to_literal = sprintf "%s %s" (make_to_literal meta domain) in
            if is_attr_nullable attr then 
            (sprintf {|match %s with None -> "NULL" | Some v -> %s|} name (to_literal "v") )
            else to_literal name))
@@ -484,8 +485,8 @@ let gen_tuple_substitution ~is_row label schema =
     label 
 
 let make_schema_of_tuple_types label =
-  List.mapi (fun idx domain -> {
-    name=(sprintf "%s_%Ln" label idx); domain; extra = Constraints.empty; meta = Meta.empty()
+  List.mapi (fun idx (domain, meta) -> {
+    name=(sprintf "%s_%Ln" label idx); domain; extra = Constraints.empty; meta
   })   
 
 let make_sql l =
@@ -533,6 +534,8 @@ let make_sql l =
     | SubstTuple (id, ValueRows { types; _ }) :: tl ->
         if app then bprintf b " ^ ";
         let label = resolve_tuple_label id in
+        (* TODO: Implement meta for ValueRows *)
+        let types = List.map (fun typ -> typ, Meta.empty()) types in
         let schema = make_schema_of_tuple_types label types in
         let empty = schema 
           |> List.map (const "NULL") 
@@ -641,8 +644,10 @@ let generate_enum_modules stmts =
         | Simple (_, vars) -> Option.map vars_to_enums vars |> option_list |> List.concat
         | Verbatim _ -> []
       ) ctor_list
-    | TupleList (_, ( Where_in (types, _, _) | ValueRows { types; _ } )) -> 
+    | TupleList (_,  ValueRows { types; _ }) -> 
       List.concat_map (fun typ -> typ |> get_enum |> option_list) types
+    | TupleList (_, Where_in (types, _, _)) ->
+      List.concat_map (fun (typ, _) -> typ |> get_enum |> option_list) types
     | TupleList (_, Insertion schema) -> schemas_to_enums schema
   ) vars in
 
