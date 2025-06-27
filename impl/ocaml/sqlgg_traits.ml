@@ -28,6 +28,15 @@ module type Enum = sig
   val proj: t -> string
 end
 
+type json = [ `Null
+  | `String of string
+  | `Float of float
+  | `Int of int
+  | `Bool of bool
+  | `List of json list
+  | `Assoc of (string * json) list 
+]
+
 module type FNS = sig
   (* all types intended for subsitution *)
   type params
@@ -101,6 +110,10 @@ module type M = sig
     module Datetime : sig 
       include Value
       val float_to_literal : float -> string
+    end
+    module Json : sig
+      include Value
+      val json_to_literal : json -> string
     end
     module Any : Value
   end

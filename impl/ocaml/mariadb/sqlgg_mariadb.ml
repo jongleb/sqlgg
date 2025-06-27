@@ -32,6 +32,15 @@ module type Enum = sig
   val proj: t -> string
 end
 
+type json = [ `Null
+  | `String of string
+  | `Float of float
+  | `Int of int
+  | `Bool of bool
+  | `List of json list
+  | `Assoc of (string * json) list 
+]
+
 module type Types = sig
   type field
   type value
@@ -78,6 +87,13 @@ module type Types = sig
     val set_float: float -> value
     val float_to_literal : float -> string
   end
+  module Json : sig
+    include Value
+    val get_json : field -> json
+    val set_json: json -> value
+    val json_to_literal : json -> string
+  end
+  (* Any is a value that can be anything, e.g. `Null, `Int, `String, etc. *)
   module Any : Value
   module Make_enum : functor (E : Enum) -> Value with type t = E.t
 end
@@ -251,6 +267,24 @@ struct
     let float_to_literal t = t |> M.Time.utc_timestamp |> to_literal
   end
 
+  module Json = struct
+    include Make(struct
+      type t = Yojson.Basic.t
+      let of_field field =
+        match M.Field.value field with
+        | `String x -> Yojson.Basic.from_string x
+        | value -> convfail "json" field value
+      let to_value x = `String (Yojson.Basic.to_string x)
+      let to_literal x = Text.to_literal (Yojson.Basic.to_string x)
+    end)
+
+    let get_json = of_field
+    let set_json = to_value
+    let json_to_literal = to_literal
+  end
+
+  (* Any is a value that can be anything, e.g. `Null, `Int, `String, etc. *)
+
   module Any = Make(struct
     type t = M.Field.value
     let of_field = M.Field.value
@@ -325,6 +359,7 @@ let get_column_Float, get_column_Float_nullable = get_column_ty "Float" Float.of
 let get_column_Decimal, get_column_Decimal_nullable = get_column_ty "Decimal" Decimal.of_field
 let get_column_Datetime, get_column_Datetime_nullable = get_column_ty "Datetime" Datetime.of_field
 let get_column_Any, get_column_Any_nullable = get_column_ty "Any" Any.of_field
+let get_column_Json, get_column_Json_nullable = get_column_ty "Json" Json.of_field
 
 let get_column_bool, get_column_bool_nullable = get_column_ty "bool" Bool.get_bool
 let get_column_int64, get_column_int64_nullable = get_column_ty "int64" Int.get_int64
@@ -332,6 +367,12 @@ let get_column_float, get_column_float_nullable = get_column_ty "float" Float.ge
 let get_column_decimal, get_column_decimal_nullable = get_column_ty "float" Decimal.get_float
 let get_column_datetime, get_column_datetime_nullable = get_column_ty "string" Datetime.get_string
 let get_column_string, get_column_string_nullable = get_column_ty "string" Text.get_string
+let get_column_json, get_column_json_nullable = get_column_ty "json" Json.get_json
+
+(* bind_param is used to bind parameters to a statement *)
+(* it is used in set_param_* functions *)
+(* params is a tuple of (statement, array of values, index) *)
+(* index is incremented after binding a value *)
 
 
 let bind_param data (_, params, index) = assert (!index < Array.length params); params.(!index) <- data; incr index
@@ -353,6 +394,10 @@ let set_param_Int = set_param_ty Int.to_value
 let set_param_Float = set_param_ty Float.to_value
 let set_param_Decimal = set_param_ty Decimal.to_value
 let set_param_Datetime = set_param_ty Datetime.to_value
+let set_param_Json = set_param_ty Json.to_value
+
+(* convenience functions for setting parameters *)
+(* these are used in the generated code *)
 
 let set_param_bool = set_param_ty Bool.set_bool
 let set_param_int64 = set_param_ty Int.set_int64
@@ -360,6 +405,11 @@ let set_param_string = set_param_ty Text.set_string
 let set_param_float = set_param_ty Float.set_float
 let set_param_decimal = set_param_ty Decimal.set_float
 let set_param_datetime = set_param_ty Datetime.set_float
+let set_param_json = set_param_ty Json.set_json
+
+(* Make_enum is a functor that takes an Enum module and returns a Value module *)
+(* it is used to create a value type for an enum type *)
+(* it is used in the generated code for enum types *)
 
 module Make_enum (E: Enum) = struct 
 
