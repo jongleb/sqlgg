@@ -263,3 +263,47 @@ Test TiDB dialect with CREATE TABLE AS SELECT (should fail):
   Feature CreateTableAsSelect is not supported for dialect TiDB (supported by: MySQL, PostgreSQL, SQLite) at CREATE TABLE summary AS SELECT id, name FROM users
   Errors encountered, no code generated
   [1]
+
+
+Test Json functions:
+  $ /bin/sh ./sqlgg_test.sh json_functions.sql json_functions.compare.ml  
+  $ echo $?
+  0
+
+Test Json functions and ocaml compiles:
+  $ cd test_build_json_functions
+  $ cat "json_functions.sql" | sqlgg -no-header -gen caml_io -params unnamed -gen caml - > output.ml
+  $ ocamlfind ocamlc -package sqlgg.traits,sqlgg -c output.ml
+  $ cp ../print_ocaml_impl.ml .
+  $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -c print_ocaml_impl.ml
+  $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -c test_run.ml
+  $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -linkpkg -o test_run.exe output.ml print_ocaml_impl.ml test_run.ml
+  $ ./test_run.exe
+  [SELECT_ONE] Connection: test_connection
+  [SQL] SELECT JSON_SEARCH('{\"users\":[{\"id\":1,\"settings\":{\"themes\":[\"dark\"]}}]}', 'one', 'dark')
+  [SELECT_ONE] Connection: test_connection
+  [SQL] SELECT JSON_ARRAY_APPEND('["a", ["b", "c"], "d"]', '$.data[*].users[last].settings', 1)
+  [SELECT] Connection: test_connection
+  [SQL] SELECT JSON_EXTRACT(col1, '$.name') FROM table1 WHERE id = 1
+  [SELECT] Connection: test_connection
+  [SQL] SELECT JSON_UNQUOTE(JSON_EXTRACT(col1, '$.user.email')) FROM table1 WHERE id = 2
+  [EXECUTE] Connection: test_connection
+  [SQL] UPDATE table1 SET col1 = JSON_SET(col1, '$.last_login', NOW()) WHERE id = 3
+  [SELECT] Connection: test_connection
+  [SQL] SELECT JSON_CONTAINS(col1, '"value"') FROM table1 WHERE id = 4
+  [SELECT] Connection: test_connection
+  [SQL] SELECT id, name FROM table2 WHERE JSON_EXTRACT(col1, '$.metadata.category') = '\"electronics\"'
+  [SELECT] Connection: test_connection
+  [SQL] SELECT 
+  id,
+  JSON_EXTRACT(col1, '$.profile.name') as user_name,
+  JSON_EXTRACT(col2, '$.settings.theme') as theme
+  FROM table1 
+  WHERE JSON_EXTRACT(col1, '$.profile.active') = 'true'
+  [EXECUTE] Connection: test_connection
+  [SQL] UPDATE table2 
+  SET col2 = JSON_SET(col2, '$.timestamps.last_update', NOW())
+  WHERE JSON_EXTRACT(col1, '$.user.role') = '\"admin\"'
+  [SELECT] Connection: test_connection
+  [SQL] SELECT JSON_SEARCH(col1, 'one', 'admin') FROM table1 WHERE id = 5
+  All JSON tests executed successfully.
