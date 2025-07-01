@@ -43,7 +43,7 @@
  </stmt>
  <table name="test">
   <schema>
-   <value name="foo" type="Text" nullable="true"/>
+   <value name="foo" type="Json" nullable="true"/>
   </schema>
  </table>
 </sqlgg>

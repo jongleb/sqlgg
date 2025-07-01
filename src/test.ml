@@ -1558,6 +1558,20 @@ let test_meta_insert_update _ =
     (named "param3" Int, ["module", "Module1"]);
   ]
 
+let test_json_and_fixed_then_pairs_fn_kind  = [
+  tt "CREATE TABLE test46 ( id INT AUTO_INCREMENT PRIMARY KEY, data JSON)" [][];
+
+  tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$', '\"new_val\"') WHERE id = 3" 
+  [] [];
+
+  tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', 'false') WHERE id = 3" 
+  [] [];
+
+  (* tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$', @json) WHERE id = 3" 
+  [] [];
+
+  tt "CREATE TABLE test47 ( id INT AUTO_INCREMENT PRIMARY KEY, data JSON NOT NULL)" [][]; *)
+]
   
 
 let run () =
@@ -1592,6 +1606,7 @@ let run () =
     "test_case_enum" >::: test_case_enum;
     "test_type_mapping_params" >:: test_type_mapping_params;
     "test_meta_insert_update" >:: test_meta_insert_update;
+    "test_json_and_fixed_then_pairs_fn_kind" >::: test_json_and_fixed_then_pairs_fn_kind;
   ]
   in
   let test_suite = "main" >::: tests in

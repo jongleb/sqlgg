@@ -43,6 +43,7 @@ let as_api_type t =
   | Datetime -> "Datetime"
   | Any -> "String"
   | Union _
+  | Json_path
   | StringLiteral _ -> "String"
   | Json
   | Unit _ -> assert false

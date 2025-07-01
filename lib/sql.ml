@@ -21,6 +21,28 @@ struct
 
     let make ctors =  Ctors.of_list ctors
   end
+  
+  module Json_path = struct 
+    let is_valid_json_path_string s =
+      let rec aux = function
+        | [] -> true
+        | '$' :: rest -> aux rest
+        | '.' :: ('a'..'z' | 'A'..'Z' | '0'..'9' | '_') :: _ as chars -> 
+            let rec skip_prop = function
+              | ('a'..'z' | 'A'..'Z' | '0'..'9' | '_') :: rest -> skip_prop rest
+              | rest -> aux rest
+            in skip_prop (List.tl chars)
+        | '[' :: '*' :: ']' :: rest -> aux rest
+        | '[' :: ('0'..'9') :: _ as chars ->
+            let rec skip_digits = function
+              | ('0'..'9') :: rest -> skip_digits rest
+              | ']' :: rest -> aux rest
+              | _ -> false
+            in skip_digits (List.tl chars)
+        | _ -> false
+      in
+      s <> "" && s.[0] = '$' && (s |> String.to_seq |> List.of_seq |> aux)
+  end
 
   type union = { ctors: Enum_kind.t; is_closed: bool } [@@deriving eq, show{with_path=false}]
 
@@ -35,6 +57,7 @@ struct
     | Decimal
     | Union of union
     | StringLiteral of string
+    | Json_path
     | Json
     | Any (* FIXME - Top and Bottom ? *)
     [@@deriving eq, show{with_path=false}]
@@ -104,6 +127,14 @@ struct
     | Text, Blob | Blob, Text -> `Order (Text, Blob)
     | Int, Datetime | Datetime, Int -> `Order (Int, Datetime)
     | Text, Datetime | Datetime, Text -> `Order (Datetime, Text)
+
+    | Json, StringLiteral x -> 
+      begin match Yojson.Basic.from_string x with
+        | _ -> `Order (StringLiteral x, Json)
+        | exception Yojson.Json_error _ -> `No
+      end
+    | Json_path, StringLiteral x when Json_path.is_valid_json_path_string x -> `Order (StringLiteral x, Json_path)
+
     | _ -> `No
     
 
@@ -726,10 +757,10 @@ let () =
   "json_object" |> multi ~ret:(Typ text) (Typ text);
   "json_contains" |> multi ~ret:(Typ bool) (Typ text);
   "json_unquote" |> monomorphic text [text];
-  "json_array_append" |> add_fixed_then_pairs 
-    ~ret:(Typ text)
-    ~fixed_args:[Typ json; Typ text; Var 0]
-    ~repeating_pattern:[Typ text; Var 0];
+  "json_array_append" |> add_fixed_then_pairs
+    ~ret:(Typ json)
+    ~fixed_args:[Typ json; Typ text; Typ json]
+    ~repeating_pattern:[Typ text; Typ json;];
   "json_search" |> multi ~ret:(Typ text) (Typ text);
   "json_set" |> add 3 (F (Typ text, [Typ text; Typ text; Var 0]));
   "makedate" |> monomorphic datetime [int; int];
