@@ -1567,6 +1567,8 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
   tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', 'false') WHERE id = 3" 
   [] [];
 
+  wrong "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', 'NOT_A_VALID_JSON') WHERE id = 3" 
+
   (* tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$', @json) WHERE id = 3" 
   [] [];
 
