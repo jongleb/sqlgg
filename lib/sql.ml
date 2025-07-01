@@ -35,6 +35,7 @@ struct
     | Decimal
     | Union of union
     | StringLiteral of string
+    | Json
     | Any (* FIXME - Top and Bottom ? *)
     [@@deriving eq, show{with_path=false}]
     (* TODO NULL is currently typed as Any? which actually is a misnormer *)
@@ -174,6 +175,13 @@ struct
   | Comparison
   | Ret of t (* _ -> t *) (* TODO eliminate *)
   | F of tyvar * tyvar list
+  | FixedThenPairs of tyvar * tyvar list * tyvar list
+  (* For functions with fixed initial args + optional repeating pattern
+     Example: JSON_ARRAY_APPEND(json_doc, path, val[, path, val] ...)
+     - return_type: what function returns
+     - fixed_args: required initial arguments [json_doc, path, val] 
+     - repeating_pattern: list of types that repeat [path_type, val_type]
+     Valid calls: f(a,b,c) or f(a,b,c,d,e) or f(a,b,c,d,e,f,g) etc. *)
 
   let monomorphic ret args = F (Typ ret, List.map (fun t -> Typ t) args)
   let fixed ret args = monomorphic (depends ret) (List.map depends args)
@@ -190,12 +198,19 @@ struct
   | F (ret, args) -> fprintf pp "%s -> %s" (String.concat " -> " @@ List.map string_of_tyvar args) (string_of_tyvar ret)
   | Multi (ret, each_arg) | Coalesce (ret, each_arg) -> fprintf pp "{ %s }+ -> %s" (string_of_tyvar each_arg) (string_of_tyvar ret)
   | Comparison -> fprintf pp "'a -> 'a -> %s" (show_kind Bool)
+  | FixedThenPairs (ret, fixed, repeating) ->
+      let fixed_str = String.concat " -> " @@ List.map string_of_tyvar fixed in
+      let repeating_str = String.concat ", " @@ List.map string_of_tyvar repeating in
+      fprintf pp "%s -> [%s]* -> %s" 
+        fixed_str 
+        repeating_str
+        (string_of_tyvar ret)
 
   let string_of_func = Format.asprintf "%a" pp_func
 
   let is_grouping = function
   | Agg _ -> true
-  | Ret _ | F _ | Multi _ | Coalesce _  | Comparison -> false
+  | Ret _ | F _ | Multi _ | Coalesce _  | Comparison | FixedThenPairs _ -> false
 end
 
 module Constraint =
@@ -611,6 +626,7 @@ val multi : ret:Type.tyvar -> Type.tyvar -> string -> unit
 val multi_polymorphic : string -> unit
 val add_multi: Type.func -> string -> unit
 val sponge : Type.func
+val add_fixed_then_pairs : ret:Type.tyvar -> fixed_args:Type.tyvar list -> repeating_pattern:Type.tyvar list -> string -> unit
 
 end = struct
 
@@ -652,6 +668,8 @@ let lookup_agg name narg = match lookup name narg with
 let monomorphic ret args name = add (List.length args) Type.(monomorphic ret args) name
 let multi_polymorphic name = add_multi Type.(Multi (Var 0, Var 0)) name
 let multi ~ret args name = add_multi Type.(Multi (ret, args)) name
+let add_fixed_then_pairs ~ret ~fixed_args ~repeating_pattern name = 
+    add_multi (Type.FixedThenPairs (ret, fixed_args, repeating_pattern)) name
 
 end
 
@@ -662,6 +680,7 @@ let () =
   let int = strict Int in
   let float = strict Float in
   let text = strict Text in
+  let json = strict Json in
   let datetime = strict Datetime in
   let bool = strict Bool in
   "count" |> add 0 (Agg Count); (* count( * ) - asterisk is treated as no parameters in parser *)
@@ -707,7 +726,10 @@ let () =
   "json_object" |> multi ~ret:(Typ text) (Typ text);
   "json_contains" |> multi ~ret:(Typ bool) (Typ text);
   "json_unquote" |> monomorphic text [text];
-  "json_array_append" |> multi ~ret:(Typ text) (Typ text);
+  "json_array_append" |> add_fixed_then_pairs 
+    ~ret:(Typ text)
+    ~fixed_args:[Typ json; Typ text; Var 0]
+    ~repeating_pattern:[Typ text; Var 0];
   "json_search" |> multi ~ret:(Typ text) (Typ text);
   "json_set" |> add 3 (F (Typ text, [Typ text; Typ text; Var 0]));
   "makedate" |> monomorphic datetime [int; int];

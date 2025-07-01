@@ -32,6 +32,15 @@ module type Int = sig
   val int64_to_literal : int64 -> string
 end
 
+type json = [ `Null
+  | `String of string
+  | `Float of float
+  | `Int of int
+  | `Bool of bool
+  | `List of json list
+  | `Assoc of (string * json) list 
+]
+
 module type Types = sig
   module Bool : sig 
     include Value 
@@ -70,6 +79,14 @@ module type Types = sig
     val set_float: float -> string
     val float_to_literal : float -> string
   end
+
+  module Json : sig
+    include Value
+    val get_string : string -> json
+    val set_string : json -> string
+    val json_to_literal : json -> string
+  end
+
   module Any : Value
 end
 
@@ -155,6 +172,21 @@ module Default_types = struct
     include Text
     let set_float x = Text.set_string (Float.to_string x)
     let float_to_literal x = Text.to_literal (Float.to_literal x)
+  end
+
+  
+module Json = struct
+    type t = json
+
+    let of_string s = Yojson.Basic.from_string s
+
+    let to_string j = Yojson.Basic.to_string j
+
+    let to_literal j = Text.to_literal (to_string j)
+
+    let get_string = of_string
+    let set_string = to_string
+    let json_to_literal = to_literal
   end
   module Any = Text
 end

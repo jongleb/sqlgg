@@ -141,6 +141,7 @@ module L = struct
   | { t = Datetime; _ }
   | { t = Decimal; _ }
   | { t = Union _; _ }
+  | { t = Json; _ }
   | { t = Any; _ } as t -> type_name t
 
   let as_runtime_repr_name = function
@@ -148,6 +149,7 @@ module L = struct
   | { t = Text; _ }
   | { t = Any; _ }
   | { t = Union _; _ }
+  | { t = Json; _ } -> "json"
   | { t = StringLiteral _; _ } -> "string"
   | { t = Unit _; _ } -> "unit"
   | { t = Int; _ } -> "int64"
@@ -631,7 +633,8 @@ let generate_enum_modules stmts =
 
   let get_enum typ = match typ.Sql.Type.t with 
     | Union { ctors; _ } -> Some ctors
-    | Unit _ | Int | Text | Blob | Float | Bool  | Datetime | Decimal | Any | StringLiteral  _ -> None
+    | Unit _ | Int | Text | Blob | Float | Bool | Json
+    | Datetime | Decimal | Any | StringLiteral  _ -> None
   in
 
   let schemas_to_enums schemas = schemas |> List.filter_map (fun { domain; _ } -> get_enum domain) in

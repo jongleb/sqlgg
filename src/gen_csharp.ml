@@ -44,6 +44,7 @@ let as_api_type t =
   | Any -> "String"
   | Union _
   | StringLiteral _ -> "String"
+  | Json
   | Unit _ -> assert false
 
 let as_lang_type = as_api_type

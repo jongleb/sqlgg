@@ -467,7 +467,7 @@ and assign_types env expr =
             (* Since we have string literals, we can check if the enums are already exhausted or if a default case is required *)
             let values = Type.Enum_kind.Ctors.of_list @@ List.filter_map (function ResValue { t = StringLiteral v; _ } -> Some v | _ -> None) whens_e in
             Type.Enum_kind.Ctors.compare values ctors = 0
-          | Unit _ | Int | Text | Blob | Float | Datetime | Decimal | Any | StringLiteral _ | Bool -> false in
+          | Unit _ | Int | Text | Blob | Float | Datetime | Decimal | Any | Json | StringLiteral _ | Bool -> false in
         let exhaust_checked = if is_exhausted then types else List.map Type.make_nullable types in  
         match Type.common_supertype @@ Option.map_default (fun else_t -> types @ [get_or_failwith else_t]) exhaust_checked else_t with
         | None -> failwith "no common supertype for all case then branches"
@@ -561,6 +561,29 @@ and assign_types env expr =
             ret, List.map make_strict args 
           else 
             let args, ret = convert_args (Typ (depends Bool)) [Var 0; Var 0] in
+            let nullable = common_nullability args in
+            undepend ret nullable, args
+        | FixedThenPairs (ret, fixed_args, repeating_pattern), _ ->
+          let fixed_count = List.length fixed_args in
+          let pattern_length = List.length repeating_pattern in
+          let total_args = List.length types in
+          
+          if total_args < fixed_count then
+            fail "function %s requires at least %d arguments, got %d" (show_func ()) fixed_count total_args
+          else if (total_args - fixed_count) mod pattern_length <> 0 then
+            fail "function %s requires %d fixed args + multiples of %d args, got %d" 
+              (show_func ()) fixed_count pattern_length total_args
+          else
+            let remaining_count = total_args - fixed_count in
+            let repeating_cycles = remaining_count / pattern_length in
+            
+           let repeated_args =
+              List.flatten (ExtList.List.init repeating_cycles (Fun.const repeating_pattern))
+            in
+            let all_expected_args = fixed_args @ repeated_args in
+            
+            (* use standard logic as for F *)
+            let args, ret = convert_args ret all_expected_args in
             let nullable = common_nullability args in
             undepend ret nullable, args
         in
