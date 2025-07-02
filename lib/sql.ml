@@ -818,7 +818,7 @@ let () =
   "json_search" |> monomorphic json_path [json; text; text];
   "json_search" |> add_fixed_then_pairs
     ~ret:(Typ json_path)
-    ~fixed_args:[Typ json; Typ text; Typ text; Typ text]
+    ~fixed_args:[Typ json; Typ (strict One_or_all); Typ text; Typ text]
     ~repeating_pattern:[Typ json_path];
   "json_remove" |> add_fixed_then_pairs
     ~ret:(Typ json)

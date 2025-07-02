@@ -1561,14 +1561,9 @@ let test_meta_insert_update _ =
 let test_json_and_fixed_then_pairs_fn_kind  = [
   tt "CREATE TABLE test46 ( id INT AUTO_INCREMENT PRIMARY KEY, data JSON)" [][];
 
-  (* "string" is valid JSON  *)
-  tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$', '\"new_val\"') WHERE id = 3" 
-  [] [];
-
-  (* bool is valid JSON  *)
-  tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', 'false') WHERE id = 3" 
-  [] [];
-
+  (* JSON_ARRAY_APPEND tests - уже есть *)
+  tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$', '\"new_val\"') WHERE id = 3" [] [];
+  tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', 'false') WHERE id = 3" [] [];
   tt {| SELECT JSON_ARRAY_APPEND(
        data, 
        '$[0].items',     123,          
@@ -1578,24 +1573,24 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
        '$[4].nested',    JSON_OBJECT('x', 'y')
      ) as result FROM test46 WHERE id = 3 
     |} [ attr' "result" Json_doc ] [];
-
-  (* NOT_A_VALID_JSON isn't valid JSON ofc *)
   wrong "UPDATE test46 SET data = JSON_ARRAY_APPEND('NOT_A_VALID_JSON', '$[0][1][2].three.four.five', 'this is a string') WHERE id = 3";
-
   tt {| UPDATE test46 SET data = JSON_ARRAY_APPEND(data, @path, @data :: Text) WHERE id = 3 |} [] [
     named "path" Json_path;
     named "data" Text;
   ];
 
+  (* JSON_REMOVE tests - уже есть *)
   tt "SELECT JSON_REMOVE(@json, '$[1]') as result;" [ attr' "result" Json_doc ][ named "json" Json_doc;];
   wrong "SELECT JSON_REMOVE(@json, 'invalid path') as result;";
+  tt "SELECT JSON_REMOVE(@json, @path) as result;" [ attr' "result" Json_doc ][ named "json" Json_doc; named "path" Json_path;];
+  
+  (* JSON_REMOVE multiple paths *)
+  tt "SELECT JSON_REMOVE(@json, '$.field1', '$.field2', '$.nested.prop') as result;" 
+    [ attr' "result" Json_doc ] [ named "json" Json_doc ];
+  tt "UPDATE test46 SET data = JSON_REMOVE(data, '$.old_field') WHERE id = 1" [] [];
 
-  tt "SELECT JSON_REMOVE(@json, @path) as result;" [ attr' "result" Json_doc ][ named "json" Json_doc; named "path" Json_path;]; 
-
-  tt "UPDATE test46 SET data = JSON_SET(data, '$.name', 'John') WHERE id = 1" 
-[] [];
-
-  (* Multiple path-value pairs with mixed types *)
+  (* JSON_SET tests - уже есть *)
+  tt "UPDATE test46 SET data = JSON_SET(data, '$.name', 'John') WHERE id = 1" [] [];
   tt {| UPDATE test46 SET data = JSON_SET(
         data, 
         '$.name',     'Alice',
@@ -1604,8 +1599,6 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
         '$.balance',  null
       ) WHERE id = 2 
     |} [] [];
-
-  (* JSON_SET in SELECT with mixed types including JSON function result *)
   tt {| SELECT JSON_SET(
         data,
         '$.user.name',    'Bob',
@@ -1613,17 +1606,105 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
         '$.user.count',   42
       ) as result FROM test46 WHERE id = 1
     |} [ attr' "result" Json_doc ] [];
-
-  (* JSON_SET with parameters *)
   tt {| UPDATE test46 SET data = JSON_SET(data, @path, @value :: Text, '$.timestamp', @time :: Int) WHERE id = 3 |} 
   [] [
     named "path" Json_path;
     named "value" Text;
     named "time" Int;
   ];
-
-  (* Should fail - invalid JSON document *)
   wrong "UPDATE test46 SET data = JSON_SET('INVALID_JSON', '$.field', 'value') WHERE id = 1";
+
+  (* JSON_EXTRACT tests - новые *)
+  tt "SELECT JSON_EXTRACT(@json, '$.name') as result;" 
+    [ attr' "result" Json_doc ] [ named "json" Json_doc ];
+  tt "SELECT JSON_EXTRACT(data, '$.user.id', '$.user.name') as result FROM test46;" 
+    [ attr' "result" Json_doc ] [];
+  tt "UPDATE test46 SET data = JSON_SET(data, '$.extracted', JSON_EXTRACT(data, '$.source')) WHERE id = 1" [] [];
+  tt "SELECT JSON_EXTRACT(@json, @path) as result;" 
+    [ attr' "result" Json_doc ] [ named "json" Json_doc; named "path" Json_path ];
+  wrong "SELECT JSON_EXTRACT('INVALID_JSON', '$.path') as result;";
+
+  (* JSON_OBJECT tests - новые *)
+  tt "SELECT JSON_OBJECT() as result;" [ attr' "result" Json_doc ] [];
+  tt "SELECT JSON_OBJECT('name', 'John') as result;" [ attr' "result" Json_doc ] [];
+  tt "SELECT JSON_OBJECT('name', 'Alice', 'age', 25, 'active', true) as result;" 
+    [ attr' "result" Json_doc ] [];
+  tt "UPDATE test46 SET data = JSON_OBJECT('user', JSON_OBJECT('id', 1, 'name', 'Bob')) WHERE id = 1" [] [];
+  tt "SELECT JSON_OBJECT(@key, @value :: Text) as result;" 
+    [ attr' "result" Json_doc ] [ named "key" Text; named "value" Text ];
+  tt "SELECT JSON_OBJECT('meta', JSON_EXTRACT(data, '$.info')) as result FROM test46;" 
+    [ attr' "result" Json_doc ] [];
+
+  (* JSON_ARRAY tests - новые *)  
+  tt "SELECT JSON_ARRAY() as result;" [ attr' "result" Json_doc ] [];
+  tt "SELECT JSON_ARRAY(1, 'hello', true, null) as result;" [ attr' "result" Json_doc ] [];
+  tt "UPDATE test46 SET data = JSON_ARRAY(JSON_OBJECT('id', 1), JSON_OBJECT('id', 2)) WHERE id = 1" [] [];
+  tt "SELECT JSON_ARRAY(@val1 :: Int, @val2 :: Text, @val3 :: Bool) as result;" 
+    [ attr' "result" Json_doc ] [ 
+      named "val1" Int; 
+      named "val2" Text; 
+      named "val3" Bool 
+    ];
+
+  (* JSON_CONTAINS tests - новые *)
+  tt "SELECT JSON_CONTAINS(@json, @search :: Text) as result;" 
+    [ attr' "result" Bool ] [ named "json" Json_doc; named "search" Text ];
+  tt "SELECT JSON_CONTAINS(data, 'target_value') as found FROM test46;" 
+    [ attr' "found" Bool ] [];
+  tt "SELECT JSON_CONTAINS(@json, @search :: Int, @path) as result;" 
+    [ attr' "result" Bool ] [ 
+      named "json" Json_doc; 
+      named "search" Int; 
+      named "path" Json_path 
+    ];
+  tt "SELECT JSON_CONTAINS(data, JSON_OBJECT('key', 'value'), '$.objects') as found FROM test46;" 
+    [ attr' "found" Bool ] [];
+  wrong "SELECT JSON_CONTAINS('INVALID_JSON', 'search') as result;";
+
+  (* JSON_UNQUOTE tests - новые *)
+  tt "SELECT JSON_UNQUOTE(@json_val) as result;" 
+    [ attr' "result" Text ] [ named "json_val" Json_doc ];
+  tt "SELECT JSON_UNQUOTE(JSON_EXTRACT(data, '$.name')) as name FROM test46;" 
+    [ attr' "name" Text ] [];
+  tt "UPDATE test46 SET name = JSON_UNQUOTE(JSON_EXTRACT(data, '$.user.name')) WHERE id = 1" [] [];
+  wrong "SELECT JSON_UNQUOTE('not a json value') as result;";
+
+  (* JSON_SEARCH tests - уже правильные, добавим еще *)
+  tt "SELECT JSON_SEARCH(@json, 'one', @pattern) as result;" 
+    [ attr' "result" Text ] [ 
+      named "json" Json_doc; 
+      named "pattern" Text 
+    ];
+  tt "SELECT JSON_SEARCH(data, 'all', 'search%', '\\\\', '$.users') as paths FROM test46;" 
+    [ attr' "paths" Text ] [];
+  tt "SELECT JSON_SEARCH(@json, 'one', @pattern, @escape, @path1, @path2) as result;" 
+    [ attr' "result" Text ] [ 
+      named "json" Json_doc; 
+      named "pattern" Text;
+      named "escape" Text;
+      named "path1" Json_path;
+      named "path2" Json_path;
+    ];
+
+  (* Комбинированные тесты *)
+  tt {| UPDATE test46 SET data = JSON_SET(
+        data,
+        '$.processed', JSON_ARRAY(
+          JSON_OBJECT('id', 1, 'status', 'active'),
+          JSON_OBJECT('id', 2, 'status', 'inactive')
+        ),
+        '$.meta', JSON_OBJECT('version', 2, 'updated', true)
+      ) WHERE id = 1 |} [] [];
+
+  tt {| SELECT 
+        JSON_UNQUOTE(JSON_EXTRACT(data, '$.name')) as name,
+        JSON_CONTAINS(data, 'admin', '$.roles') as is_admin,
+        JSON_SEARCH(data, 'one', 'test%') as test_path
+      FROM test46 WHERE id = 1 |} [
+        attr' "name" Text;
+        attr' "is_admin" Bool; 
+        attr' "test_path" Json_path;
+      ] [];
 ]
   
 
