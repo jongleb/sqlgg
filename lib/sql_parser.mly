@@ -573,7 +573,7 @@ sql_type_flavor: T_INTEGER UNSIGNED? ZEROFILL? { Int }
                | T_BOOLEAN { Bool }
                | T_DATETIME | YEAR | DATE | TIME | TIMESTAMP { Datetime }
                | T_UUID { Blob }
-               | T_JSON { Json }
+               | T_JSON { Json_doc }
 
 binary: T_BLOB | BINARY | BINARY VARYING { }
 text: T_TEXT | T_TEXT LPAREN INTEGER RPAREN | CHARACTER { }
@@ -600,7 +600,7 @@ compound_op:
 
 strict_type:
     | T_TEXT     { Text }
-    | T_JSON     { Json }
+    | T_JSON     { Json_doc }
     | T_BLOB     { Blob }
     | T_INTEGER  { Int }
     | T_FLOAT    { Float }

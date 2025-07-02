@@ -1569,16 +1569,61 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
   tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', 'false') WHERE id = 3" 
   [] [];
 
-  (* NOT_A_VALID_JSON isn't valid JSON ofc *)
-  wrong "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', 'NOT_A_VALID_JSON') WHERE id = 3";
+  tt {| SELECT JSON_ARRAY_APPEND(
+       data, 
+       '$[0].items',     123,          
+       '$[1].props',     '"hello"',       
+       '$[2].flags',     true,          
+       '$[3].meta',      null,         
+       '$[4].nested',    JSON_OBJECT('x', 'y')
+     ) as result FROM test46 WHERE id = 3 
+    |} [ attr' "result" Json_doc ] [];
 
   (* NOT_A_VALID_JSON isn't valid JSON ofc *)
-  tt {| UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', '{"absolutely": "valid_json"}') WHERE id = 3 |} [] [];
+  wrong "UPDATE test46 SET data = JSON_ARRAY_APPEND('NOT_A_VALID_JSON', '$[0][1][2].three.four.five', 'this is a string') WHERE id = 3";
 
-  tt {| UPDATE test46 SET data = JSON_ARRAY_APPEND(data, @path, @data) WHERE id = 3 |} [] [
+  tt {| UPDATE test46 SET data = JSON_ARRAY_APPEND(data, @path, @data :: Text) WHERE id = 3 |} [] [
     named "path" Json_path;
-    named "data" Json;
+    named "data" Text;
   ];
+
+  tt "SELECT JSON_REMOVE(@json, '$[1]') as result;" [ attr' "result" Json_doc ][ named "json" Json_doc;];
+  wrong "SELECT JSON_REMOVE(@json, 'invalid path') as result;";
+
+  tt "SELECT JSON_REMOVE(@json, @path) as result;" [ attr' "result" Json_doc ][ named "json" Json_doc; named "path" Json_path;]; 
+
+  tt "UPDATE test46 SET data = JSON_SET(data, '$.name', 'John') WHERE id = 1" 
+[] [];
+
+  (* Multiple path-value pairs with mixed types *)
+  tt {| UPDATE test46 SET data = JSON_SET(
+        data, 
+        '$.name',     'Alice',
+        '$.age',      25,
+        '$.active',   true,
+        '$.balance',  null
+      ) WHERE id = 2 
+    |} [] [];
+
+  (* JSON_SET in SELECT with mixed types including JSON function result *)
+  tt {| SELECT JSON_SET(
+        data,
+        '$.user.name',    'Bob',
+        '$.user.props',   JSON_OBJECT('theme', 'dark'),
+        '$.user.count',   42
+      ) as result FROM test46 WHERE id = 1
+    |} [ attr' "result" Json_doc ] [];
+
+  (* JSON_SET with parameters *)
+  tt {| UPDATE test46 SET data = JSON_SET(data, @path, @value :: Text, '$.timestamp', @time :: Int) WHERE id = 3 |} 
+  [] [
+    named "path" Json_path;
+    named "value" Text;
+    named "time" Int;
+  ];
+
+  (* Should fail - invalid JSON document *)
+  wrong "UPDATE test46 SET data = JSON_SET('INVALID_JSON', '$.field', 'value') WHERE id = 1";
 ]
   
 

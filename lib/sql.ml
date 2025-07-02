@@ -58,7 +58,8 @@ struct
     | Union of union
     | StringLiteral of string
     | Json_path
-    | Json
+    | One_or_all
+    | Json_doc
     | Any (* FIXME - Top and Bottom ? *)
     [@@deriving eq, show{with_path=false}]
     (* TODO NULL is currently typed as Any? which actually is a misnormer *)
@@ -100,6 +101,8 @@ struct
 
   let is_unit = function { t = Unit _; _ } -> true | _ -> false
 
+  let is_one_or_all s = List.mem s ["one"; "all"]
+
   (** @return (subtype, supertype) *)
   let order_kind x y =  
     match x, y with
@@ -128,13 +131,15 @@ struct
     | Int, Datetime | Datetime, Int -> `Order (Int, Datetime)
     | Text, Datetime | Datetime, Text -> `Order (Datetime, Text)
 
-    | Json, StringLiteral x | StringLiteral x, Json -> 
+    | Json_doc, StringLiteral x | StringLiteral x, Json_doc -> 
       begin match Yojson.Basic.from_string x with
-        | _ -> `Order (StringLiteral x, Json)
+        | _ -> `Order (StringLiteral x, Json_doc)
         | exception Yojson.Json_error _ -> `No
       end
     | (Json_path, StringLiteral x | StringLiteral x, Json_path) 
         when Json_path.is_valid_json_path_string x -> `Order (StringLiteral x, Json_path)
+
+    | (One_or_all, StringLiteral x | StringLiteral x, One_or_all) when is_one_or_all x -> `Order (StringLiteral x, One_or_all)
 
     | _ -> `No
     
@@ -712,7 +717,7 @@ let () =
   let int = strict Int in
   let float = strict Float in
   let text = strict Text in
-  let json = strict Json in
+  let json = strict Json_doc in
   let json_path = strict Json_path in
   let datetime = strict Datetime in
   let bool = strict Bool in
@@ -754,16 +759,82 @@ let () =
   "is_uuid" |> monomorphic bool [text];
   ["date_add"; "date_sub"] ||> monomorphic datetime [datetime; datetime];
   "date_format" |> monomorphic text [datetime; text];
-  "json_remove" |> multi ~ret:(Typ text) (Typ text);
-  "json_array" |> multi ~ret:(Typ text) (Typ text);
-  "json_object" |> multi ~ret:(Typ text) (Typ text);
-  "json_contains" |> multi ~ret:(Typ bool) (Typ text);
-  "json_unquote" |> monomorphic text [text];
+  "makedate" |> monomorphic datetime [int; int];
+  (* 
+     Any is used instead of Var because MySQL JSON_ARRAY_APPEND:
+     
+     1. Accepts ANY data type as values to append
+     2. Preserves types as-is in JSON:
+        - Numbers remain json numbers (123 → 123)
+        - Strings remain json strings ("text" → "text")  
+        - Booleans remain json booleans (true → true)
+        - NULL remains null
+        - JSON-like strings remain STRINGS: '{"a":1}' → "{\"a\":1}"
+     3. Only results of JSON functions become JSON objects:
+        JSON_ARRAY_APPEND(arr, '$', JSON_OBJECT('key', 'value'))  -- JSON object
+        JSON_ARRAY_APPEND(arr, '$', '{"key": "value"}')           -- string!
+     
+     4. CRITICAL: Each value can be of DIFFERENT TYPE in a single call
+     
+     Example with mixed types (valid MySQL):
+     JSON_ARRAY_APPEND(
+       data, 
+       '$[0].items',     123,           -- number
+       '$[1].props',     "hello",       -- string  
+       '$[2].flags',     true,          -- boolean
+       '$[3].meta',      null,          -- null
+       '$[4].nested',    JSON_OBJECT('x', 'y')  -- JSON object
+     )
+     
+     If we used Var 0 instead of Any:
+     ~repeating_pattern:[Typ json_path; Var 0]
+     
+     Then ALL values would be unified to the same type. For example:
+     - First value is 123 (Int) → Var 0 becomes Int
+     - Second value must also be Int → "hello" would fail type check
+     - Third value must also be Int → true would fail type check
+     
+     This would incorrectly reject valid MySQL queries where different 
+     JSON paths receive different value types.
+     
+     Alternative approach would be to generate fresh Var for each cycle
+     in assign_types, but this
+     is essentially equivalent to Any because in our type system:
+     | Any, t | t, Any -> `Order (t, t)
+     
+     So Any already accepts any type and unifies correctly. 
+     
+     MySQL doesn't enforce type consistency across different paths in
+     the same JSON_ARRAY_APPEND call - each path-value pair is independent.
+     
+     Therefore Any is the only correct choice to represent this behavior.
+
+     The same logic applies to other json functions above
+  *)
   "json_array_append" |> add_fixed_then_pairs
     ~ret:(Typ json)
-    ~fixed_args:[Typ json; Typ json_path; Typ json]
-    ~repeating_pattern:[Typ json_path; Typ json;];
-  "json_search" |> multi ~ret:(Typ text) (Typ text);
-  "json_set" |> add 3 (F (Typ text, [Typ text; Typ text; Var 0]));
-  "makedate" |> monomorphic datetime [int; int];
+    ~fixed_args:[Typ json; Typ json_path; Typ (depends Any)]
+    ~repeating_pattern:[Typ json_path; Typ (depends Any)];
+  "json_search" |> monomorphic json_path [json; text; text];
+  "json_search" |> add_fixed_then_pairs
+    ~ret:(Typ json_path)
+    ~fixed_args:[Typ json; Typ text; Typ text; Typ text]
+    ~repeating_pattern:[Typ json_path];
+  "json_remove" |> add_fixed_then_pairs
+    ~ret:(Typ json)
+    ~fixed_args:[Typ json; Typ json_path]
+    ~repeating_pattern:[Typ json_path];   
+  "json_set" |> add_fixed_then_pairs
+    ~ret:(Typ json)
+    ~fixed_args:[Typ json; Typ json_path; Typ (depends Any)]
+    ~repeating_pattern:[Typ json_path; Typ (depends Any)];
+  "json_array" |> multi ~ret:(Typ json) (Typ (depends Any));
+  "json_object" |> add 0 (F (Typ json, []));
+  "json_object" |> add_fixed_then_pairs
+    ~ret:(Typ json)
+    ~fixed_args:[Typ text; Typ (depends Any)]
+    ~repeating_pattern:[Typ text; Typ (depends Any)]; 
+  "json_contains" |> monomorphic bool [json; depends Any];
+  "json_contains" |> monomorphic bool [json; depends Any; json_path];
+  "json_unquote" |> monomorphic text [json];
   ()

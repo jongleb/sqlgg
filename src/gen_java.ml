@@ -42,10 +42,11 @@ let as_lang_type t =
   | Bool -> "boolean"
   | Decimal -> "float" (* BigDecimal? *)
   | Datetime -> "Timestamp"
-  | Json_path -> "String"
   | StringLiteral _ -> "String"
   | Union _
-  | Json
+  | Json_doc
+  | One_or_all 
+  | Json_path
   | Unit _ -> assert false
 
 let as_api_type = String.capitalize_ascii $ as_lang_type

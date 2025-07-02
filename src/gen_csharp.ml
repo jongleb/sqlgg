@@ -42,11 +42,12 @@ let as_api_type t =
   | Decimal -> "Decimal"
   | Datetime -> "Datetime"
   | Any -> "String"
+  | StringLiteral _ -> "String"
   | Union _
   | Json_path
-  | StringLiteral _ -> "String"
-  | Json
-  | Unit _ -> assert false
+  | One_or_all
+  | Json_doc
+  | Unit _  -> assert false
 
 let as_lang_type = as_api_type
 
