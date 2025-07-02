@@ -1561,18 +1561,24 @@ let test_meta_insert_update _ =
 let test_json_and_fixed_then_pairs_fn_kind  = [
   tt "CREATE TABLE test46 ( id INT AUTO_INCREMENT PRIMARY KEY, data JSON)" [][];
 
+  (* "string" is valid JSON  *)
   tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$', '\"new_val\"') WHERE id = 3" 
   [] [];
 
+  (* bool is valid JSON  *)
   tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', 'false') WHERE id = 3" 
   [] [];
 
-  wrong "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', 'NOT_A_VALID_JSON') WHERE id = 3" 
+  (* NOT_A_VALID_JSON isn't valid JSON ofc *)
+  wrong "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', 'NOT_A_VALID_JSON') WHERE id = 3";
 
-  (* tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$', @json) WHERE id = 3" 
-  [] [];
+  (* NOT_A_VALID_JSON isn't valid JSON ofc *)
+  tt {| UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', '{"absolutely": "valid_json"}') WHERE id = 3 |} [] [];
 
-  tt "CREATE TABLE test47 ( id INT AUTO_INCREMENT PRIMARY KEY, data JSON NOT NULL)" [][]; *)
+  tt {| UPDATE test46 SET data = JSON_ARRAY_APPEND(data, @path, @data) WHERE id = 3 |} [] [
+    named "path" Json_path;
+    named "data" Json;
+  ];
 ]
   
 

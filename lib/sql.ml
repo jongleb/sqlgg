@@ -128,12 +128,13 @@ struct
     | Int, Datetime | Datetime, Int -> `Order (Int, Datetime)
     | Text, Datetime | Datetime, Text -> `Order (Datetime, Text)
 
-    | Json, StringLiteral x -> 
+    | Json, StringLiteral x | StringLiteral x, Json -> 
       begin match Yojson.Basic.from_string x with
         | _ -> `Order (StringLiteral x, Json)
         | exception Yojson.Json_error _ -> `No
       end
-    | Json_path, StringLiteral x when Json_path.is_valid_json_path_string x -> `Order (StringLiteral x, Json_path)
+    | (Json_path, StringLiteral x | StringLiteral x, Json_path) 
+        when Json_path.is_valid_json_path_string x -> `Order (StringLiteral x, Json_path)
 
     | _ -> `No
     
@@ -206,7 +207,7 @@ struct
   | Comparison
   | Ret of t (* _ -> t *) (* TODO eliminate *)
   | F of tyvar * tyvar list
-  | FixedThenPairs of tyvar * tyvar list * tyvar list
+  | FixedThenPairs of { ret: tyvar; fixed_args: tyvar list; repeating_pattern: tyvar list }
   (* For functions with fixed initial args + optional repeating pattern
      Example: JSON_ARRAY_APPEND(json_doc, path, val[, path, val] ...)
      - return_type: what function returns
@@ -229,11 +230,11 @@ struct
   | F (ret, args) -> fprintf pp "%s -> %s" (String.concat " -> " @@ List.map string_of_tyvar args) (string_of_tyvar ret)
   | Multi (ret, each_arg) | Coalesce (ret, each_arg) -> fprintf pp "{ %s }+ -> %s" (string_of_tyvar each_arg) (string_of_tyvar ret)
   | Comparison -> fprintf pp "'a -> 'a -> %s" (show_kind Bool)
-  | FixedThenPairs (ret, fixed, repeating) ->
-      let fixed_str = String.concat " -> " @@ List.map string_of_tyvar fixed in
-      let repeating_str = String.concat ", " @@ List.map string_of_tyvar repeating in
-      fprintf pp "%s -> [%s]* -> %s" 
-        fixed_str 
+  | FixedThenPairs { ret; fixed_args; repeating_pattern } ->
+      let fixed_str = String.concat " -> " @@ List.map string_of_tyvar fixed_args in
+      let repeating_str = String.concat ", " @@ List.map string_of_tyvar repeating_pattern in
+      fprintf pp "%s -> [%s]* -> %s"
+        fixed_str
         repeating_str
         (string_of_tyvar ret)
 
@@ -700,7 +701,7 @@ let monomorphic ret args name = add (List.length args) Type.(monomorphic ret arg
 let multi_polymorphic name = add_multi Type.(Multi (Var 0, Var 0)) name
 let multi ~ret args name = add_multi Type.(Multi (ret, args)) name
 let add_fixed_then_pairs ~ret ~fixed_args ~repeating_pattern name = 
-    add_multi (Type.FixedThenPairs (ret, fixed_args, repeating_pattern)) name
+    add_multi (Type.FixedThenPairs { ret; fixed_args; repeating_pattern }) name
 
 end
 
@@ -712,6 +713,7 @@ let () =
   let float = strict Float in
   let text = strict Text in
   let json = strict Json in
+  let json_path = strict Json_path in
   let datetime = strict Datetime in
   let bool = strict Bool in
   "count" |> add 0 (Agg Count); (* count( * ) - asterisk is treated as no parameters in parser *)
@@ -759,8 +761,8 @@ let () =
   "json_unquote" |> monomorphic text [text];
   "json_array_append" |> add_fixed_then_pairs
     ~ret:(Typ json)
-    ~fixed_args:[Typ json; Typ text; Typ json]
-    ~repeating_pattern:[Typ text; Typ json;];
+    ~fixed_args:[Typ json; Typ json_path; Typ json]
+    ~repeating_pattern:[Typ json_path; Typ json;];
   "json_search" |> multi ~ret:(Typ text) (Typ text);
   "json_set" |> add 3 (F (Typ text, [Typ text; Typ text; Var 0]));
   "makedate" |> monomorphic datetime [int; int];

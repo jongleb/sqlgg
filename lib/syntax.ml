@@ -563,7 +563,7 @@ and assign_types env expr =
             let args, ret = convert_args (Typ (depends Bool)) [Var 0; Var 0] in
             let nullable = common_nullability args in
             undepend ret nullable, args
-        | FixedThenPairs (ret, fixed_args, repeating_pattern), _ ->
+        | FixedThenPairs { ret; fixed_args; repeating_pattern }, _ ->
           let fixed_count = List.length fixed_args in
           let pattern_length = List.length repeating_pattern in
           let total_args = List.length types in
