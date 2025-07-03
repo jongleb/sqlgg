@@ -44,7 +44,7 @@ let as_lang_type t =
   | Datetime -> "Timestamp"
   | StringLiteral _ -> "String"
   | Union _
-  | Json_doc
+  | Json
   | One_or_all 
   | Json_path
   | Unit _ -> assert false

@@ -59,7 +59,7 @@ struct
     | StringLiteral of string
     | Json_path
     | One_or_all
-    | Json_doc
+    | Json
     | Any (* FIXME - Top and Bottom ? *)
     [@@deriving eq, show{with_path=false}]
     (* TODO NULL is currently typed as Any? which actually is a misnormer *)
@@ -131,9 +131,9 @@ struct
     | Int, Datetime | Datetime, Int -> `Order (Int, Datetime)
     | Text, Datetime | Datetime, Text -> `Order (Datetime, Text)
 
-    | Json_doc, StringLiteral x | StringLiteral x, Json_doc -> 
+    | Json, StringLiteral x | StringLiteral x, Json -> 
       begin match Yojson.Basic.from_string x with
-        | _ -> `Order (StringLiteral x, Json_doc)
+        | _ -> `Order (StringLiteral x, Json)
         | exception Yojson.Json_error _ -> `No
       end
     | (Json_path, StringLiteral x | StringLiteral x, Json_path) 
@@ -731,7 +731,7 @@ let () =
   let int = strict Int in
   let float = strict Float in
   let text = strict Text in
-  let json = strict Json_doc in
+  let json = strict Json in
   let json_path = strict Json_path in
   let datetime = strict Datetime in
   let bool = strict Bool in
@@ -800,7 +800,7 @@ let () =
         '$.user.age',     25,                   -- Int
         '$.user.active',  true,                 -- Bool
         '$.user.score',   99.5,                 -- Float
-        '$.user.meta',    JSON_OBJECT('x', 1)   -- Json_doc
+        '$.user.meta',    JSON_OBJECT('x', 1)   -- Json
       )
    
    WHY NOT Var 0:
@@ -817,7 +817,7 @@ let () =
      '$[1].props',     "hello",       -- Text  
      '$[2].flags',     true,          -- Bool
      '$[3].meta',      null,          -- Null
-     '$[4].nested',    JSON_OBJECT('x', 'y')  -- Json_doc
+     '$[4].nested',    JSON_OBJECT('x', 'y')  -- Json
    )
    
    With fresh Var this would be:

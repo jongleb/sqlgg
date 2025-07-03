@@ -1571,19 +1571,19 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
        '$[3].meta',      null,         
        '$[4].nested',    JSON_OBJECT('x', 'y')
      ) as result FROM test46 WHERE id = 3 
-    |} [ attr' "result" Json_doc ] [];
+    |} [ attr' "result" Json ] [];
   wrong "UPDATE test46 SET data = JSON_ARRAY_APPEND('NOT_A_VALID_JSON', '$[0][1][2].three.four.five', 'this is a string') WHERE id = 3";
   tt {| UPDATE test46 SET data = JSON_ARRAY_APPEND(data, @path, @data :: Text) WHERE id = 3 |} [] [
     named "path" Json_path;
     named "data" Text;
   ];
 
-  tt "SELECT JSON_REMOVE(@json, '$[1]') as result" [ attr' "result" Json_doc ][ named "json" Json_doc;];
+  tt "SELECT JSON_REMOVE(@json, '$[1]') as result" [ attr' "result" Json ][ named "json" Json;];
   wrong "SELECT JSON_REMOVE(@json, 'invalid path') as result";
-  tt "SELECT JSON_REMOVE(@json, @path) as result" [ attr' "result" Json_doc ][ named "json" Json_doc; named "path" Json_path;];
+  tt "SELECT JSON_REMOVE(@json, @path) as result" [ attr' "result" Json ][ named "json" Json; named "path" Json_path;];
   
   tt "SELECT JSON_REMOVE(@json, '$.field1', '$.field2', '$.nested.prop') as result" 
-    [ attr' "result" Json_doc ] [ named "json" Json_doc ];
+    [ attr' "result" Json ] [ named "json" Json ];
   tt "UPDATE test46 SET data = JSON_REMOVE(data, '$.old_field') WHERE id = 1" [] [];
 
   tt "UPDATE test46 SET data = JSON_SET(data, '$.name', 'John') WHERE id = 1" [] [];
@@ -1601,7 +1601,7 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
         '$.user.props',   JSON_OBJECT('theme', 'dark'),
         '$.user.count',   42
       ) as result FROM test46 WHERE id = 1
-    |} [ attr' "result" Json_doc ] [];
+    |} [ attr' "result" Json ] [];
   tt {| UPDATE test46 SET data = JSON_SET(data, @path, @value :: Text, '$.timestamp', @time :: Int) WHERE id = 3 |} 
   [] [
     named "path" Json_path;
@@ -1610,28 +1610,28 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
   ];
   wrong "UPDATE test46 SET data = JSON_SET('INVALID_JSON', '$.field', 'value') WHERE id = 1";
 
-  tt "SELECT JSON_OBJECT() as result" [ attr' "result" Json_doc ] [];
-  tt "SELECT JSON_OBJECT('name', 'John') as result" [ attr' "result" Json_doc ] [];
+  tt "SELECT JSON_OBJECT() as result" [ attr' "result" Json ] [];
+  tt "SELECT JSON_OBJECT('name', 'John') as result" [ attr' "result" Json ] [];
   tt "SELECT JSON_OBJECT('name', 'Alice', 'age', 25, 'active', true) as result" 
-    [ attr' "result" Json_doc ] [];
+    [ attr' "result" Json ] [];
   tt "UPDATE test46 SET data = JSON_OBJECT('user', JSON_OBJECT('id', 1, 'name', 'Bob')) WHERE id = 1" [] [];
   tt "SELECT JSON_OBJECT(@key, @value :: Text) as result" 
-    [ attr' "result" Json_doc ] [ named "key" Text; named "value" Text ];
+    [ attr' "result" Json ] [ named "key" Text; named "value" Text ];
   tt "SELECT JSON_OBJECT('meta', JSON_EXTRACT(data, '$.info')) as result FROM test46" 
-    [ attr' "result" Json_doc ] [];
+    [ attr' "result" Json ] [];
 
-  tt "SELECT JSON_ARRAY() as result" [ attr' "result" Json_doc ] [];
-  tt "SELECT JSON_ARRAY(1, 'hello', true, null) as result" [ attr' "result" Json_doc ] [];
+  tt "SELECT JSON_ARRAY() as result" [ attr' "result" Json ] [];
+  tt "SELECT JSON_ARRAY(1, 'hello', true, null) as result" [ attr' "result" Json ] [];
   tt "UPDATE test46 SET data = JSON_ARRAY(JSON_OBJECT('id', 1), JSON_OBJECT('id', 2)) WHERE id = 1" [] [];
   tt "SELECT JSON_ARRAY(@val1 :: Int, @val2 :: Text, @val3 :: Bool) as result" 
-    [ attr' "result" Json_doc ] [ 
+    [ attr' "result" Json ] [ 
       named "val1" Int; 
       named "val2" Text; 
       named "val3" Bool 
     ];
 
   tt "SELECT JSON_CONTAINS(@json, @search) as result" 
-    [ attr' "result" Bool ] [ named "json" Json_doc; named "search" Json_doc ];
+    [ attr' "result" Bool ] [ named "json" Json; named "search" Json ];
   tt {| SELECT JSON_CONTAINS(data, '"target_value"') as found FROM test46 |}
     [ attr' "found" Bool ] [];
   wrong "SELECT JSON_CONTAINS(@json, @search :: Int, @path) as result";
@@ -1646,7 +1646,7 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
   (* tt "SELECT JSON_CONTAINS('{\"a\": 2}', NULL) as result" [][]; *)
 
   tt "SELECT JSON_UNQUOTE(@json_val) as result" 
-    [ attr' "result" Text ] [ named "json_val" Json_doc ];
+    [ attr' "result" Text ] [ named "json_val" Json ];
   tt "SELECT JSON_UNQUOTE(JSON_EXTRACT(data, '$.name')) as name FROM test46" 
     [ attr' "name" Text ] [];
 
@@ -1654,14 +1654,14 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
 
   tt "SELECT JSON_SEARCH(@json, 'one', @pattern) as result" 
     [ attr' "result" Json_path ] [ 
-      named "json" Json_doc; 
+      named "json" Json; 
       named "pattern" Text 
     ];
   tt "SELECT JSON_SEARCH(data, 'all', 'search%', '\\\\', '$.users') as paths FROM test46" 
     [ attr' "paths" Json_path ] [];
   tt "SELECT JSON_SEARCH(@json, 'one', @pattern, @escape, @path1, @path2) as result" 
     [ attr' "result" Json_path ] [ 
-      named "json" Json_doc; 
+      named "json" Json; 
       named "pattern" Text;
       named "escape" Text;
       named "path1" Json_path;
