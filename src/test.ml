@@ -1687,7 +1687,7 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
         attr' "test_path" Json_path;
       ] [];
 ]
-  
+
 
 let run () =
   Gen.params_mode := Some Named;
