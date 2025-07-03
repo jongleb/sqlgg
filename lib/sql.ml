@@ -131,17 +131,41 @@ struct
     | Int, Datetime | Datetime, Int -> `Order (Int, Datetime)
     | Text, Datetime | Datetime, Text -> `Order (Datetime, Text)
 
+    (*  JSON literal validation:
+       sqlgg can statically validate JSON string literals at compile time:
+       
+       Valid JSON literals are accepted:
+       '{"valid": "example"}' -> StringLiteral is subtype of Json
+       '["array", "example"]' -> StringLiteral is subtype of Json
+       '"simple string"'      -> StringLiteral is subtype of Json
+       
+       Invalid JSON literals are rejected:
+       '{NOTVALID|}' -> No subtype relation, compile error
+       '{missing: quotes}' -> No subtype relation, compile error
+       
+       However, sqlgg cannot validate JSON strings constructed dynamically:
+       CONCAT('{"key": "', user_input, '"}') -> Text type, no validation
+       CONCAT('{"key": "', column_name, '"}') -> Text type, no validation (column value unknown)
+       JSON_EXTRACT(dynamic_column, '$.path') -> Json type, runtime validation
+       
+       This static validation helps catch JSON syntax errors early in development
+       while still allowing dynamic JSON construction when needed. 
+    *)
+
     | Json, StringLiteral x | StringLiteral x, Json -> 
       begin match Yojson.Basic.from_string x with
         | _ -> `Order (StringLiteral x, Json)
         | exception Yojson.Json_error _ -> `No
       end
     | Json, Text | Text, Json -> `Order (Json, Text)
+
     | (Json_path, StringLiteral x | StringLiteral x, Json_path) 
         when Json_path.is_valid_json_path_string x -> `Order (StringLiteral x, Json_path)
+    | Json_path, Text | Text, Json_path -> `Order (Json_path, Text)
 
     | (One_or_all, StringLiteral x | StringLiteral x, One_or_all) when is_one_or_all x -> `Order (StringLiteral x, One_or_all)
     | Json, One_or_all | One_or_all, Json -> `Order (One_or_all, Text)
+
 
     | _ -> `No
     
@@ -241,7 +265,6 @@ struct
   | Coalesce (ret, each_arg) -> fprintf pp "{ %s }+ -> %s" (string_of_tyvar each_arg) (string_of_tyvar ret)
   | Comparison -> fprintf pp "'a -> 'a -> %s" (show_kind Bool)
   | Multi { ret; fixed_args = []; repeating_pattern = [single_arg] } ->
-      (* Старое поведение Multi *)
       fprintf pp "{ %s }+ -> %s" (string_of_tyvar single_arg) (string_of_tyvar ret)
   | Multi { ret; fixed_args; repeating_pattern } ->
       let fixed_str = match fixed_args with
