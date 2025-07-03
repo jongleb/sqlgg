@@ -834,7 +834,7 @@ let () =
     ~ret:(Typ json)
     ~fixed_args:[Typ text; Typ (depends Any)]
     ~repeating_pattern:[Typ text; Typ (depends Any)]; 
-  "json_contains" |> monomorphic bool [json; depends Any];
-  "json_contains" |> monomorphic bool [json; depends Any; json_path];
+  "json_contains" |> add 2 (F (Typ bool, [Typ json; Typ json]));
+  "json_contains" |> add 3 (F (Typ bool, [Typ json; Typ json; Typ json_path]));
   "json_unquote" |> monomorphic text [json];
   ()

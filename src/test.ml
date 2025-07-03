@@ -1630,19 +1630,20 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
       named "val3" Bool 
     ];
 
-  tt "SELECT JSON_CONTAINS(@json, @search :: Text) as result" 
-    [ attr' "result" Bool ] [ named "json" Json_doc; named "search" Text ];
-  tt "SELECT JSON_CONTAINS(data, 'target_value') as found FROM test46" 
+  tt "SELECT JSON_CONTAINS(@json, @search) as result" 
+    [ attr' "result" Bool ] [ named "json" Json_doc; named "search" Json_doc ];
+  tt {| SELECT JSON_CONTAINS(data, '"target_value"') as found FROM test46 |}
     [ attr' "found" Bool ] [];
-  tt "SELECT JSON_CONTAINS(@json, @search :: Int, @path) as result" 
-    [ attr' "result" Bool ] [ 
-      named "json" Json_doc; 
-      named "search" Int; 
-      named "path" Json_path 
-    ];
+  wrong "SELECT JSON_CONTAINS(@json, @search :: Int, @path) as result";
+  
   tt "SELECT JSON_CONTAINS(data, JSON_OBJECT('key', 'value'), '$.objects') as found FROM test46" 
     [ attr' "found" Bool ] [];
+
   wrong "SELECT JSON_CONTAINS('INVALID_JSON', 'search') as result";
+
+  wrong "SELECT JSON_CONTAINS('{\"a\": 2}', 'INVALID') as result";
+
+  (* tt "SELECT JSON_CONTAINS('{\"a\": 2}', NULL) as result" [][]; *)
 
   tt "SELECT JSON_UNQUOTE(@json_val) as result" 
     [ attr' "result" Text ] [ named "json_val" Json_doc ];
@@ -1678,7 +1679,7 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
 
   tt {| SELECT 
         JSON_UNQUOTE(JSON_EXTRACT(data, '$.name')) as name,
-        JSON_CONTAINS(data, 'admin', '$.roles') as is_admin,
+        JSON_CONTAINS(data, '"admin"', '$.roles') as is_admin,
         JSON_SEARCH(data, 'one', 'test%') as test_path
       FROM test46 WHERE id = 1 |} [
         attr' "name" Text;
