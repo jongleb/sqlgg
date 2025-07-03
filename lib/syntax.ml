@@ -515,7 +515,7 @@ and assign_types env expr =
                 let remaining_count = total_args - fixed_count in
                 let repeating_cycles = remaining_count / pattern_length in
                 let repeated_args =
-                  List.flatten (ExtList.List.init repeating_cycles (Fun.const repeating_pattern))
+                  List.flatten (List.init repeating_cycles (Fun.const repeating_pattern))
                 in
                 F (ret, fixed_args @ repeated_args)
           | x -> x

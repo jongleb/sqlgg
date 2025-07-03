@@ -775,55 +775,62 @@ let () =
   "date_format" |> monomorphic text [datetime; text];
   "makedate" |> monomorphic datetime [int; int];
   (* 
-     Any is used instead of Var because MySQL JSON_ARRAY_APPEND:
-     
-     1. Accepts ANY data type as values to append
-     2. Preserves types as-is in JSON:
-        - Numbers remain json numbers (123 → 123)
-        - Strings remain json strings ("text" → "text")  
-        - Booleans remain json booleans (true → true)
-        - NULL remains null
-        - JSON-like strings remain STRINGS: '{"a":1}' → "{\"a\":1}"
-     3. Only results of JSON functions become JSON objects:
-        JSON_ARRAY_APPEND(arr, '$', JSON_OBJECT('key', 'value'))  -- JSON object
-        JSON_ARRAY_APPEND(arr, '$', '{"key": "value"}')           -- string!
-     
-     4. CRITICAL: Each value can be of DIFFERENT TYPE in a single call
-     
-     Example with mixed types (valid MySQL):
-     JSON_ARRAY_APPEND(
-       data, 
-       '$[0].items',     123,           -- number
-       '$[1].props',     "hello",       -- string  
-       '$[2].flags',     true,          -- boolean
-       '$[3].meta',      null,          -- null
-       '$[4].nested',    JSON_OBJECT('x', 'y')  -- JSON object
-     )
-     
-     If we used Var 0 instead of Any:
-     ~repeating_pattern:[Typ json_path; Var 0]
-     
-     Then ALL values would be unified to the same type. For example:
-     - First value is 123 (Int) → Var 0 becomes Int
-     - Second value must also be Int → "hello" would fail type check
-     - Third value must also be Int → true would fail type check
-     
-     This would incorrectly reject valid MySQL queries where different 
-     JSON paths receive different value types.
-     
-     Alternative approach would be to generate fresh Var for each cycle
-     in assign_types, but this
-     is essentially equivalent to Any because in our type system:
-     | Any, t | t, Any -> `Order (t, t)
-     
-     So Any already accepts any type and unifies correctly. 
-     
-     MySQL doesn't enforce type consistency across different paths in
-     the same JSON_ARRAY_APPEND call - each path-value pair is independent.
-     
-     Therefore Any is the only correct choice to represent this behavior.
-
-     The same logic applies to other json functions above
+     Any is used instead of Var because MySQL JSON functions have unique semantics:
+   
+   1. ACCEPT ANY DATA TYPE: MySQL JSON functions accept values of any type
+      and automatically serialize them to JSON according to built-in rules
+   
+   2. PRESERVE TYPES IN JSON: each type is serialized differently:
+      - Numbers → JSON numbers (123 → 123)
+      - Strings → JSON strings ("text" → "text")  
+      - Booleans → JSON booleans (true → true)
+      - NULL → JSON null
+      - JSON-like strings remain STRINGS: '{"a":1}' → "{\"a\":1}" (not parsed!)
+   
+   3. ONLY RESULTS OF JSON FUNCTIONS become JSON objects:
+      JSON_SET(data, '$.obj', JSON_OBJECT('key', 'value'))  -- JSON object
+      JSON_SET(data, '$.str', '{"key": "value"}')           -- string!
+   
+   4. CRITICAL: different values in a single call can have DIFFERENT types
+      
+      Example of valid MySQL query:
+      JSON_SET(
+        data, 
+        '$.user.name',    'Alice',              -- Text
+        '$.user.age',     25,                   -- Int
+        '$.user.active',  true,                 -- Bool
+        '$.user.score',   99.5,                 -- Float
+        '$.user.meta',    JSON_OBJECT('x', 1)   -- Json_doc
+      )
+   
+   WHY NOT Var 0:
+   If we used ~repeating_pattern:[Typ json_path; Var 0], then:
+   - First value 'Alice' (Text) → Var 0 becomes Text
+   - Second value 25 (Int) → requires Text, but gets Int → TYPE ERROR
+   - Valid MySQL query would be rejected!
+   
+   WHY NOT fresh Var for each cycle:
+   Consider this example:
+   JSON_ARRAY_APPEND(
+     data, 
+     '$[0].items',     123,           -- Int
+     '$[1].props',     "hello",       -- Text  
+     '$[2].flags',     true,          -- Bool
+     '$[3].meta',      null,          -- Null
+     '$[4].nested',    JSON_OBJECT('x', 'y')  -- Json_doc
+   )
+   
+   With fresh Var this would be:
+   json -> json_path -> 'a -> json_path -> 'b -> json_path -> 'c -> json_path -> 'd -> json_path -> 'e -> json
+   
+  This is essentially an existential type: json -> (json_path -> ∃a. a)* -> json
+   
+   But this complicates implementation for the same effect as Any:
+   - Fresh Var can be any type = Any
+   - In our type system: | Any, t | t, Any -> `Order (t, t)
+   - Any already correctly handles unification with any types
+   
+   Applied to: JSON_SET, JSON_ARRAY_APPEND, JSON_OBJECT, JSON_ARRAY, etc.
   *)
   "json_array_append" |> add_fixed_then_pairs
     ~ret:(Typ json)
@@ -851,4 +858,8 @@ let () =
   "json_contains" |> add 2 (F (Typ bool, [Typ json; Typ json]));
   "json_contains" |> add 3 (F (Typ bool, [Typ json; Typ json; Typ json_path]));
   "json_unquote" |> monomorphic text [json];
+  "json_extract" |> add_fixed_then_pairs
+    ~ret:(Typ json)
+    ~fixed_args:[Typ json; Typ json_path]
+    ~repeating_pattern:[Typ json_path];
   ()
