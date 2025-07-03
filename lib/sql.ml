@@ -136,10 +136,12 @@ struct
         | _ -> `Order (StringLiteral x, Json)
         | exception Yojson.Json_error _ -> `No
       end
+    | Json, Text | Text, Json -> `Order (Json, Text)
     | (Json_path, StringLiteral x | StringLiteral x, Json_path) 
         when Json_path.is_valid_json_path_string x -> `Order (StringLiteral x, Json_path)
 
     | (One_or_all, StringLiteral x | StringLiteral x, One_or_all) when is_one_or_all x -> `Order (StringLiteral x, One_or_all)
+    | Json, One_or_all | One_or_all, Json -> `Order (One_or_all, Text)
 
     | _ -> `No
     
