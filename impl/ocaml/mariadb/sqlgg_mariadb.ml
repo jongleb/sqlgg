@@ -108,6 +108,7 @@ module Default_types(M : Mariadb.Nonblocking.S) : Types with
   type Float.t = float and
   type Decimal.t = float and
   type Datetime.t = M.Time.t and
+  type Json.t = Yojson.Basic.t and
   type Any.t = M.Field.value =
 struct
   type field = M.Field.t
