@@ -492,7 +492,32 @@ and assign_types env expr =
         let types_to_arg each_arg = List.map (const each_arg) types in
         let func =
           match kind with
-          | Multi (ret,each_arg) -> F (ret, types_to_arg each_arg)
+          | Multi { ret; fixed_args = []; repeating_pattern = [each_arg] } -> 
+              F (ret, types_to_arg each_arg)
+          | Multi { ret; fixed_args; repeating_pattern } ->
+              let fixed_count = List.length fixed_args in
+              let pattern_length = List.length repeating_pattern in
+              let total_args = List.length types in
+              
+              if total_args < fixed_count then
+                fail "function %s requires at least %d arguments, got %d" 
+                  (show_func ()) fixed_count total_args
+              else if Stdlib.(pattern_length = 0) then (
+                if total_args <> fixed_count then
+                  fail "function %s requires exactly %d arguments, got %d" 
+                    (show_func ()) fixed_count total_args
+                else
+                  F (ret, fixed_args)
+              ) else if (total_args - fixed_count) mod pattern_length <> 0 then
+                fail "function %s requires %d fixed args + multiples of %d args, got %d" 
+                  (show_func ()) fixed_count pattern_length total_args
+              else
+                let remaining_count = total_args - fixed_count in
+                let repeating_cycles = remaining_count / pattern_length in
+                let repeated_args =
+                  List.flatten (ExtList.List.init repeating_cycles (Fun.const repeating_pattern))
+                in
+                F (ret, fixed_args @ repeated_args)
           | x -> x
         in
         let convert_args ret args = 
@@ -561,29 +586,6 @@ and assign_types env expr =
             ret, List.map make_strict args 
           else 
             let args, ret = convert_args (Typ (depends Bool)) [Var 0; Var 0] in
-            let nullable = common_nullability args in
-            undepend ret nullable, args
-        | FixedThenPairs { ret; fixed_args; repeating_pattern }, _ ->
-          let fixed_count = List.length fixed_args in
-          let pattern_length = List.length repeating_pattern in
-          let total_args = List.length types in
-          
-          if total_args < fixed_count then
-            fail "function %s requires at least %d arguments, got %d" (show_func ()) fixed_count total_args
-          else if (total_args - fixed_count) mod pattern_length <> 0 then
-            fail "function %s requires %d fixed args + multiples of %d args, got %d" 
-              (show_func ()) fixed_count pattern_length total_args
-          else
-            let remaining_count = total_args - fixed_count in
-            let repeating_cycles = remaining_count / pattern_length in
-            
-           let repeated_args =
-              List.flatten (ExtList.List.init repeating_cycles (Fun.const repeating_pattern))
-            in
-            let all_expected_args = fixed_args @ repeated_args in
-            
-            (* use standard logic as for F *)
-            let args, ret = convert_args ret all_expected_args in
             let nullable = common_nullability args in
             undepend ret nullable, args
         in

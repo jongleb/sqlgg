@@ -207,12 +207,15 @@ struct
 
   type func =
   | Agg of agg_fun (* 'a -> 'a | 'a -> t *)
-  | Multi of tyvar * tyvar (* 'a -> ... -> 'a -> 'b *)
   | Coalesce of tyvar * tyvar
   | Comparison
   | Ret of t (* _ -> t *) (* TODO eliminate *)
   | F of tyvar * tyvar list
-  | FixedThenPairs of { ret: tyvar; fixed_args: tyvar list; repeating_pattern: tyvar list }
+  | Multi of { 
+    ret: tyvar; 
+    fixed_args: tyvar list; 
+    repeating_pattern: tyvar list 
+  }
   (* For functions with fixed initial args + optional repeating pattern
      Example: JSON_ARRAY_APPEND(json_doc, path, val[, path, val] ...)
      - return_type: what function returns
@@ -233,21 +236,25 @@ struct
   | Agg Count -> fprintf pp "|'a| -> int"
   | Ret ret -> fprintf pp "_ -> %s" (show ret)
   | F (ret, args) -> fprintf pp "%s -> %s" (String.concat " -> " @@ List.map string_of_tyvar args) (string_of_tyvar ret)
-  | Multi (ret, each_arg) | Coalesce (ret, each_arg) -> fprintf pp "{ %s }+ -> %s" (string_of_tyvar each_arg) (string_of_tyvar ret)
+  | Coalesce (ret, each_arg) -> fprintf pp "{ %s }+ -> %s" (string_of_tyvar each_arg) (string_of_tyvar ret)
   | Comparison -> fprintf pp "'a -> 'a -> %s" (show_kind Bool)
-  | FixedThenPairs { ret; fixed_args; repeating_pattern } ->
-      let fixed_str = String.concat " -> " @@ List.map string_of_tyvar fixed_args in
-      let repeating_str = String.concat ", " @@ List.map string_of_tyvar repeating_pattern in
-      fprintf pp "%s -> [%s]* -> %s"
-        fixed_str
-        repeating_str
-        (string_of_tyvar ret)
+  | Multi { ret; fixed_args = []; repeating_pattern = [single_arg] } ->
+      (* Старое поведение Multi *)
+      fprintf pp "{ %s }+ -> %s" (string_of_tyvar single_arg) (string_of_tyvar ret)
+  | Multi { ret; fixed_args; repeating_pattern } ->
+      let fixed_str = match fixed_args with
+        | [] -> ""
+        | args -> String.concat " -> " (List.map string_of_tyvar args) ^ " -> "
+      in
+      let repeating_str = String.concat ", " (List.map string_of_tyvar repeating_pattern) in
+      fprintf pp "%s[%s]* -> %s" fixed_str repeating_str (string_of_tyvar ret)
+
 
   let string_of_func = Format.asprintf "%a" pp_func
 
   let is_grouping = function
   | Agg _ -> true
-  | Ret _ | F _ | Multi _ | Coalesce _  | Comparison | FixedThenPairs _ -> false
+  | Ret _ | F _ | Multi _ | Coalesce _  | Comparison  -> false
 end
 
 module Constraint =
@@ -681,7 +688,10 @@ let exclude narg name = add_ (Some narg) None name
 let add_multi typ name = add_ None (Some typ) name
 let add narg typ name = add_ (Some narg) (Some typ) name
 
-let sponge = let open Type in let any = depends Any in Multi (Typ any, Typ any)
+let sponge = 
+  let open Type in 
+  let any = depends Any in 
+  Multi { ret = Typ any; fixed_args = []; repeating_pattern = [Typ any] }
 
 let lookup name narg =
   let name = String.lowercase_ascii name in
@@ -703,10 +713,14 @@ let lookup_agg name narg = match lookup name narg with
   | _ -> fail "Function %s is not an aggregate function" name
 
 let monomorphic ret args name = add (List.length args) Type.(monomorphic ret args) name
-let multi_polymorphic name = add_multi Type.(Multi (Var 0, Var 0)) name
-let multi ~ret args name = add_multi Type.(Multi (ret, args)) name
+let multi_polymorphic name = 
+  add_multi (Multi { ret = Var 0; fixed_args = []; repeating_pattern = [Var 0] }) name
+
+let multi ~ret args name = 
+  add_multi (Multi { ret; fixed_args = []; repeating_pattern = [args] }) name
+
 let add_fixed_then_pairs ~ret ~fixed_args ~repeating_pattern name = 
-    add_multi (Type.FixedThenPairs { ret; fixed_args; repeating_pattern }) name
+  add_multi (Multi { ret; fixed_args; repeating_pattern }) name
 
 end
 
@@ -828,6 +842,10 @@ let () =
     ~ret:(Typ json)
     ~fixed_args:[Typ json; Typ json_path; Typ (depends Any)]
     ~repeating_pattern:[Typ json_path; Typ (depends Any)];
+  "json_set2" |> add_fixed_then_pairs
+    ~ret:(Typ json)
+    ~fixed_args:[Typ json; Typ json_path; Typ int]
+    ~repeating_pattern:[Typ json_path; Typ int];
   "json_array" |> multi ~ret:(Typ json) (Typ (depends Any));
   "json_object" |> add 0 (F (Typ json, []));
   "json_object" |> add_fixed_then_pairs
