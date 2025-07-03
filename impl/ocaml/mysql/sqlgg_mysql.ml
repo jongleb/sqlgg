@@ -258,6 +258,7 @@ let get_column_Text, get_column_Text_nullable = get_column_ty "Text" Text.of_str
 let get_column_Float, get_column_Float_nullable = get_column_ty "Float" Float.of_string
 let get_column_Decimal, get_column_Decimal_nullable = get_column_ty "Decimal" Decimal.of_string
 let get_column_Datetime, get_column_Datetime_nullable = get_column_ty "Datetime" Datetime.of_string
+let get_column_Json, get_column_Json_nullable = get_column_ty "Json" Json.of_string
 let get_column_Any, get_column_Any_nullable = get_column_ty "Any" Any.of_string
 
 let get_column_bool, get_column_bool_nullable = get_column_ty "bool" Bool.get_bool
@@ -266,6 +267,9 @@ let get_column_float, get_column_float_nullable = get_column_ty "float" Float.ge
 let get_column_decimal, get_column_decimal_nullable = get_column_ty "float" Decimal.get_float
 let get_column_datetime, get_column_datetime_nullable = get_column_ty "string" Datetime.get_string
 let get_column_string, get_column_string_nullable = get_column_ty "string" Text.get_string
+let get_column_json, get_column_json_nullable = get_column_ty "json" Json.get_string
+
+(* params *)
 
 let bind_param data (_,params,index) =
   match data with
@@ -285,6 +289,9 @@ let set_param_Int = set_param_ty Int.to_string
 let set_param_Float = set_param_ty Float.to_string
 let set_param_Decimal = set_param_ty Decimal.to_string
 let set_param_Datetime = set_param_ty Datetime.to_string
+let set_param_Json = set_param_ty Json.to_string
+
+(* compatibility *)
 
 let set_param_string = set_param_ty Text.set_string
 let set_param_bool = set_param_ty Bool.set_bool
@@ -292,6 +299,8 @@ let set_param_int64 = set_param_ty Int.set_int64
 let set_param_float = set_param_ty Float.set_float
 let set_param_decimal = set_param_ty Decimal.set_float
 let set_param_datetime = set_param_ty Datetime.set_float
+
+let set_param_json = set_param_ty Json.set_string
 
 (* enum support *)
 

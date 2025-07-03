@@ -161,6 +161,9 @@ module type M = sig
   val get_column_string : row -> int -> string
   val get_column_string_nullable : row -> int -> string option
 
+  val get_column_json : row -> int -> json
+  val get_column_json_nullable : row -> int -> json option
+
   val start_params : statement -> int -> params
 
   (** [set_param_* stmt index val]. [index] is 0-based,
@@ -173,6 +176,7 @@ module type M = sig
   val set_param_Float : params -> Float.t -> unit
   val set_param_Decimal : params -> Decimal.t -> unit
   val set_param_Datetime : params -> Datetime.t -> unit
+  val set_param_Json: params -> Json.t -> unit
 
   val set_param_bool : params -> bool -> unit
   val set_param_int64 : params -> int64 -> unit
