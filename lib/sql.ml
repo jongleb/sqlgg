@@ -21,28 +21,6 @@ struct
 
     let make ctors =  Ctors.of_list ctors
   end
-  
-  module Json_path = struct 
-    let is_valid_json_path_string s =
-      let rec aux = function
-        | [] -> true
-        | '$' :: rest -> aux rest
-        | '.' :: ('a'..'z' | 'A'..'Z' | '0'..'9' | '_') :: _ as chars -> 
-            let rec skip_prop = function
-              | ('a'..'z' | 'A'..'Z' | '0'..'9' | '_') :: rest -> skip_prop rest
-              | rest -> aux rest
-            in skip_prop (List.tl chars)
-        | '[' :: '*' :: ']' :: rest -> aux rest
-        | '[' :: ('0'..'9') :: _ as chars ->
-            let rec skip_digits = function
-              | ('0'..'9') :: rest -> skip_digits rest
-              | ']' :: rest -> aux rest
-              | _ -> false
-            in skip_digits (List.tl chars)
-        | _ -> false
-      in
-      s <> "" && s.[0] = '$' && (s |> String.to_seq |> List.of_seq |> aux)
-  end
 
   type union = { ctors: Enum_kind.t; is_closed: bool } [@@deriving eq, show{with_path=false}]
 
@@ -101,7 +79,7 @@ struct
 
   let is_unit = function { t = Unit _; _ } -> true | _ -> false
 
-  let is_one_or_all s = List.mem s ["one"; "all"]
+  let is_one_or_all s = List.mem (String.lowercase_ascii s) ["one"; "all"]
 
   (** @return (subtype, supertype) *)
   let order_kind x y =  
@@ -160,7 +138,7 @@ struct
     | Json, Text | Text, Json -> `Order (Json, Text)
 
     | (Json_path, StringLiteral x | StringLiteral x, Json_path) 
-        when Json_path.is_valid_json_path_string x -> `Order (StringLiteral x, Json_path)
+        when Sqlgg_json_path.Json_path.is_valid x -> `Order (StringLiteral x, Json_path)
     | Json_path, Text | Text, Json_path -> `Order (Json_path, Text)
 
     | (One_or_all, StringLiteral x | StringLiteral x, One_or_all) when is_one_or_all x -> `Order (StringLiteral x, One_or_all)
