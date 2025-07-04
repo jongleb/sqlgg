@@ -28,6 +28,9 @@ type json = [ `Null
   | `Assoc of (string * json) list 
 ]
 
+type json_path = Sqlgg_json_path.Ast.t
+type one_or_all = [ `One | `All ]
+
 module Types = struct
   module Bool = struct 
     type t = bool 
@@ -87,14 +90,35 @@ module Types = struct
   (* you probably want better type, e.g. (int*int) or Z.t *)
   module Decimal = Float
   module Datetime = Float (* ? *)
+  
   module Json = struct
-  type t = Yojson.Basic.t
+    type t = Yojson.Basic.t
 
-  let to_literal j = 
-    Text.to_literal (Yojson.Basic.to_string j)
+    let to_literal j = 
+      Text.to_literal (Yojson.Basic.to_string j)
 
-  let json_to_literal = to_literal
-end
+    let json_to_literal = to_literal
+  end
+
+  module Json_path = struct
+    open Sqlgg_json_path
+    type t = json_path
+    
+    let to_literal j = 
+      Text.to_literal (Json_path.string_of_json_path j)
+    
+    let json_path_to_literal = to_literal
+  end
+
+  module One_or_all = struct
+    type t = one_or_all
+
+    let to_literal = function
+      | `One -> "one"
+      | `All -> "all"
+
+    let one_or_all_to_literal = to_literal
+  end
 
   (* Any is a value that can be anything, e.g. `Null, `Int, `String, etc. *)
   module Any = Text
@@ -137,6 +161,18 @@ module Conv = struct
   let json = "Json", function
     | TEXT s -> Yojson.Basic.from_string s
     | x -> raise (Type_mismatch x)
+
+  let json_path = "Json_path", function
+    | TEXT s -> Sqlgg_json_path.Json_path.parse_json_path s
+    | x -> raise (Type_mismatch x)
+
+  let one_or_all = "One_or_all", function
+    | TEXT s -> 
+      (match String.lowercase_ascii s with
+       | "one" -> `One
+       | "all" -> `All
+       | _ -> raise (Type_mismatch (TEXT s)))
+    | x -> raise (Type_mismatch x)
 end
 
 let get_column_ty (name,conv) =
@@ -157,7 +193,8 @@ let get_column_Float, get_column_Float_nullable = get_column_ty Conv.float
 let get_column_Decimal, get_column_Decimal_nullable = get_column_ty Conv.decimal
 let get_column_Datetime, get_column_Datetime_nullable = get_column_ty Conv.float
 let get_column_Json, get_column_Json_nullable = get_column_ty Conv.json
-let get_column_json, get_column_json_nullable = (get_column_Json, get_column_Json_nullable)
+let get_column_Json_path, get_column_Json_path_nullable = get_column_ty Conv.json_path
+let get_column_One_or_all, get_column_One_or_all_nullable = get_column_ty Conv.one_or_all
 
 let get_column_bool, get_column_bool_nullable = (get_column_Bool, get_column_Bool_nullable)
 let get_column_int64, get_column_int64_nullable = (get_column_Int, get_column_Int_nullable)
@@ -166,6 +203,8 @@ let get_column_decimal, get_column_decimal_nullable = (get_column_Decimal, get_c
 let get_column_string, get_column_string_nullable = (get_column_Text, get_column_Text_nullable)
 let get_column_datetime, get_column_datetime_nullable = get_column_ty Conv.datetime
 let get_column_json, get_column_json_nullable = (get_column_Json, get_column_Json_nullable)
+let get_column_json_path, get_column_json_path_nullable = (get_column_Json_path, get_column_Json_path_nullable)
+let get_column_one_or_all, get_column_one_or_all_nullable = (get_column_One_or_all, get_column_One_or_all_nullable)
 
 (* Make_enum is a functor that takes an Enum module and returns a Value module *)
 (* it is used to create a value type for an enum type *)
@@ -204,6 +243,8 @@ let set_param_Float stmt v = bind_param (S.Data.FLOAT v) stmt
 let set_param_Decimal = set_param_Float
 let set_param_Datetime = set_param_Float
 let set_param_Json stmt v = bind_param (S.Data.TEXT (Yojson.Basic.to_string v)) stmt
+let set_param_Json_path stmt v = bind_param (S.Data.TEXT (Sqlgg_json_path.Json_path.string_of_json_path v)) stmt
+let set_param_One_or_all stmt v = bind_param (S.Data.TEXT (match v with `One -> "one" | `All -> "all")) stmt
 
 let set_param_bool = set_param_Bool
 let set_param_int64 = set_param_Int
@@ -211,8 +252,9 @@ let set_param_float = set_param_Float
 let set_param_decimal = set_param_Float
 let set_param_string = set_param_Text
 let set_param_datetime = set_param_Float
-
 let set_param_json = set_param_Json
+let set_param_json_path = set_param_Json_path
+let set_param_one_or_all = set_param_One_or_all
 
 (* convenience functions for setting parameters *)
 (* these are used in the generated code *)
