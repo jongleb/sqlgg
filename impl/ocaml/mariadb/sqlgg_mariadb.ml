@@ -286,12 +286,15 @@ struct
   end
 
   module Json = struct
-    include Make(struct
+    include Make (struct
       type t = Yojson.Basic.t
-      let of_field field =
-        match M.Field.value field with
+
+      let handle_with_json v = function
         | `String x -> Yojson.Basic.from_string x
-        | value -> convfail "json" field value
+        | `Json x -> Yojson.Basic.from_string x
+        | #M.Field.value as value -> convfail "json" v value
+
+      let of_field field = handle_with_json  field (M.Field.value field )
       let to_value x = `String (Yojson.Basic.to_string x)
       let to_literal x = Text.to_literal (Yojson.Basic.to_string x)
     end)
