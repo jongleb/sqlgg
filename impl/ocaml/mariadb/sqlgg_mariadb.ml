@@ -32,7 +32,18 @@ module type Enum = sig
   val proj: t -> string
 end
 
-include Trait_types_shared.Json_function_types
+type json = [ `Null
+  | `String of string
+  | `Float of float
+  | `Int of int
+  | `Bool of bool
+  | `List of json list
+  | `Assoc of (string * json) list 
+]
+
+type json_path = Sqlgg_json_path.Ast.t
+type one_or_all = [ `One | `All ]
+
 
 module type Types = sig
   type field
@@ -292,19 +303,20 @@ struct
   end
 
   module Json_path = struct
-    include Trait_types_shared.Json_path
+
+    open Sqlgg_json_path
 
     include Make(struct
       type t = json_path
       
       let of_field field =
         match M.Field.value field with
-        | `String x -> parse_json_path x
+        | `String x -> Json_path.parse_json_path x
         | value -> convfail "json_path" field value
       
-      let to_value x = `String (json_path_to_string x)
+      let to_value x = `String (Json_path.string_of_json_path x)
       
-      let to_literal x = Text.to_literal (json_path_to_string x)
+      let to_literal x = Text.to_literal (Json_path.string_of_json_path x)
     end)
 
     let get_json_path = of_field

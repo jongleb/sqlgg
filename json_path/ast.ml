@@ -16,7 +16,7 @@ type path_leg =
   | MemberWildcard            
   | DoubleWildcard            
 
-type json_path = {
+type t = {
   scope: string;              
   legs: path_leg list;
 }

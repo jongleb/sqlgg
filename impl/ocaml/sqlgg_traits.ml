@@ -37,7 +37,7 @@ type json = [ `Null
   | `Assoc of (string * json) list 
 ]
 
-type json_path = [ `Root | `Key_access of string | `Index_access of int ] list
+type json_path = Sqlgg_json_path.Ast.t
 type one_or_all = [ `One | `All ]
 
 module type FNS = sig

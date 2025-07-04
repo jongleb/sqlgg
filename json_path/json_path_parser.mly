@@ -16,7 +16,7 @@
 %token LAST
 %token EOF
 
-%start <json_path> path_expression
+%start <t> path_expression
 %%
 
 path_expression:

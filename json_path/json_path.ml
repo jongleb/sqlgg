@@ -32,6 +32,7 @@ let string_of_range range =
   string_of_array_index range.start_idx ^ " to " ^ string_of_array_index range.end_idx
 
 let string_of_path_leg = function
+  | Member key when String.contains key ' ' || String.contains key '-' -> ".\"" ^ key ^ "\""
   | Member key -> "." ^ key
   | ArrayAccess idx -> "[" ^ string_of_array_index idx ^ "]"
   | ArrayRange range -> "[" ^ string_of_range range ^ "]"

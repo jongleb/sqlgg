@@ -17,6 +17,18 @@ open Printf
 
 module P = Mysql.Prepared
 
+type json = [ `Null
+  | `String of string
+  | `Float of float
+  | `Int of int
+  | `Bool of bool
+  | `List of json list
+  | `Assoc of (string * json) list 
+]
+
+type json_path = Sqlgg_json_path.Ast.t
+type one_or_all = [ `One | `All ]
+
 module type Value = sig
   type t
   val of_string : string -> t
@@ -31,8 +43,6 @@ module type Int = sig
 
   val int64_to_literal : int64 -> string
 end
-
-include Trait_types_shared.Json_function_types
 
 module type Types = sig
   module Bool : sig 
@@ -188,11 +198,12 @@ module Default_types = struct
   end
 
   module Json_path = struct
-    let of_string = Trait_types_shared.Json_path.parse_json_path
+    open Sqlgg_json_path
+    let of_string = Json_path.parse_json_path
 
-    let to_string = Trait_types_shared.Json_path.json_path_to_string
+    let to_string = Json_path.string_of_json_path
 
-    let to_literal j = Text.to_literal (Trait_types_shared.Json_path.json_path_to_string j)
+    let to_literal j = Text.to_literal (Json_path.string_of_json_path j)
 
     let get_string = of_string
     let set_string = to_string

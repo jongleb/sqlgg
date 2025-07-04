@@ -190,6 +190,110 @@ let test_round_trip = [
   );
 ]
 
+let test_serialization = [
+  "serialize basic paths" >:: (fun () ->
+    let test_cases = [
+      ({ scope = "$"; legs = [] }, "$");
+      ({ scope = "$"; legs = [Member "name"] }, "$.name");
+      ({ scope = "$"; legs = [ArrayAccess (Index 0)] }, "$[0]");
+      ({ scope = "$"; legs = [ArrayAccess Wildcard] }, "$[*]");
+      ({ scope = "$"; legs = [ArrayAccess Last] }, "$[last]");
+      ({ scope = "$"; legs = [ArrayAccess (LastOffset 1)] }, "$[last-1]");
+      ({ scope = "$"; legs = [MemberWildcard] }, "$.*");
+      ({ scope = "$"; legs = [DoubleWildcard] }, "$**");
+    ] in
+    List.iter (fun (path, expected) ->
+      let result = Json_path.string_of_json_path path in
+      assert_equal ~msg:("serialize: " ^ expected) expected result
+    ) test_cases
+  );
+  
+  "serialize complex paths" >:: (fun () ->
+    let test_cases = [
+      ({ scope = "$"; legs = [Member "user"; Member "name"] }, "$.user.name");
+      ({ scope = "$"; legs = [Member "items"; ArrayAccess (Index 0); Member "price"] }, "$.items[0].price");
+      ({ scope = "$"; legs = [ArrayRange { start_idx = Index 1; end_idx = Index 3 }] }, "$[1 to 3]");
+      ({ scope = "$"; legs = [ArrayRange { start_idx = LastOffset 3; end_idx = Last }] }, "$[last-3 to last]");
+      ({ scope = "$"; legs = [DoubleWildcard; Member "name"] }, "$**.name");
+    ] in
+    List.iter (fun (path, expected) ->
+      let result = Json_path.string_of_json_path path in
+      assert_equal ~msg:("serialize: " ^ expected) expected result
+    ) test_cases
+  );
+  
+  "serialize edge cases" >:: (fun () ->
+    let test_cases = [
+      ({ scope = "$"; legs = [Member ""] }, "$.");
+      ({ scope = "$"; legs = [ArrayAccess (Index 999)] }, "$[999]");
+      ({ scope = "$"; legs = [ArrayAccess (LastOffset 100)] }, "$[last-100]");
+      ({ scope = "$"; legs = [ArrayRange { start_idx = Wildcard; end_idx = Last }] }, "$[* to last]");
+    ] in
+    List.iter (fun (path, expected) ->
+      let result = Json_path.string_of_json_path path in
+      assert_equal ~msg:("serialize: " ^ expected) expected result
+    ) test_cases
+  );
+]
+
+let test_bidirectional = [
+  "parse then serialize" >:: (fun () ->
+    let inputs = [
+      "$"; "$.name"; "$[0]"; "$[*]"; "$[last]"; "$[last-1]"; "$.*"; "$**";
+      "$.user.name"; "$.items[0].price"; "$.users[*].email"; 
+      "$[1 to 3]"; "$[0 to 5]"; "$[last-3 to last]"; "$[* to last]";
+      "$**.name"; "$.\"quoted key\"";
+    ] in
+    List.iter (fun input ->
+      let parsed = parse_path input in
+      let serialized = Json_path.string_of_json_path parsed in
+      assert_equal ~msg:("bidirectional: " ^ input) input serialized
+    ) inputs
+  );
+  
+  "serialize then parse" >:: (fun () ->
+    let paths = [
+      { scope = "$"; legs = [] };
+      { scope = "$"; legs = [Member "test"] };
+      { scope = "$"; legs = [ArrayAccess (Index 42)] };
+      { scope = "$"; legs = [Member "data"; ArrayAccess Wildcard; Member "value"] };
+      { scope = "$"; legs = [ArrayRange { start_idx = Index 5; end_idx = Index 10 }] };
+    ] in
+    List.iter (fun original_path ->
+      let serialized = Json_path.string_of_json_path original_path in
+      let parsed_back = parse_path serialized in
+      assert_equal 
+        ~cmp:cmp_json_path 
+        ~printer:Json_path.string_of_json_path
+        ~msg:("serialize->parse: " ^ serialized)
+        original_path 
+        parsed_back
+    ) paths
+  );
+]
+
+let test_validation = [
+  "is_valid positive cases" >:: (fun () ->
+    let valid_inputs = [
+      "$"; "$.name"; "$[0]"; "$[*]"; "$[last]"; "$[last-1]"; "$.*"; "$**";
+      "$.user.name"; "$.items[0].price"; "$[1 to 3]"; "$**.field";
+    ] in
+    List.iter (fun input ->
+      assert_bool ("should be valid: " ^ input) (Json_path.is_valid input)
+    ) valid_inputs
+  );
+  
+  "is_valid negative cases" >:: (fun () ->
+    let invalid_inputs = [
+      ""; "name"; "$."; "$["; "$]"; "$[abc]"; "$.123invalid"; 
+      "$[1 to]"; "$[to 5]"; "$[1 to 3 to 5]"; "$$"; "$..";
+    ] in
+    List.iter (fun input ->
+      assert_bool ("should be invalid: " ^ input) (not (Json_path.is_valid input))
+    ) invalid_inputs
+  );
+]
+
 let run () =
   let tests = [
     "basic" >::: test_basic;
@@ -197,6 +301,9 @@ let run () =
     "ranges" >::: test_ranges;
     "errors" >::: test_errors;
     "combinators" >::: test_combinators;
+    "serialization" >::: test_serialization;
+    "bidirectional" >::: test_bidirectional;
+    "validation" >::: test_validation;
     "round_trip" >::: test_round_trip;
   ] in
   let test_suite = "JSON Path Parser" >::: tests in
