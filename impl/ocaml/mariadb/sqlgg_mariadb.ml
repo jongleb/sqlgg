@@ -44,7 +44,6 @@ type json = [ `Null
 type json_path = Sqlgg_json_path.Ast.t
 type one_or_all = [ `One | `All ]
 
-
 module type Types = sig
   type field
   type value
@@ -325,21 +324,24 @@ struct
   end
 
   module One_or_all = struct
-    include Make(struct
-      type t = one_or_all
-      let of_field field =
-        match M.Field.value field with
-        | `String "one" -> `One
-        | `String "all" -> `All
-        | value -> convfail "one_or_all" field value
-      let to_value = function `One -> `String "one" | `All -> `String "all"
-      let to_literal = function `One -> "one" | `All -> "all"
-    end)
+  include Make(struct
+    type t = one_or_all
+    let of_field field =
+      match M.Field.value field with
+      | `String s -> 
+        (match String.lowercase_ascii s with
+         | "one" -> `One
+         | "all" -> `All
+         | _ -> convfail "one_or_all" field (`String s))
+      | value -> convfail "one_or_all" field value
+    let to_value = function `One -> `String "one" | `All -> `String "all"
+    let to_literal = function `One -> "one" | `All -> "all"
+  end)
 
-    let get_one_or_all = of_field
-    let set_one_or_all = to_value
-    let one_or_all_to_literal = to_literal
-  end
+  let get_one_or_all = of_field
+  let set_one_or_all = to_value
+  let one_or_all_to_literal = to_literal
+end
 
   module Any = Make(struct
     type t = M.Field.value
