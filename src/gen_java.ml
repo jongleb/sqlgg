@@ -45,6 +45,7 @@ let as_lang_type t =
   | StringLiteral _ -> "String"
   | Union _
   | Json
+  | Json_string
   | One_or_all 
   | Json_path
   | Unit _ -> assert false

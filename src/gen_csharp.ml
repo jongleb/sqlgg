@@ -46,6 +46,7 @@ let as_api_type t =
   | Union _
   | Json_path
   | One_or_all
+  | Json_string
   | Json
   | Unit _  -> assert false
 

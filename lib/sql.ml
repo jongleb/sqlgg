@@ -36,6 +36,7 @@ struct
     | Union of union
     | StringLiteral of string
     | Json_path
+    | Json_string
     | One_or_all
     | Json
     | Any (* FIXME - Top and Bottom ? *)
@@ -144,6 +145,12 @@ struct
     | (One_or_all, StringLiteral x | StringLiteral x, One_or_all) when is_one_or_all x -> `Order (StringLiteral x, One_or_all)
     | Json, One_or_all | One_or_all, Json -> `Order (One_or_all, Text)
 
+    | Json, Json_string | Json_string, Json -> `Order (Json_string, Json)
+    | Json_string, StringLiteral x | StringLiteral x, Json_string  -> 
+      begin match Yojson.Basic.from_string x with
+        | _ -> `Order (StringLiteral x, Json_string)
+        | exception Yojson.Json_error _ -> `No
+      end
 
     | _ -> `No
     
@@ -736,6 +743,7 @@ let () =
   let text = strict Text in
   let json = strict Json in
   let json_path = strict Json_path in
+  let json_string = strict Json_string in
   let datetime = strict Datetime in
   let bool = strict Bool in
   "count" |> add 0 (Agg Count); (* count( * ) - asterisk is treated as no parameters in parser *)
@@ -839,9 +847,9 @@ let () =
     ~ret:(Typ json)
     ~fixed_args:[Typ json; Typ json_path; Typ (depends Any)]
     ~repeating_pattern:[Typ json_path; Typ (depends Any)];
-  "json_search" |> monomorphic json_path [json; text; text];
+  "json_search" |> monomorphic json_string [json; strict One_or_all; text];
   "json_search" |> add_fixed_then_pairs
-    ~ret:(Typ json_path)
+    ~ret:(Typ json_string)
     ~fixed_args:[Typ json; Typ (strict One_or_all); Typ text; Typ text]
     ~repeating_pattern:[Typ json_path];
   "json_remove" |> add_fixed_then_pairs
@@ -860,7 +868,7 @@ let () =
     ~repeating_pattern:[Typ text; Typ (depends Any)]; 
   "json_contains" |> add 2 (F (Typ bool, [Typ json; Typ json]));
   "json_contains" |> add 3 (F (Typ bool, [Typ json; Typ json; Typ json_path]));
-  "json_unquote" |> monomorphic text [json];
+  "json_unquote" |> monomorphic text [json_string];
   "json_extract" |> add_fixed_then_pairs
     ~ret:(Typ json)
     ~fixed_args:[Typ json; Typ json_path]
