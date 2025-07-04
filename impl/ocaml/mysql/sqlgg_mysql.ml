@@ -32,14 +32,7 @@ module type Int = sig
   val int64_to_literal : int64 -> string
 end
 
-type json = [ `Null
-  | `String of string
-  | `Float of float
-  | `Int of int
-  | `Bool of bool
-  | `List of json list
-  | `Assoc of (string * json) list 
-]
+include Trait_types_shared.Json_function_types
 
 module type Types = sig
   module Bool : sig 
@@ -85,6 +78,11 @@ module type Types = sig
     val get_string : string -> json
     val set_string : json -> string
     val json_to_literal : json -> string
+  end
+
+  module Json_path: sig
+    include Value
+    val get_json_path : string -> json
   end
 
   module Any : Value
@@ -175,7 +173,7 @@ module Default_types = struct
   end
 
   
-module Json = struct
+  module Json = struct
     type t = json
 
     let of_string s = Yojson.Basic.from_string s
@@ -188,6 +186,36 @@ module Json = struct
     let set_string = to_string
     let json_to_literal = to_literal
   end
+
+  module Json_path = struct
+    let of_string = Trait_types_shared.Json_path.parse_json_path
+
+    let to_string = Trait_types_shared.Json_path.json_path_to_string
+
+    let to_literal j = Text.to_literal (Trait_types_shared.Json_path.json_path_to_string j)
+
+    let get_string = of_string
+    let set_string = to_string
+    let json_to_literal = to_literal
+  end
+
+  module One_or_all = struct
+    type t = [ `One | `All ]
+
+    let to_literal = function
+      | `One -> "ONE"
+      | `All -> "ALL"
+
+    let inj = function
+      | "ONE" -> `One
+      | "ALL" -> `All
+      | s -> failwith (sprintf "One_or_all.inj: unknown value %s" s)
+
+    let proj = function
+      | `One -> "ONE"
+      | `All -> "ALL"
+  end
+
   module Any = Text
 end
 

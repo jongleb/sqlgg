@@ -29,20 +29,10 @@ module type Enum = sig
 
   val inj: string -> t
 
-  val proj: t -> string 
+  val proj: t -> string
 end
 
-type json = [ `Null
-  | `String of string
-  | `Float of float
-  | `Int of int
-  | `Bool of bool
-  | `List of json list
-  | `Assoc of (string * json) list 
-]
-
-type json_path = [ `Root | `Key_access of string | `Index_access of int ] list
-type one_or_all = [ `One | `All ]
+include Trait_types_shared.Json_function_types
 
 module type Types = sig
   type field
@@ -302,69 +292,7 @@ struct
   end
 
   module Json_path = struct
-    let parse_json_path (s : string) : json_path =
-      let len = String.length s in
-
-      let rec parse acc i =
-        if i >= len then
-          List.rev acc
-        else match s.[i] with
-        | '$' when i = 0 -> parse (`Root :: acc) (i + 1)
-        | '.' ->
-            let start = i + 1 in
-            let stop =
-              let rec loop j =
-                if j < len then match s.[j] with
-                | 'a'..'z' | 'A'..'Z' | '0'..'9' | '_' -> loop (j + 1)
-                | _ -> j
-                else j
-              in loop start
-            in
-            if stop = start then
-              failwith ("Expected key after '.' at position " ^ string_of_int i);
-            let key = String.sub s start (stop - start) in
-            parse (`Key_access key :: acc) stop
-        | '[' ->
-            let start = i + 1 in
-            let stop =
-              let rec loop j =
-                if j >= len then
-                  failwith ("Unclosed '[' at position " ^ string_of_int i)
-                else if s.[j] = ']' then j
-                else loop (j + 1)
-              in loop start
-            in
-            let index_str = String.sub s start (stop - start) in
-            let index =
-              try int_of_string index_str
-              with Failure _ ->
-                failwith ("Invalid index at position " ^ string_of_int i ^ ": " ^ index_str)
-            in
-            parse (`Index_access index :: acc) (stop + 1)
-        | c ->
-            failwith ("Unexpected character '" ^ String.make 1 c ^ "' at position " ^ string_of_int i)
-      in
-      parse [] 0
-
-    let json_path_to_string path =
-      let buffer = Buffer.create 64 in
-      let rec build_path = function
-        | [] -> ()
-        | `Root :: rest -> 
-            Buffer.add_char buffer '$';
-            build_path rest
-        | `Key_access key :: rest ->
-            Buffer.add_char buffer '.';
-            Buffer.add_string buffer key;
-            build_path rest
-        | `Index_access index :: rest ->
-            Buffer.add_char buffer '[';
-            Buffer.add_string buffer (string_of_int index);
-            Buffer.add_char buffer ']';
-            build_path rest
-      in
-      build_path path;
-      Buffer.contents buffer
+    include Trait_types_shared.Json_path
 
     include Make(struct
       type t = json_path
