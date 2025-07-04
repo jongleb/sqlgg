@@ -29,7 +29,7 @@ module type Enum = sig
 
   val inj: string -> t
 
-  val proj: t -> string
+  val proj: t -> string 
 end
 
 type json = [ `Null
@@ -40,6 +40,9 @@ type json = [ `Null
   | `List of json list
   | `Assoc of (string * json) list 
 ]
+
+type json_path = [ `Root | `Key_access of string | `Index_access of int ] list
+type one_or_all = [ `One | `All ]
 
 module type Types = sig
   type field
@@ -93,7 +96,19 @@ module type Types = sig
     val set_json: json -> value
     val json_to_literal : json -> string
   end
-  (* Any is a value that can be anything, e.g. `Null, `Int, `String, etc. *)
+  module Json_path : sig
+    include Value
+    val get_json_path : field -> json_path
+    val set_json_path: json_path -> value
+    val json_path_to_literal : json_path -> string
+  end
+  module One_or_all : sig
+    include Value
+    val to_literal : one_or_all -> string
+    val get_one_or_all : field -> one_or_all
+    val set_one_or_all: one_or_all -> value
+    val one_or_all_to_literal : one_or_all -> string
+  end
   module Any : Value
   module Make_enum : functor (E : Enum) -> Value with type t = E.t
 end
@@ -109,6 +124,8 @@ module Default_types(M : Mariadb.Nonblocking.S) : Types with
   type Decimal.t = float and
   type Datetime.t = M.Time.t and
   type Json.t = Yojson.Basic.t and
+  type Json_path.t = json_path and
+  type One_or_all.t = one_or_all and
   type Any.t = M.Field.value =
 struct
   type field = M.Field.t
@@ -284,7 +301,105 @@ struct
     let json_to_literal = to_literal
   end
 
-  (* Any is a value that can be anything, e.g. `Null, `Int, `String, etc. *)
+  module Json_path = struct
+    let parse_json_path (s : string) : json_path =
+      let len = String.length s in
+
+      let rec parse acc i =
+        if i >= len then
+          List.rev acc
+        else match s.[i] with
+        | '$' when i = 0 -> parse (`Root :: acc) (i + 1)
+        | '.' ->
+            let start = i + 1 in
+            let stop =
+              let rec loop j =
+                if j < len then match s.[j] with
+                | 'a'..'z' | 'A'..'Z' | '0'..'9' | '_' -> loop (j + 1)
+                | _ -> j
+                else j
+              in loop start
+            in
+            if stop = start then
+              failwith ("Expected key after '.' at position " ^ string_of_int i);
+            let key = String.sub s start (stop - start) in
+            parse (`Key_access key :: acc) stop
+        | '[' ->
+            let start = i + 1 in
+            let stop =
+              let rec loop j =
+                if j >= len then
+                  failwith ("Unclosed '[' at position " ^ string_of_int i)
+                else if s.[j] = ']' then j
+                else loop (j + 1)
+              in loop start
+            in
+            let index_str = String.sub s start (stop - start) in
+            let index =
+              try int_of_string index_str
+              with Failure _ ->
+                failwith ("Invalid index at position " ^ string_of_int i ^ ": " ^ index_str)
+            in
+            parse (`Index_access index :: acc) (stop + 1)
+        | c ->
+            failwith ("Unexpected character '" ^ String.make 1 c ^ "' at position " ^ string_of_int i)
+      in
+      parse [] 0
+
+    let json_path_to_string path =
+      let buffer = Buffer.create 64 in
+      let rec build_path = function
+        | [] -> ()
+        | `Root :: rest -> 
+            Buffer.add_char buffer '$';
+            build_path rest
+        | `Key_access key :: rest ->
+            Buffer.add_char buffer '.';
+            Buffer.add_string buffer key;
+            build_path rest
+        | `Index_access index :: rest ->
+            Buffer.add_char buffer '[';
+            Buffer.add_string buffer (string_of_int index);
+            Buffer.add_char buffer ']';
+            build_path rest
+      in
+      build_path path;
+      Buffer.contents buffer
+
+    include Make(struct
+      type t = json_path
+      
+      let of_field field =
+        match M.Field.value field with
+        | `String x -> parse_json_path x
+        | value -> convfail "json_path" field value
+      
+      let to_value x = `String (json_path_to_string x)
+      
+      let to_literal x = Text.to_literal (json_path_to_string x)
+    end)
+
+    let get_json_path = of_field
+    let set_json_path = to_value
+    let json_path_to_literal = to_literal
+  end
+
+  module One_or_all = struct
+    include Make(struct
+      type t = one_or_all
+      let of_field field =
+        match M.Field.value field with
+        | `String "one" -> `One
+        | `String "all" -> `All
+        | value -> convfail "one_or_all" field value
+      let to_value = function `One -> `String "one" | `All -> `String "all"
+      let to_literal = function `One -> "one" | `All -> "all"
+    end)
+
+    let get_one_or_all = of_field
+    let set_one_or_all = to_value
+    let one_or_all_to_literal = to_literal
+  end
 
   module Any = Make(struct
     type t = M.Field.value
@@ -361,6 +476,8 @@ let get_column_Decimal, get_column_Decimal_nullable = get_column_ty "Decimal" De
 let get_column_Datetime, get_column_Datetime_nullable = get_column_ty "Datetime" Datetime.of_field
 let get_column_Any, get_column_Any_nullable = get_column_ty "Any" Any.of_field
 let get_column_Json, get_column_Json_nullable = get_column_ty "Json" Json.of_field
+let get_column_Json_path, get_column_Json_path_nullable = get_column_ty "Json_path" Json_path.of_field
+let get_column_One_or_all, get_column_One_or_all_nullable = get_column_ty "One_or_all" One_or_all.of_field
 
 let get_column_bool, get_column_bool_nullable = get_column_ty "bool" Bool.get_bool
 let get_column_int64, get_column_int64_nullable = get_column_ty "int64" Int.get_int64
@@ -369,6 +486,8 @@ let get_column_decimal, get_column_decimal_nullable = get_column_ty "float" Deci
 let get_column_datetime, get_column_datetime_nullable = get_column_ty "string" Datetime.get_string
 let get_column_string, get_column_string_nullable = get_column_ty "string" Text.get_string
 let get_column_json, get_column_json_nullable = get_column_ty "json" Json.get_json
+let get_column_json_path, get_column_json_path_nullable = get_column_ty "json_path" Json_path.get_json_path
+let get_column_one_or_all, get_column_one_or_all_nullable = get_column_ty "one_or_all" One_or_all.get_one_or_all
 
 (* bind_param is used to bind parameters to a statement *)
 (* it is used in set_param_* functions *)
@@ -396,6 +515,8 @@ let set_param_Float = set_param_ty Float.to_value
 let set_param_Decimal = set_param_ty Decimal.to_value
 let set_param_Datetime = set_param_ty Datetime.to_value
 let set_param_Json = set_param_ty Json.to_value
+let set_param_Json_path = set_param_ty Json_path.to_value
+let set_param_One_or_all = set_param_ty One_or_all.to_value
 
 (* convenience functions for setting parameters *)
 (* these are used in the generated code *)
@@ -407,6 +528,8 @@ let set_param_float = set_param_ty Float.set_float
 let set_param_decimal = set_param_ty Decimal.set_float
 let set_param_datetime = set_param_ty Datetime.set_float
 let set_param_json = set_param_ty Json.set_json
+let set_param_json_path = set_param_ty Json_path.set_json_path
+let set_param_one_or_all = set_param_ty One_or_all.set_one_or_all
 
 (* Make_enum is a functor that takes an Enum module and returns a Value module *)
 (* it is used to create a value type for an enum type *)
