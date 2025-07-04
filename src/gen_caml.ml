@@ -133,9 +133,6 @@ module L = struct
   let as_lang_type = function
   | { t = Blob; nullability } -> type_name { t = Text; nullability }
   | { t = StringLiteral _; nullability } -> type_name { t = Text; nullability }
-  | { t = Json_path; nullability } -> type_name { t = Text; nullability }
-  | { t = One_or_all; nullability } -> type_name { t = Text; nullability }
-  | { t = Json_string; nullability } -> type_name { t = Text; nullability }
   | { t = Unit _; _ }
   | { t = Int; _ }
   | { t = Text; _ }
@@ -145,6 +142,9 @@ module L = struct
   | { t = Decimal; _ }
   | { t = Union _; _ }
   | { t = Json; _ }
+  | { t = Json_path; _ }
+  | { t = One_or_all; _ } 
+  | { t = Json_string; _ }
   | { t = Any; _ } as t -> type_name t
 
   let as_runtime_repr_name = function
