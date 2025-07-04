@@ -151,6 +151,7 @@ struct
       | `String x -> sprintf "string %S" x
       | `Bytes x -> sprintf "bytes %S" (Bytes.to_string x)
       | `Decimal x -> sprintf "decimal %S" x
+      | `Json x -> sprintf "json %S" x
       | `Time x ->
       let open M.Time in
       sprintf "time %04d-%02d-%02d %02d:%02d:%02d.%03d" (year x) (month x) (day x) (hour x) (minute x) (second x) (microsecond x)
@@ -294,7 +295,7 @@ struct
         | `Json x -> Yojson.Basic.from_string x
         | #M.Field.value as value -> convfail "json" v value
 
-      let of_field field = handle_with_json  field (M.Field.value field )
+      let of_field field = handle_with_json field (M.Field.value field )
       let to_value x = `String (Yojson.Basic.to_string x)
       let to_literal x = Text.to_literal (Yojson.Basic.to_string x)
     end)
