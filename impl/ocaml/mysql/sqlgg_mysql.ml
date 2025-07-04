@@ -98,6 +98,13 @@ module type Types = sig
     val json_path_to_literal : json_path -> string
   end
 
+  module One_or_all : sig
+    include Value
+    val get_one_or_all : string -> one_or_all
+    val set_one_or_all : one_or_all -> string
+    val one_or_all_to_literal : one_or_all -> string
+  end
+
   module Any : Value
 end
 
@@ -216,20 +223,25 @@ module Default_types = struct
   end
 
   module One_or_all = struct
-    type t = [ `One | `All ]
+    type t = one_or_all
+
+    let of_string s =
+      match String.lowercase_ascii s with
+      | "one" -> `One
+      | "all" -> `All
+      | _ -> failwith (sprintf "One_or_all.of_string: unknown value %s" s)
+
+    let to_string = function
+      | `One -> "one"
+      | `All -> "all"
 
     let to_literal = function
-      | `One -> "ONE"
-      | `All -> "ALL"
+      | `One -> "one"
+      | `All -> "all"
 
-    let inj = function
-      | "ONE" -> `One
-      | "ALL" -> `All
-      | s -> failwith (sprintf "One_or_all.inj: unknown value %s" s)
-
-    let proj = function
-      | `One -> "ONE"
-      | `All -> "ALL"
+    let get_one_or_all = of_string
+    let set_one_or_all = to_string
+    let one_or_all_to_literal = to_literal
   end
 
   module Any = Text
@@ -304,6 +316,7 @@ let get_column_Decimal, get_column_Decimal_nullable = get_column_ty "Decimal" De
 let get_column_Datetime, get_column_Datetime_nullable = get_column_ty "Datetime" Datetime.of_string
 let get_column_Json, get_column_Json_nullable = get_column_ty "Json" Json.of_string
 let get_column_Json_path, get_column_Json_path_nullable = get_column_ty "Json_path" Json_path.of_string
+let get_column_One_or_all, get_column_One_or_all_nullable = get_column_ty "One_or_all" One_or_all.of_string
 let get_column_Any, get_column_Any_nullable = get_column_ty "Any" Any.of_string
 
 let get_column_bool, get_column_bool_nullable = get_column_ty "bool" Bool.get_bool
@@ -314,6 +327,7 @@ let get_column_datetime, get_column_datetime_nullable = get_column_ty "string" D
 let get_column_string, get_column_string_nullable = get_column_ty "string" Text.get_string
 let get_column_json, get_column_json_nullable = get_column_ty "json" Json.get_string
 let get_column_json_path, get_column_json_path_nullable = get_column_ty "json_path" Json_path.get_json_path
+let get_column_one_or_all, get_column_one_or_all_nullable = get_column_ty "one_or_all" One_or_all.get_one_or_all
 
 let bind_param data (_,params,index) =
   match data with
@@ -335,6 +349,7 @@ let set_param_Decimal = set_param_ty Decimal.to_string
 let set_param_Datetime = set_param_ty Datetime.to_string
 let set_param_Json = set_param_ty Json.to_string
 let set_param_Json_path = set_param_ty Json_path.to_string
+let set_param_One_or_all = set_param_ty One_or_all.to_string
 
 let set_param_string = set_param_ty Text.set_string
 let set_param_bool = set_param_ty Bool.set_bool
@@ -344,6 +359,7 @@ let set_param_decimal = set_param_ty Decimal.set_float
 let set_param_datetime = set_param_ty Datetime.set_float
 let set_param_json = set_param_ty Json.set_string
 let set_param_json_path = set_param_ty Json_path.set_json_path
+let set_param_one_or_all = set_param_ty One_or_all.set_one_or_all
 
 module Make_enum (E: Enum) = struct 
 
