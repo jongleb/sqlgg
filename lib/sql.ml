@@ -844,20 +844,20 @@ let () =
    Applied to: JSON_SET, JSON_ARRAY_APPEND, JSON_OBJECT, JSON_ARRAY, etc.
   *)
   "json_array_append" |> add_fixed_then_pairs
-    ~ret:(Typ json)
-    ~fixed_args:[Typ json; Typ json_path; Typ (depends Any)]
+    ~ret:(Typ (depends Json))
+    ~fixed_args:[Typ (depends Json); Typ json_path; Typ (depends Any)]
     ~repeating_pattern:[Typ json_path; Typ (depends Any)];
-  "json_search" |> monomorphic json_string [json; strict One_or_all; text];
+  "json_search" |> monomorphic ((nullable Json_string)) [json; strict One_or_all; text];
   "json_search" |> add_fixed_then_pairs
-    ~ret:(Typ json_string)
+    ~ret:(Typ (nullable Json_string))
     ~fixed_args:[Typ json; Typ (strict One_or_all); Typ text; Typ text]
     ~repeating_pattern:[Typ json_path];
   "json_remove" |> add_fixed_then_pairs
-    ~ret:(Typ json)
+    ~ret:(Typ (nullable Json))
     ~fixed_args:[Typ json; Typ json_path]
     ~repeating_pattern:[Typ json_path];   
   "json_set" |> add_fixed_then_pairs
-    ~ret:(Typ json)
+    ~ret:(Typ (nullable Json))
     ~fixed_args:[Typ json; Typ json_path; Typ (depends Any)]
     ~repeating_pattern:[Typ json_path; Typ (depends Any)];
   "json_array" |> multi ~ret:(Typ json) (Typ (depends Any));
@@ -866,11 +866,11 @@ let () =
     ~ret:(Typ json)
     ~fixed_args:[Typ text; Typ (depends Any)]
     ~repeating_pattern:[Typ text; Typ (depends Any)]; 
-  "json_contains" |> add 2 (F (Typ bool, [Typ json; Typ json]));
-  "json_contains" |> add 3 (F (Typ bool, [Typ json; Typ json; Typ json_path]));
+  "json_contains" |> add 2 (F (Typ (nullable Bool), [Typ json; Typ json]));
+  "json_contains" |> add 3 (F (Typ (nullable Bool), [Typ json; Typ json; Typ json_path]));
   "json_unquote" |> monomorphic text [json_string];
   "json_extract" |> add_fixed_then_pairs
-    ~ret:(Typ json)
+    ~ret:(Typ (nullable Json))
     ~fixed_args:[Typ json; Typ json_path]
     ~repeating_pattern:[Typ json_path];
   ()

@@ -319,7 +319,27 @@ let rec resolve_columns env expr =
   let rec each e =
     match e with
     | Value x -> ResValue x
-    | Column col -> ResValue (resolve_column ~env col).attr.domain
+    | Column col ->
+      let attr = (resolve_column ~env col).attr in
+      let json_null_kind = Meta.find_opt attr.meta "json_null_kind" in
+      let text_as_json = Meta.find_opt attr.meta "text_as_json" in
+      let domain = match json_null_kind, text_as_json, attr.domain with
+        | Some v, _, ({ t = Json; _ } as d)
+        | Some v, Some "true", ({ t = Text; _ } as d) -> 
+          (*  Determines if JSON null is allowed as part of the value.
+              Since SQL DDL can't express this, we rely on json_null_kind metadata.
+              This matters because JSON null is valid JSON, but may clash with SQL NULL
+          *)
+          let nullability = if v <> "false" then Type.Nullable else Type.Strict in
+          { Type.t = d.t; nullability; }
+        | _, Some _, _ -> 
+          fail "Column %s has text_as_json meta, but its type is not Text" col.cname  
+        | Some _, _, _ -> 
+          fail "Column %s has json_null_kind meta, but its type is not Json or Text" col.cname
+        | None, _, _ -> 
+          attr.domain
+      in
+      ResValue domain
     | OptionActions { choice; pos; kind } ->
       let choice_id = match bool_choice_id choice with
       | Some choice_id -> choice_id
