@@ -326,9 +326,29 @@ let rec resolve_columns env expr =
       let domain = match json_null_kind, text_as_json, attr.domain with
         | Some v, _, ({ t = Json; _ } as d)
         | Some v, Some "true", ({ t = Text; _ } as d) -> 
-          (*  Determines if JSON null is allowed as part of the value.
-              Since SQL DDL can't express this, we rely on json_null_kind metadata.
-              This matters because JSON null is valid JSON, but may clash with SQL NULL
+          (*
+            Determines whether JSON null is allowed as a valid value in the column.
+
+            JSON null (i.e. the literal `null` in a JSON document) is distinct from SQL NULL.
+            - JSON null is an actual value in JSON and can appear inside arrays or objects.
+            - SQL NULL means "no value at all" and causes most JSON functions to return NULL
+              if encountered as an argument (e.g. JSON_ARRAY_APPEND returns NULL if any argument is SQL NULL).
+
+            Standard SQL DDL (e.g. CREATE TABLE) does not allow expressing whether JSON null is allowed
+            for JSON columns — it only covers SQL NULL via NOT NULL constraints.
+
+            To bridge this semantic gap, we introduce a custom meta-attribute `json_null_kind`:
+              - "true" or "auto" → JSON null is allowed (treated as a Nullable domain)
+              - "false"          → JSON null is disallowed (treated as Strict)
+
+            Additionally, if `text_as_json` is set and the underlying type is `Text`,
+            we apply the same logic (since JSON is serialized into text in that case).
+
+            The resulting domain is:
+              - Nullable → JSON null is allowed in values
+              - Strict   → JSON null is rejected during validation
+
+            This impacts how JSON expressions are parsed, validated, and how DDL is generated.
           *)
           let nullability = if v <> "false" then Type.Nullable else Type.Strict in
           { Type.t = d.t; nullability; }

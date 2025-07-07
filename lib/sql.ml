@@ -249,8 +249,6 @@ struct
   | F (ret, args) -> fprintf pp "%s -> %s" (String.concat " -> " @@ List.map string_of_tyvar args) (string_of_tyvar ret)
   | Coalesce (ret, each_arg) -> fprintf pp "{ %s }+ -> %s" (string_of_tyvar each_arg) (string_of_tyvar ret)
   | Comparison -> fprintf pp "'a -> 'a -> %s" (show_kind Bool)
-  | Multi { ret; fixed_args = []; repeating_pattern = [single_arg] } ->
-      fprintf pp "{ %s }+ -> %s" (string_of_tyvar single_arg) (string_of_tyvar ret)
   | Multi { ret; fixed_args; repeating_pattern } ->
       let fixed_str = match fixed_args with
         | [] -> ""
@@ -853,11 +851,11 @@ let () =
     ~fixed_args:[Typ json; Typ (strict One_or_all); Typ text; Typ text]
     ~repeating_pattern:[Typ json_path];
   "json_remove" |> add_fixed_then_pairs
-    ~ret:(Typ (nullable Json))
+    ~ret:(Typ (depends Json))
     ~fixed_args:[Typ json; Typ json_path]
     ~repeating_pattern:[Typ json_path];   
   "json_set" |> add_fixed_then_pairs
-    ~ret:(Typ (nullable Json))
+    ~ret:(Typ (depends Json))
     ~fixed_args:[Typ json; Typ json_path; Typ (depends Any)]
     ~repeating_pattern:[Typ json_path; Typ (depends Any)];
   "json_array" |> multi ~ret:(Typ json) (Typ (depends Any));
@@ -866,8 +864,8 @@ let () =
     ~ret:(Typ json)
     ~fixed_args:[Typ text; Typ (depends Any)]
     ~repeating_pattern:[Typ text; Typ (depends Any)]; 
-  "json_contains" |> add 2 (F (Typ (nullable Bool), [Typ json; Typ json]));
-  "json_contains" |> add 3 (F (Typ (nullable Bool), [Typ json; Typ json; Typ json_path]));
+  "json_contains" |> add 2 (F (Typ (nullable Int), [Typ json; Typ json]));
+  "json_contains" |> add 3 (F (Typ (nullable Int), [Typ json; Typ json; Typ json_path]));
   "json_unquote" |> monomorphic text [json_string];
   "json_extract" |> add_fixed_then_pairs
     ~ret:(Typ (nullable Json))
