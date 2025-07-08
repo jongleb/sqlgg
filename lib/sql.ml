@@ -169,7 +169,7 @@ struct
 
   type func =
   | Agg of agg_fun (* 'a -> 'a | 'a -> t *)
-  | Multi of tyvar * tyvar (* 'a -> ... -> 'a -> 'b *)
+  | Variadic of tyvar * tyvar (* 'a -> ... -> 'a -> 'b *)
   | Coalesce of tyvar * tyvar
   | Comparison
   | Ret of t (* _ -> t *) (* TODO eliminate *)
@@ -188,14 +188,14 @@ struct
   | Agg Count -> fprintf pp "|'a| -> int"
   | Ret ret -> fprintf pp "_ -> %s" (show ret)
   | F (ret, args) -> fprintf pp "%s -> %s" (String.concat " -> " @@ List.map string_of_tyvar args) (string_of_tyvar ret)
-  | Multi (ret, each_arg) | Coalesce (ret, each_arg) -> fprintf pp "{ %s }+ -> %s" (string_of_tyvar each_arg) (string_of_tyvar ret)
+  | Variadic (ret, each_arg) | Coalesce (ret, each_arg) -> fprintf pp "{ %s }+ -> %s" (string_of_tyvar each_arg) (string_of_tyvar ret)
   | Comparison -> fprintf pp "'a -> 'a -> %s" (show_kind Bool)
 
   let string_of_func = Format.asprintf "%a" pp_func
 
   let is_grouping = function
   | Agg _ -> true
-  | Ret _ | F _ | Multi _ | Coalesce _  | Comparison -> false
+  | Ret _ | F _ | Variadic _ | Coalesce _  | Comparison -> false
 end
 
 module Constraint =
@@ -607,8 +607,8 @@ val lookup_agg : string -> int -> Type.func
 val add : int -> Type.func -> string -> unit
 val exclude : int -> string -> unit
 val monomorphic : Type.t -> Type.t list -> string -> unit
-val multi : ret:Type.tyvar -> Type.tyvar -> string -> unit
-val multi_polymorphic : string -> unit
+val variadic : ret:Type.tyvar -> Type.tyvar -> string -> unit
+val fixed :  Type.t -> Type.t list -> string -> unit
 val add_multi: Type.func -> string -> unit
 val sponge : Type.func
 
@@ -628,7 +628,7 @@ let exclude narg name = add_ (Some narg) None name
 let add_multi typ name = add_ None (Some typ) name
 let add narg typ name = add_ (Some narg) (Some typ) name
 
-let sponge = let open Type in let any = depends Any in Multi (Typ any, Typ any)
+let sponge = let open Type in let any = depends Any in Variadic (Typ any, Typ any)
 
 let lookup name narg =
   let name = String.lowercase_ascii name in
@@ -650,8 +650,8 @@ let lookup_agg name narg = match lookup name narg with
   | _ -> fail "Function %s is not an aggregate function" name
 
 let monomorphic ret args name = add (List.length args) Type.(monomorphic ret args) name
-let multi_polymorphic name = add_multi Type.(Multi (Var 0, Var 0)) name
-let multi ~ret args name = add_multi Type.(Multi (ret, args)) name
+let variadic ~ret arg_type name = add_multi (Variadic (ret, arg_type)) name
+let fixed ret args name = add (List.length args) (F (Typ ret, List.map (fun t -> Type.Typ t) args)) name
 
 end
 
@@ -668,7 +668,7 @@ let () =
   "count" |> add 1 (Agg Count);
   ["max";"min";"sum";] ||> add 1 (Agg Self);
   "avg" |> add 1 (Agg (Avg));
-  ["max";"min"] ||> multi_polymorphic; (* sqlite3 *)
+  ["max";"min"] ||> variadic ~ret:(Var 0) (Var 0); (* sqlite3 - полиморфные *)
   ["lower";"upper";"unhex";"md5";"sha";"sha1";"sha2"; "trim"; "to_base64"] ||> monomorphic text [text];
   "hex" |> monomorphic text [int];
   "length" |> monomorphic int [text];
@@ -678,12 +678,13 @@ let () =
   "floor" |> monomorphic int [float];
   "nullif" |> add 2 (F (Var 0 (* TODO nullable *), [Var 0; Var 0]));
   "ifnull" |> add 2 (F (Var 0, [Var 1; Var 0]));
-  ["least";"greatest";] ||> multi_polymorphic;
+  ["least";"greatest";] ||> variadic ~ret:(Var 0) (Var 0); (* полиморфные вариативные *)
   "strftime" |> exclude 1; (* requires at least 2 arguments *)
-  ["concat";"concat_ws";"strftime"] ||> multi ~ret:(Typ text) (Typ text);
+  ["concat";"concat_ws"] ||> variadic ~ret:(Typ (depends Text)) (Typ (depends Text)); (* ИСПРАВЛЕНО - теперь сохраняет nullability *)
+  "strftime" |> variadic ~ret:(Typ text) (Typ text);
   "date" |> monomorphic datetime [datetime];
   "time" |> monomorphic text [datetime];
-  "julianday" |> multi ~ret:(Typ float) (Typ text);
+  "julianday" |> variadic ~ret:(Typ float) (Typ text);
   "from_unixtime" |> monomorphic datetime [int];
   "from_unixtime" |> monomorphic text [int;text];
   ["pow"; "power"] ||> monomorphic float [float;int];
@@ -702,13 +703,13 @@ let () =
   "is_uuid" |> monomorphic bool [text];
   ["date_add"; "date_sub"] ||> monomorphic datetime [datetime; datetime];
   "date_format" |> monomorphic text [datetime; text];
-  "json_remove" |> multi ~ret:(Typ text) (Typ text);
-  "json_array" |> multi ~ret:(Typ text) (Typ text);
-  "json_object" |> multi ~ret:(Typ text) (Typ text);
-  "json_contains" |> multi ~ret:(Typ bool) (Typ text);
+  "json_remove" |> variadic ~ret:(Typ text) (Typ text);
+  "json_array" |> variadic ~ret:(Typ text) (Typ text);
+  "json_object" |> variadic ~ret:(Typ text) (Typ text);
+  "json_contains" |> variadic ~ret:(Typ bool) (Typ text);
   "json_unquote" |> monomorphic text [text];
-  "json_array_append" |> multi ~ret:(Typ text) (Typ text);
-  "json_search" |> multi ~ret:(Typ text) (Typ text);
+  "json_array_append" |> variadic ~ret:(Typ text) (Typ text);
+  "json_search" |> variadic ~ret:(Typ text) (Typ text);
   "json_set" |> add 3 (F (Typ text, [Typ text; Typ text; Var 0]));
   "makedate" |> monomorphic datetime [int; int];
   ()

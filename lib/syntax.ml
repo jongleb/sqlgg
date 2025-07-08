@@ -490,11 +490,7 @@ and assign_types env expr =
         in
         if !debug then eprintfn "func %s" (show_func ());
         let types_to_arg each_arg = List.map (const each_arg) types in
-        let func =
-          match kind with
-          | Multi (ret,each_arg) -> F (ret, types_to_arg each_arg)
-          | x -> x
-        in
+
         let convert_args ret args = 
           let typevar = Hashtbl.create 10 in
           List.iter2 begin fun arg typ ->
@@ -525,8 +521,12 @@ and assign_types env expr =
            In both cases, if we're in a context that expects a value (like a subquery), the result should be nullable. *)
         let consider_agg_nullability typ = if (env.query_has_grouping || is_over_clause) && is_strict typ then typ else make_nullable typ in
 
-        let (ret,inferred_params) = match func, types with
-        | Multi _, _ -> assert false (* rewritten into F above *)
+        let (ret,inferred_params) = match kind, types with
+        | Variadic (ret_var, arg_var), _ ->
+          let args = List.map (const arg_var) types in
+          let args, ret = convert_args ret_var args in
+          let nullable = common_nullability types in
+          undepend ret nullable, args
         | Agg Count, ([] (* asterisk *) | [_]) -> strict Int, types
         | Agg Avg, [_] -> consider_agg_nullability @@ nullable Float, types
         | Agg Self, [typ] -> consider_agg_nullability typ, types
@@ -564,7 +564,7 @@ and assign_types env expr =
             let nullable = common_nullability args in
             undepend ret nullable, args
         in
-        ResFun { kind = func; parameters = (List.map2 assign_params inferred_params params); is_over_clause }, `Ok ret
+        ResFun { kind; parameters = (List.map2 assign_params inferred_params params); is_over_clause }, `Ok ret
   and typeof expr =
     let r = typeof_ expr in
     if !debug then eprintfn "%s is typeof %s" (Type.show @@ get_or_failwith @@ snd r) (show_res_expr @@ fst r);
