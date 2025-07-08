@@ -86,7 +86,7 @@ let test = Type.[
      [attr' ~nullability:(Nullable) "str" Text]
      [param Int];
   tt "SELECT x,y+? AS z FROM (SELECT id AS y,CONCAT(str,name) AS x FROM test WHERE id=@id*2) ORDER BY x,x+z LIMIT @lim"
-     [attr' "x" Text; attr' ~nullability:(Nullable) "z" Int]
+     [attr' ~nullability:(Nullable) "x" Text; attr' ~nullability:(Nullable) "z" Int]
      [param_nullable Int; named "id" Int; named "lim" Int; ];
   tt "select test.name,other.name as other_name from test, test as other where test.id=other.id + @delta"
      [  attr' ~nullability:(Nullable) "name" Text;

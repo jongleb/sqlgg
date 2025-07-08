@@ -497,12 +497,15 @@ and assign_types env expr =
         in
         let convert_args ret args = 
           let typevar = Hashtbl.create 10 in
-          List.iter2 begin fun arg typ ->
+          let resolved_typs = Hashtbl.create 10 in
+          
+          List.iteri begin fun idx arg ->
+            let typ = List.nth types idx in
             match arg with
             | Typ arg ->
               begin match common_type arg typ with
               | None -> fail "types %s and %s do not match in %s" (show arg) (show typ) (show_func ())
-              | Some _ -> ()
+              | Some unified -> Hashtbl.add resolved_typs idx unified
               end
             | Var i ->
               let var =
@@ -515,11 +518,23 @@ and assign_types env expr =
                 if !debug then Type.(eprintfn "common_type %s %s = %s" (show var) (show typ) (show t));
                 Hashtbl.replace typevar i t
               | None -> fail "types %s and %s for %s do not match in %s" (show var) (show typ) (string_of_tyvar arg) (show_func ());
-          end args types;
+          end args;
+          
           if !debug then typevar |> Hashtbl.iter (fun i typ -> eprintfn "%s : %s" (string_of_tyvar (Var i)) (show typ));
-          let convert = function Typ t -> t | Var i -> Hashtbl.find typevar i in
-          let args = List.map convert args in
-          args, convert ret in
+          
+          let convert idx = function 
+            | Typ t -> 
+              (try Hashtbl.find resolved_typs idx 
+              with Not_found -> t)
+            | Var i -> Hashtbl.find typevar i 
+          in
+          
+          let args = List.mapi convert args in
+          let ret = match ret with
+            | Typ t -> t
+            | Var i -> Hashtbl.find typevar i
+          in
+          args, ret in
 
         (* With GROUP BY, the query returns no rows if no groups exist. With OVER clause, the query returns no rows if the outer query filter eliminates all rows.
            In both cases, if we're in a context that expects a value (like a subquery), the result should be nullable. *)
