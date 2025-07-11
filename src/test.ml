@@ -1673,19 +1673,19 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
   wrong "SELECT JSON_CONTAINS('{\"a\": 2}', 'INVALID') as result";
   (* tt "SELECT JSON_CONTAINS('{\"a\": 2}', NULL) as result" [][]; *)
   tt "SELECT JSON_UNQUOTE(@json_val) as result" 
-    [ attr' "result" Text ] [ named "json_val" Json_string ];
+    [ attr' "result" Text ] [ named "json_val" Json ];
   tt "SELECT JSON_UNQUOTE(JSON_EXTRACT(data, '$.name')) as name FROM test46" 
     [ attr' "name" Text ] [];
   wrong "SELECT JSON_UNQUOTE('not a json value') as result";
   tt "SELECT JSON_SEARCH(@json, 'one', @pattern) as result" 
-    [ attr' ~nullability:Nullable "result" Json_string ] [ 
+    [ attr' ~nullability:Nullable "result" Json ] [ 
       named "json" Json; 
       named "pattern" Text 
     ];
   tt "SELECT JSON_SEARCH(data, 'all', 'search%', '\\\\', '$.users') as paths FROM test46" 
-    [ attr' ~nullability:Nullable "paths" Json_string ] [];
+    [ attr' ~nullability:Nullable "paths" Json ] [];
   tt "SELECT JSON_SEARCH(@json, 'one', @pattern, @escape, @path1, @path2) as result" 
-    [ attr' ~nullability:Nullable "result" Json_string ] [ 
+    [ attr' ~nullability:Nullable "result" Json ] [ 
       named "json" Json; 
       named "pattern" Text;
       named "escape" Text;
@@ -1707,7 +1707,7 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
       FROM test46 WHERE id = 1 |} [
         attr' "name" Text;
         attr' ~nullability:Nullable "is_admin" Bool; 
-        attr' ~nullability:Nullable "test_path" Json_string;
+        attr' ~nullability:Nullable "test_path" Json;
       ] [];
 ]
 

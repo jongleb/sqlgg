@@ -15,7 +15,7 @@ module M (T: Sqlgg_traits.M with type Types.Json.t = Yojson.Basic.t and
     
     Print_ocaml_impl.clear_mock_responses ();
     Print_ocaml_impl.setup_select_one_response (Some (
-      Print_ocaml_impl.make_mock_row [Print_ocaml_impl.mock_text "$.users[0].settings.themes[0]"]
+      Print_ocaml_impl.make_mock_row [Print_ocaml_impl.mock_json (`String "$.users[0].settings.themes[0]")]
     ));
     
     let result = Sql.test1 ~json:
@@ -168,7 +168,7 @@ module M (T: Sqlgg_traits.M with type Types.Json.t = Yojson.Basic.t and
     
     Print_ocaml_impl.clear_mock_responses ();
     Print_ocaml_impl.setup_select_response [
-      Print_ocaml_impl.make_mock_row [Print_ocaml_impl.mock_int 5L; Print_ocaml_impl.mock_text "administrator"];
+      Print_ocaml_impl.make_mock_row [Print_ocaml_impl.mock_json (`String "$.test[0]")];
     ];
     
     let result = Sql.test10 ~search_value:"admin" ~id:5L connection (fun ~r -> 

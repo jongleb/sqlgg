@@ -289,7 +289,7 @@ Test Json functions and ocaml compiles:
   [MOCK SELECT_ONE] Connection: test_connection
   [SQL] SELECT JSON_SEARCH('{\"users\":[{\"id\":1,\"settings\":{\"themes\":[\"dark\"]}}]}', 'one', 'dark')
   [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "$.users[0].settings.themes[0]"
+  [MOCK] get_column_Json_nullable[0] = Some "$.users[0].settings.themes[0]"
   [TEST 1] Result: completed
   
   [TEST 2] Testing JSON path parameter with combinators
@@ -377,8 +377,8 @@ Test Json functions and ocaml compiles:
   [MOCK SELECT] Connection: test_connection
   [SQL] SELECT JSON_SEARCH(col1, 'one', 'admin') FROM table1 WHERE id = 5
   [MOCK] Returning 1 rows
-    Row 0: col0=5 col1=administrator 
-  [MOCK] get_column_Text_nullable[0] = Some "mock_text" (default)
+    Row 0: col0="$.test[0]" 
+  [MOCK] get_column_Json_nullable[0] = Some "$.test[0]"
     -> Callback executed for test10 with result
   [TEST 10] Result: completed
   
