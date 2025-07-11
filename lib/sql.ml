@@ -227,7 +227,7 @@ struct
     fixed_args: tyvar list; 
     repeating_pattern: tyvar list 
   }
-  (* For functions with fixed initial args + optional repeating pattern
+  (* repeating_pattern is needed for functions with fixed initial args + optional repeating pattern
      Example: JSON_ARRAY_APPEND(json_doc, path, val[, path, val] ...)
      - return_type: what function returns
      - fixed_args: required initial arguments [json_doc, path, val] 
@@ -856,8 +856,8 @@ let () =
     ~repeating_pattern:[Typ json_path];   
   "json_set" |> add_fixed_then_pairs
     ~ret:(Typ (depends Json))
-    ~fixed_args:[Typ json; Typ json_path; Typ (depends Any)]
-    ~repeating_pattern:[Typ json_path; Typ (depends Any)];
+    ~fixed_args:[(Typ (depends Json)); Typ (depends Json_path); Typ (depends Any)]
+    ~repeating_pattern:[Typ (depends Json_path); Typ (depends Any)];
   "json_array" |> multi ~ret:(Typ json) (Typ (depends Any));
   "json_object" |> add 0 (F (Typ json, []));
   "json_object" |> add_fixed_then_pairs

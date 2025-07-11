@@ -8,6 +8,18 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
   data JSON\n\
 )") T.no_params
 
+  let create_people_data_json_kind_never_null_but_col_nullable db  =
+    T.execute db ("CREATE TABLE people_data_json_kind_never_null_but_col_nullable (\n\
+  id INT AUTO_INCREMENT PRIMARY KEY,\n\
+  data JSON\n\
+)") T.no_params
+
+  let create_people_data_json_kind_never_null_and_col_strict db  =
+    T.execute db ("CREATE TABLE people_data_json_kind_never_null_and_col_strict (\n\
+  id INT AUTO_INCREMENT PRIMARY KEY,\n\
+  data JSON NOT NULL\n\
+)") T.no_params
+
   let one db  =
     T.execute db ("INSERT INTO people (data) VALUES\n\
   (JSON_OBJECT(\n\
@@ -47,20 +59,25 @@ WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.address.city')) = 'Paris'") T.no_params
     let invoke_callback stmt =
       callback
         ~id:(T.get_column_Int stmt 0)
-        ~data_with_active:(T.get_column_Json stmt 1)
+        ~data_with_active:(T.get_column_Json_nullable stmt 1)
     in
     T.select db ("SELECT\n\
   id,\n\
   JSON_SET(data, '$.active', TRUE) AS data_with_active\n\
 FROM people") T.no_params invoke_callback
 
-  let create_people_data_json_never_null db  =
-    T.execute db ("CREATE TABLE people_data_json_never_null (\n\
-  id INT AUTO_INCREMENT PRIMARY KEY,\n\
-  data JSON\n\
-)") T.no_params
-
   let four db  callback =
+    let invoke_callback stmt =
+      callback
+        ~id:(T.get_column_Int stmt 0)
+        ~data_with_active:(T.get_column_Json_nullable stmt 1)
+    in
+    T.select db ("SELECT\n\
+  id,\n\
+  JSON_SET(data, '$.active', TRUE) AS data_with_active\n\
+FROM people_data_json_kind_never_null_but_col_nullable") T.no_params invoke_callback
+
+  let five db  callback =
     let invoke_callback stmt =
       callback
         ~id:(T.get_column_Int stmt 0)
@@ -69,7 +86,7 @@ FROM people") T.no_params invoke_callback
     T.select db ("SELECT\n\
   id,\n\
   JSON_SET(data, '$.active', TRUE) AS data_with_active\n\
-FROM people_data_json_never_null") T.no_params invoke_callback
+FROM people_data_json_kind_never_null_and_col_strict") T.no_params invoke_callback
 
   module Fold = struct
     let two db  callback acc =
@@ -88,7 +105,7 @@ WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.address.city')) = 'Paris'") T.no_params
       let invoke_callback stmt =
         callback
           ~id:(T.get_column_Int stmt 0)
-          ~data_with_active:(T.get_column_Json stmt 1)
+          ~data_with_active:(T.get_column_Json_nullable stmt 1)
       in
       let r_acc = ref acc in
       IO.(>>=) (T.select db ("SELECT\n\
@@ -101,13 +118,26 @@ FROM people") T.no_params (fun x -> r_acc := invoke_callback x !r_acc))
       let invoke_callback stmt =
         callback
           ~id:(T.get_column_Int stmt 0)
+          ~data_with_active:(T.get_column_Json_nullable stmt 1)
+      in
+      let r_acc = ref acc in
+      IO.(>>=) (T.select db ("SELECT\n\
+  id,\n\
+  JSON_SET(data, '$.active', TRUE) AS data_with_active\n\
+FROM people_data_json_kind_never_null_but_col_nullable") T.no_params (fun x -> r_acc := invoke_callback x !r_acc))
+      (fun () -> IO.return !r_acc)
+
+    let five db  callback acc =
+      let invoke_callback stmt =
+        callback
+          ~id:(T.get_column_Int stmt 0)
           ~data_with_active:(T.get_column_Json stmt 1)
       in
       let r_acc = ref acc in
       IO.(>>=) (T.select db ("SELECT\n\
   id,\n\
   JSON_SET(data, '$.active', TRUE) AS data_with_active\n\
-FROM people_data_json_never_null") T.no_params (fun x -> r_acc := invoke_callback x !r_acc))
+FROM people_data_json_kind_never_null_and_col_strict") T.no_params (fun x -> r_acc := invoke_callback x !r_acc))
       (fun () -> IO.return !r_acc)
 
   end (* module Fold *)
@@ -129,7 +159,7 @@ WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.address.city')) = 'Paris'") T.no_params
       let invoke_callback stmt =
         callback
           ~id:(T.get_column_Int stmt 0)
-          ~data_with_active:(T.get_column_Json stmt 1)
+          ~data_with_active:(T.get_column_Json_nullable stmt 1)
       in
       let r_acc = ref [] in
       IO.(>>=) (T.select db ("SELECT\n\
@@ -142,13 +172,26 @@ FROM people") T.no_params (fun x -> r_acc := invoke_callback x :: !r_acc))
       let invoke_callback stmt =
         callback
           ~id:(T.get_column_Int stmt 0)
+          ~data_with_active:(T.get_column_Json_nullable stmt 1)
+      in
+      let r_acc = ref [] in
+      IO.(>>=) (T.select db ("SELECT\n\
+  id,\n\
+  JSON_SET(data, '$.active', TRUE) AS data_with_active\n\
+FROM people_data_json_kind_never_null_but_col_nullable") T.no_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+      (fun () -> IO.return (List.rev !r_acc))
+
+    let five db  callback =
+      let invoke_callback stmt =
+        callback
+          ~id:(T.get_column_Int stmt 0)
           ~data_with_active:(T.get_column_Json stmt 1)
       in
       let r_acc = ref [] in
       IO.(>>=) (T.select db ("SELECT\n\
   id,\n\
   JSON_SET(data, '$.active', TRUE) AS data_with_active\n\
-FROM people_data_json_never_null") T.no_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+FROM people_data_json_kind_never_null_and_col_strict") T.no_params (fun x -> r_acc := invoke_callback x :: !r_acc))
       (fun () -> IO.return (List.rev !r_acc))
 
   end (* module List *)

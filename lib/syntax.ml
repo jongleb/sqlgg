@@ -324,8 +324,8 @@ let rec resolve_columns env expr =
       let json_null_kind = Meta.find_opt attr.meta "json_null_kind" in
       let text_as_json = Meta.find_opt attr.meta "text_as_json" in
       let domain = match json_null_kind, text_as_json, attr.domain with
-        | v, _, ({ t = Json; _ } as d)
-        | v, Some "true", ({ t = Text; _ } as d) -> 
+        | v, _, ({ t = Json; nullability } as d)
+        | v, Some "true", ({ t = Text; nullability } as d) -> 
           (*
             Determines whether JSON null is allowed as a valid value in the column.
 
@@ -350,8 +350,8 @@ let rec resolve_columns env expr =
 
             This impacts how JSON expressions are parsed, validated, and how DDL is generated.
           *)
-          let nullability = match v with 
-          | Some "false" -> Type.Strict
+          let nullability = match v, nullability with 
+          | Some "false", Type.Strict -> Type.Strict
           | _ -> Type.Nullable
           in
           { Type.t = d.t; nullability; }
@@ -577,7 +577,32 @@ and assign_types env expr =
         let consider_agg_nullability typ = if (env.query_has_grouping || is_over_clause) && is_strict typ then typ else make_nullable typ in
 
         let rec infer_fn func types = match func, types with
-        | Multi (ret, each_arg), t -> infer_fn (F (ret, types_to_arg each_arg)) t
+        | Multi { ret; fixed_args = []; repeating_pattern = [each_arg] }, t -> 
+          infer_fn (F (ret, types_to_arg each_arg)) t
+        | Multi { ret; fixed_args; repeating_pattern }, t->
+          let fixed_count = List.length fixed_args in
+          let pattern_length = List.length repeating_pattern in
+          let total_args = List.length types in
+
+          if total_args < fixed_count then
+            fail "function %s requires at least %d arguments, got %d" 
+              (show_func ()) fixed_count total_args
+          else if Stdlib.(pattern_length = 0) then (
+            if total_args <> fixed_count then
+              fail "function %s requires exactly %d arguments, got %d" 
+          (show_func ()) fixed_count total_args
+            else
+              infer_fn (F (ret, fixed_args)) t
+          ) else if (total_args - fixed_count) mod pattern_length <> 0 then
+            fail "function %s requires %d fixed args + multiples of %d args, got %d" 
+              (show_func ()) fixed_count pattern_length total_args
+          else
+            let remaining_count = total_args - fixed_count in
+            let repeating_cycles = remaining_count / pattern_length in
+            let repeated_args =
+              List.flatten (List.init repeating_cycles (Fun.const repeating_pattern))
+            in
+            infer_fn (F (ret, fixed_args @ repeated_args)) t
         | Agg Count, ([] (* asterisk *) | [_]) -> strict Int, types
         | Agg Avg, [_] -> consider_agg_nullability @@ nullable Float, types
         | Agg Self, [typ] -> consider_agg_nullability typ, types

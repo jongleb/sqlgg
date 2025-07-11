@@ -3,6 +3,18 @@ CREATE TABLE people (
   data JSON
 );
 
+CREATE TABLE people_data_json_kind_never_null_but_col_nullable (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+-- [sqlgg] json_null_kind=false
+  data JSON
+);
+
+CREATE TABLE people_data_json_kind_never_null_and_col_strict (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+-- [sqlgg] json_null_kind=false
+  data JSON NOT NULL
+);
+
 -- @one
 INSERT INTO people (data) VALUES
   (JSON_OBJECT(
@@ -39,14 +51,14 @@ SELECT
   JSON_SET(data, '$.active', TRUE) AS data_with_active
 FROM people;
 
-CREATE TABLE people_data_json_never_null (
-  id INT AUTO_INCREMENT PRIMARY KEY,
--- [sqlgg] json_null_kind=false
-  data JSON
-);
-
 -- @four
 SELECT
   id,
   JSON_SET(data, '$.active', TRUE) AS data_with_active
-FROM people_data_json_never_null;
+FROM people_data_json_kind_never_null_but_col_nullable;
+
+-- @five
+SELECT
+  id,
+  JSON_SET(data, '$.active', TRUE) AS data_with_active
+FROM people_data_json_kind_never_null_and_col_strict;

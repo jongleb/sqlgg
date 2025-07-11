@@ -1594,11 +1594,32 @@ let test_multi_functions = [
   tt "SELECT CONCAT('prefix:', (SELECT txt1 FROM test_multi LIMIT 1)) as result"
     [attr' ~nullability:(Nullable) "result" Text] [];
 ]
+
+let test_json_and_fixed_then_pairs_fn_kind  = [
+  tt "CREATE TABLE test46 ( id INT AUTO_INCREMENT PRIMARY KEY, data JSON)" [][];
+  tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$', '\"new_val\"') WHERE id = 3" [] [];
+  tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', 'false') WHERE id = 3" [] [];
+  tt {| SELECT JSON_ARRAY_APPEND(
+       data, 
+       '$[0].items',     123,          
+       '$[1].props',     '"hello"',       
+       '$[2].flags',     true,          
+       '$[3].meta',      null,         
+       '$[4].nested',    JSON_OBJECT('x', 'y')
+     ) as result FROM test46 WHERE id = 3 
+    |} [ attr' ~nullability:Nullable "result" Json ] [];
+  wrong "UPDATE test46 SET data = JSON_ARRAY_APPEND('NOT_A_VALID_JSON', '$[0][1][2].three.four.five', 'this is a string') WHERE id = 3";
+  tt {| UPDATE test46 SET data = JSON_ARRAY_APPEND(data, @path, @data :: Text) WHERE id = 3 |} [] [
+    named "path" Json_path;
+    named "data" Text;
+  ];
+  tt "SELECT JSON_REMOVE(@json, '$[1]') as result" [ attr' "result" Json ][ named "json" Json;];
+  wrong "SELECT JSON_REMOVE(@json, 'invalid path') as result";
+  tt "SELECT JSON_REMOVE(@json, @path) as result" [ attr' "result" Json ][ named "json" Json; named "path" Json_path;];
   
   tt "SELECT JSON_REMOVE(@json, '$.field1', '$.field2', '$.nested.prop') as result" 
     [ attr' "result" Json ] [ named "json" Json ];
   tt "UPDATE test46 SET data = JSON_REMOVE(data, '$.old_field') WHERE id = 1" [] [];
-
   tt "UPDATE test46 SET data = JSON_SET(data, '$.name', 'John') WHERE id = 1" [] [];
   tt {| UPDATE test46 SET data = JSON_SET(
         data, 
@@ -1614,7 +1635,7 @@ let test_multi_functions = [
         '$.user.props',   JSON_OBJECT('theme', 'dark'),
         '$.user.count',   42
       ) as result FROM test46 WHERE id = 1
-    |} [ attr' "result" Json ] [];
+    |} [ attr' ~nullability:Nullable "result" Json ] [];
   tt {| UPDATE test46 SET data = JSON_SET(data, @path, @value :: Text, '$.timestamp', @time :: Int) WHERE id = 3 |} 
   [] [
     named "path" Json_path;
@@ -1622,7 +1643,6 @@ let test_multi_functions = [
     named "time" Int;
   ];
   wrong "UPDATE test46 SET data = JSON_SET('INVALID_JSON', '$.field', 'value') WHERE id = 1";
-
   tt "SELECT JSON_OBJECT() as result" [ attr' "result" Json ] [];
   tt "SELECT JSON_OBJECT('name', 'John') as result" [ attr' "result" Json ] [];
   tt "SELECT JSON_OBJECT('name', 'Alice', 'age', 25, 'active', true) as result" 
@@ -1632,7 +1652,6 @@ let test_multi_functions = [
     [ attr' "result" Json ] [ named "key" Text; named "value" Text ];
   tt "SELECT JSON_OBJECT('meta', JSON_EXTRACT(data, '$.info')) as result FROM test46" 
     [ attr' "result" Json ] [];
-
   tt "SELECT JSON_ARRAY() as result" [ attr' "result" Json ] [];
   tt "SELECT JSON_ARRAY(1, 'hello', true, null) as result" [ attr' "result" Json ] [];
   tt "UPDATE test46 SET data = JSON_ARRAY(JSON_OBJECT('id', 1), JSON_OBJECT('id', 2)) WHERE id = 1" [] [];
@@ -1642,7 +1661,6 @@ let test_multi_functions = [
       named "val2" Text; 
       named "val3" Bool 
     ];
-
   tt "SELECT JSON_CONTAINS(@json :: Json, @search) as result" 
     [ attr' ~nullability:Nullable  "result" Int ] [ named "json" Json; named "search" Json ];
   tt {| SELECT JSON_CONTAINS(data, '"target_value"') as found FROM test46 |}
@@ -1651,20 +1669,14 @@ let test_multi_functions = [
   
   tt "SELECT JSON_CONTAINS(data, JSON_OBJECT('key', 'value'), '$.objects') as found FROM test46" 
     [ attr' ~nullability:Nullable "found" Int ] [];
-
   wrong "SELECT JSON_CONTAINS('INVALID_JSON', 'search') as result";
-
   wrong "SELECT JSON_CONTAINS('{\"a\": 2}', 'INVALID') as result";
-
   (* tt "SELECT JSON_CONTAINS('{\"a\": 2}', NULL) as result" [][]; *)
-
   tt "SELECT JSON_UNQUOTE(@json_val) as result" 
     [ attr' "result" Text ] [ named "json_val" Json_string ];
   tt "SELECT JSON_UNQUOTE(JSON_EXTRACT(data, '$.name')) as name FROM test46" 
     [ attr' "name" Text ] [];
-
   wrong "SELECT JSON_UNQUOTE('not a json value') as result";
-
   tt "SELECT JSON_SEARCH(@json, 'one', @pattern) as result" 
     [ attr' ~nullability:Nullable "result" Json_string ] [ 
       named "json" Json; 
@@ -1680,7 +1692,6 @@ let test_multi_functions = [
       named "path1" Json_path;
       named "path2" Json_path;
     ];
-
   tt {| UPDATE test46 SET data = JSON_SET(
         data,
         '$.processed', JSON_ARRAY(
@@ -1689,7 +1700,6 @@ let test_multi_functions = [
         ),
         '$.meta', JSON_OBJECT('version', 2, 'updated', true)
       ) WHERE id = 1 |} [] [];
-
   tt {| SELECT 
         JSON_UNQUOTE(JSON_EXTRACT(data, '$.name')) as name,
         JSON_CONTAINS(data, '"admin"', '$.roles') as is_admin,
@@ -1735,6 +1745,7 @@ let run () =
     "test_type_mapping_params" >:: test_type_mapping_params;
     "test_meta_insert_update" >:: test_meta_insert_update;
     "test_multi_functions" >::: test_multi_functions;
+    "test_json_and_fixed_then_pairs_fn_kind" >::: test_json_and_fixed_then_pairs_fn_kind;
   ]
   in
   let test_suite = "main" >::: tests in
