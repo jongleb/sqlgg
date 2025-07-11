@@ -136,7 +136,7 @@ struct
         | _ -> `Order (StringLiteral x, Json)
         | exception Yojson.Json_error _ -> `No
       end
-    | Text, Json -> `Order (Json, Text)
+    | Text, Json | Json, Text -> `Order (Json, Text)
 
     | (Json_path, StringLiteral x | StringLiteral x, Json_path) 
         when Sqlgg_json_path.Json_path.is_valid x -> `Order (StringLiteral x, Json_path)
