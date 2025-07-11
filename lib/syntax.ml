@@ -324,8 +324,8 @@ let rec resolve_columns env expr =
       let json_null_kind = Meta.find_opt attr.meta "json_null_kind" in
       let text_as_json = Meta.find_opt attr.meta "text_as_json" in
       let domain = match json_null_kind, text_as_json, attr.domain with
-        | v, _, { t = Json; nullability }
-        | v, Some "true", { t = Text; nullability } -> 
+        | v, _, ({ t = Json; nullability } as d)
+        | v, Some "true", ({ t = Text; nullability } as d) -> 
           (*
             Determines whether JSON null is allowed as a valid value in the column.
 
@@ -354,7 +354,7 @@ let rec resolve_columns env expr =
           | Some "false", Type.Strict -> Type.Strict
           | _ -> Type.Nullable
           in
-          { Type.t = Json; nullability; }
+          { Type.t = d.t; nullability; }
         | _, Some _, _ -> 
           fail "Column %s has text_as_json meta, but its type is not Text" col.cname  
         | Some _, _, _ -> 
