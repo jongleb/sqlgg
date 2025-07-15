@@ -305,6 +305,37 @@ struct
     let json_to_literal = to_literal
   end
 
+  module Json2 = struct
+    include Make (struct
+      type t = Sqlgg_trait_types.json
+
+      let handle_with_json v = function
+        | `String x -> Yojson.Basic.from_string x
+        | `Json x -> Yojson.Basic.from_string x
+        | #M.Field.value as value -> convfail "json" v value
+
+      let to_literal (x: t) = Yojson.Safe.to_string (x :> Yojson.Safe.t)
+      let of_field field = 
+        let rec convert_json = function
+          | (`Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _) as x -> x
+          | `Assoc assoc_list ->
+              let convert_pair (key, value) = (key, convert_json value) in
+              `Assoc (List.map convert_pair assoc_list)
+          | `List json_list ->
+              `List (List.map convert_json json_list)
+          | `Tuple _ -> 
+              failwith "Tuple type is not supported"
+          | `Variant _ -> 
+              failwith "Variant type is not supported" in
+        convert_json @@ handle_with_json field (M.Field.value field )
+      let to_value (x: t) = `String (Yojson.Safe.to_string (x :> Yojson.Safe.t))
+    end)
+
+    let get_json = of_field
+    let set_json = to_value
+    let json_to_literal = to_literal
+  end
+
   module Json_path = struct
 
     open Sqlgg_json_path
