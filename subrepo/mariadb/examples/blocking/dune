@@ -1,3 +1,0 @@
-(executable
- (name blocking_example)
- (libraries mariadb))
