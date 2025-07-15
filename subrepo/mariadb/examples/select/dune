@@ -1,0 +1,3 @@
+(executable
+ (name nonblocking_select_example)
+ (libraries mariadb unix))
