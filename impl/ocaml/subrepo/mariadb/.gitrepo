@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
+;
+[subrepo]
+	remote = https://github.com/jchavarri/ocaml-mariadb.git
+	branch = ab062861ba20ef89bc29ffecd9eb2165915f043c
+	commit = ab062861ba20ef89bc29ffecd9eb2165915f043c
+	parent = dc0a70fbd6853015d3bb4a186401de997a310cc9
+	method = merge
+	cmdver = 0.4.9

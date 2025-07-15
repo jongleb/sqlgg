@@ -1,0 +1,4 @@
+(executable
+ (name nonblocking_async_example)
+ (libraries async mariadb threads)
+ (optional))

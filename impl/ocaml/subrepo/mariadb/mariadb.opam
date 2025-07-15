@@ -1,0 +1,31 @@
+opam-version: "2.0"
+name: "mariadb"
+maintainer: "Petter A. Urkedal <paurkedal@gmail.com>"
+authors: "Andre Nathan <andrenth@gmail.com>"
+homepage: "https://github.com/ocaml-community/ocaml-mariadb"
+bug-reports: "https://github.com/ocaml-community/ocaml-mariadb/issues"
+license: "MIT"
+dev-repo: "git+https://github.com/ocaml-community/ocaml-mariadb.git"
+synopsis: "OCaml bindings for MariaDB"
+description: "OCaml-MariaDB provides Ctypes-based bindings for MariaDB, including its nonblocking API."
+
+build: [
+  ["dune" "subst"] {dev}
+  ["dune" "build" "-p" name "-j" jobs
+    "@install"
+    "@runtest" {with-test}
+    "@doc" {with-doc}
+  ]
+]
+depends: [
+  "ocaml" {>= "4.07.0"}
+  "ctypes" {>= "0.13.0"}
+  "conf-mariadb"
+  "conf-gcc"
+  "conf-pkg-config"
+  "dune" {>= "3.15.0"}
+  "dune-configurator"
+  "async" {with-test}
+  "lwt" {with-test}
+]
+conflicts: [ "ocaml-option-bytecode-only" ]
