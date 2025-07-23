@@ -41,6 +41,6 @@ conflicts: [
 
 pin-depends: [
   [ "mariadb"
-    "git+https://github.com/jchavarri/ocaml-mariadb.git#ab062861ba20ef89bc29ffecd9eb2165915f043c"
+    "git+https://github.com/jongleb/ocaml-mariadb.git#6696126b46a26a1339e2b03e81f6123f97c2645a"
   ]
 ]
