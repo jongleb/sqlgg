@@ -79,7 +79,6 @@ let check_dialect selected sql dialect_features =
           (show_feature ds.feature) (show selected) (position_info ds) (feature_to_string ds.feature))
 
 let get_statement_error stmt sql =
-  let open Sql in
   if not (Sql.Schema.is_unique stmt.Gen.schema) then
     Printf.eprintf "Warning: this SQL statement will produce rowset with duplicate column names:\n%s\n" sql;
   match stmt.kind with
