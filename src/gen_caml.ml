@@ -308,14 +308,16 @@ let rec set_var index var =
   | TupleList (p, Where_in _) -> set_var index (ChoiceIn { param = p; vars = []; kind = `In })
   | SingleIn _ | TupleList _ -> ()
   | ChoiceIn { param = name; vars; _ } ->
-    output "begin match %s with" (make_param_name index name);
-    output "| [] -> ()";
-    output "| _ :: _ ->";
-    inc_indent ();
-    List.iter (set_var index) vars;
-    output "()";
-    dec_indent ();
-    output "end;"
+    if vars <> [] then begin
+      output "begin match %s with" (make_param_name index name);
+      output "| [] -> ()";
+      output "| _ :: _ ->";
+      inc_indent ();
+      List.iter (set_var index) vars;
+      output "()";
+      dec_indent ();
+      output "end;"
+    end
   | OptionActionChoice(name, vars, _, _) -> 
     output "begin match %s with" (make_param_name index name);
     [(Some "None", []); (Some "Some", vars)] |> List.iteri begin fun i (label, vars) ->
