@@ -115,7 +115,7 @@ let get_collation collation pos =
   | "nocase" | "rtrim" -> only Collation [SQLite] pos
   | _ -> supported Collation [] pos
 
-let get_join_source (s, _) pos =
+let get_join_source s pos =
   match s with
   | `Select _ -> {
       feature = JoinOnSubquery; pos;
@@ -146,7 +146,7 @@ let get_replace_into pos = only ReplaceInto [MySQL; TiDB] pos
 
 let get_row_locking pos = only RowLocking [PostgreSQL; MySQL; TiDB] pos
 
-let get_default_expr ~function_name ~kind ~expr pos =
+let get_default_expr ~kind ~expr pos =
   let open Sql in
   let tidb_only_functions =
     [ "NOW"; "CURRENT_TIMESTAMP"; "LOCALTIME"; "LOCALTIMESTAMP"
@@ -184,13 +184,12 @@ let get_default_expr ~function_name ~kind ~expr pos =
   else
     let base_dialects =
       match expr with
-      | Case _ | Fun _ ->
-          begin match function_name with
-          | Some name
-            when List.mem (String.uppercase_ascii name) tidb_only_functions ->
-              all
-          | _ -> all_except [ TiDB ]
-          end
+      | Case _ -> all_except [ TiDB ]
+      | Fun { fn_name; _ } ->
+          if List.mem (String.uppercase_ascii fn_name) tidb_only_functions then
+            all
+          else
+            all_except [ TiDB ]
       (* 
         https://docs.pingcap.com/tidb/stable/data-type-default-values/
         TiDB supports assigning default values to BLOB, TEXT, and JSON data types. 
