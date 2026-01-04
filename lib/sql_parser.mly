@@ -6,7 +6,6 @@
 %{
   open Sql
   open Sql.Type
-  open Dialect_pass.Internal
   open Sql.Constraint
   open ExtLib
 
@@ -85,7 +84,7 @@
 
 %type <Sql.expr> expr
 
-%start <Dialect_pass.Internal.stmt> input
+%start <Sql.stmt> input
 
 %%
 
@@ -103,12 +102,12 @@ assign: name=IDENT EQUAL e=expr { name, e }
 
 cte_item: | cte_name=IDENT names=maybe_parenth(sequence(IDENT))? AS LPAREN stmt=select_stmt_plain RPAREN
             {
-              let cols = Option.map (List.map (fun name -> make_attribute' name (depends Any))) names in
+              let cols = Option.map (List.map (fun name -> make_attribute' name (depends Any) )) names in
               { cte_name; cols; stmt = CteInline stmt }
             }
           | cte_name=IDENT names=maybe_parenth(sequence(IDENT))? AS shared_query_ref_id=SHARED_QUERY_REF
             {
-              let cols = Option.map (List.map (fun name -> make_attribute' name (depends Any))) names in
+              let cols = Option.map (List.map (fun name -> make_attribute' name (depends Any) )) names in
               { cte_name; cols; stmt = CteSharedQuery shared_query_ref_id; }
             }
 cte: is_recursive=cte_with cte_items=commas(cte_item) {{ cte_items; is_recursive }}
@@ -280,7 +279,7 @@ source1: table_name { `Table $1 }
 source: src=source1 alias=maybe_as_with_detupled? { 
   ( src, 
     Option.map (fun (tbl, cols) -> 
-      let column_aliases = Option.map (List.map (fun name -> make_attribute' name (depends Any))) cols in
+      let column_aliases = Option.map (List.map (fun name -> make_attribute' name (depends Any) )) cols in
       { table_name = Sql.make_table_name tbl; column_aliases; }
     ) alias
   )
@@ -360,7 +359,7 @@ alter_action: ADD COLUMN? col=maybe_parenth(column_def) pos=alter_pos { `Add (co
             | DROP FOREIGN KEY IDENT { `None }
             | DROP CHECK IDENT { `None }
             | CHANGE COLUMN? old_name=IDENT column=column_def pos=alter_pos { `Change (old_name,column,pos) }
-            | MODIFY COLUMN? column=column_def pos=alter_pos { `Change (column.name,column,pos) }
+            | MODIFY COLUMN? column=column_def pos=alter_pos { `Change (column.Alter_action_attr.name,column,pos) }
             | SET IDENT IDENT { `None }
             | ALGORITHM EQUAL algorithm { `None }
             | LOCK EQUAL lock { `None }
@@ -376,8 +375,8 @@ column_def: name=IDENT kind=located(sql_type)? extra=located(column_def_extra)*
   {
     let rule_start_pos_cnum = $startpos.Lexing.pos_cnum in
     let meta = List.concat @@ Parser_state.Stmt_metadata.find_all rule_start_pos_cnum in
-    let extra = List.filter_map (fun { value; pos } -> Option.map (fun c -> { value = c; pos }) value) extra in
-    { name = name; meta; kind; extra}
+    let extra = List.filter_map (fun { value; pos } -> Option.map (fun v -> { value = v; pos }) value) extra in
+    { Alter_action_attr.name = name; meta; kind; extra; }
   }
 
 column_def1: c=column_def { `Attr c }
@@ -410,12 +409,12 @@ reference_action:
   RESTRICT | CASCADE | SET NULL | NO ACTION | SET DEFAULT { }
 
 on_conflict: ON CONFLICT algo=conflict_algo { algo }
-column_def_extra: PRIMARY? KEY { Some (Sql_constraint { value = PrimaryKey; pos = ($startofs, $endofs) }) }
-                | NOT NULL { Some (Sql_constraint { value = NotNull; pos = ($startofs, $endofs) }) }
-                | NULL { Some (Sql_constraint { value = Null; pos = ($startofs, $endofs) }) }
-                | UNIQUE KEY? { Some (Sql_constraint { value = Unique; pos = ($startofs, $endofs) }) }
-                | AUTOINCREMENT { Some (Sql_constraint { value = Autoincrement; pos = ($startofs, $endofs) }) }
-                | DEFAULT def=default_value { Some (Dialect_pass.Internal.WithDefault { value = def; pos = ($startofs, $endofs) }) }
+column_def_extra: PRIMARY? KEY { Some (Alter_action_attr.Syntax_constraint PrimaryKey) }
+                | NOT NULL { Some (Alter_action_attr.Syntax_constraint NotNull) }
+                | NULL { Some (Alter_action_attr.Syntax_constraint Null) }
+                | UNIQUE KEY? { Some (Alter_action_attr.Syntax_constraint Unique) }
+                | AUTOINCREMENT { Some (Alter_action_attr.Syntax_constraint Autoincrement) }
+                | DEFAULT def=default_value { Some (Alter_action_attr.Default { value = def; pos = ($startofs, $endofs) }) }
                 | on_conflict { None }
                 | CHECK LPAREN expr RPAREN { None }
                 | COLLATE IDENT { None }

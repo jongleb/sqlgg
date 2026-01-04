@@ -1290,6 +1290,7 @@ let rec eval (stmt:Sql.stmt) =
   let open Attr in
   match stmt with
   | Create (name, Schema { schema; constraints; _ }) ->
+      let schema = List.map Alter_action_attr.to_attr schema in
       let schema = with_constraints schema constraints in
       Tables.add (name, schema);
       ([],[],Create name)
@@ -1299,12 +1300,13 @@ let rec eval (stmt:Sql.stmt) =
       ([],params,Create name)
   | Alter (name,actions) ->
       List.iter (function
-      | `Add (col,pos) -> Tables.alter_add name col pos
+      | `Add (col,pos) -> Tables.alter_add name (Alter_action_attr.to_attr col) pos
       | `Drop col -> Tables.alter_drop name col
-      | `Change (oldcol,col,pos) -> Tables.alter_change name oldcol col pos
+      | `Change (oldcol,col,pos) -> Tables.alter_change name oldcol (Alter_action_attr.to_attr col) pos
       | `RenameColumn (oldcol,newcol) -> Tables.rename_column name oldcol newcol
       | `RenameTable new_name -> Tables.rename name new_name
       | `RenameIndex _ -> () (* indices are not tracked yet *)
+      | `Default_or_convert_to _
       | `None -> ()) actions;
       ([],[],Alter [name])
   | Rename l ->
@@ -1314,6 +1316,7 @@ let rec eval (stmt:Sql.stmt) =
       Tables.drop name;
       ([],[],Drop name)
   | CreateIndex (name,table,cols) ->
+      let cols = List.map (fun x -> x.collated) cols in
       Sql.Schema.project cols (Tables.get_schema table) |> ignore; (* just check *)
       [],[],CreateIndex name
   | Insert { target=table; action=`Values (names, values); on_conflict_clause; _ } ->

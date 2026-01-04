@@ -1,102 +1,5 @@
 open Sql
 
-module Internal = struct
-  type constraint' = Sql_constraint of Sql.Constraint.t located | WithDefault of expr located [@@deriving show {with_path=false}]
-  type attr = {name : string; kind : Type.kind collated located option; extra : constraint' located list; meta: (string * string) list; }
-    [@@deriving show {with_path=false}]
-
-  type create_target_schema = { schema: attr list; constraints: table_constraints list; indexes: index_kind located list; }
-    [@@deriving show]
-
-  type create_target = 
-    | Schema of create_target_schema
-    | Select of select_full located
-    [@@deriving show {with_path=false}]
-
-  type alter_action = [
-    | `Add of attr * alter_pos
-    | `RenameTable of table_name
-    | `RenameColumn of string * string
-    | `RenameIndex of string * string
-    | `Drop of string
-    | `Change of string * attr * alter_pos
-    | `Default_or_convert_to of string located option
-    | `None ] [@@deriving show {with_path=false}]
-
-  type stmt =
-  | Create of table_name * create_target
-  | Drop of table_name
-  | Alter of table_name * alter_action list
-  | Rename of (table_name * table_name) list
-  | CreateIndex of string * table_name * string collated list
-  | Insert of insert_action
-  | Delete of table_name * expr option
-  | DeleteMulti of table_name list * nested * expr option
-  | Set of (string * expr) list * stmt option
-  | Update of table_name * assignments * expr option * order * param list
-  | UpdateMulti of nested list * assignments * expr option * order * param list
-  | Select of select_full
-  | CreateRoutine of table_name * Type.kind collated located option * (string * Type.kind collated located * expr option) list
-  [@@deriving show {with_path=false}]
-end
-
-type result = {
-  ast: Sql.stmt;
-  dialect_features: Dialect.dialect_support list;
-}
-
-let map_constraint' (c : Internal.constraint') : Sql.Constraint.t =
-  match c with
-  | Sql_constraint c -> c.value
-  | WithDefault _ -> Sql.Constraint.WithDefault
-
-let map_attr (attr : Internal.attr) : Sql.attr = 
-  Sql.make_attribute attr.name (Option.map (fun x -> x.value.collated) attr.kind) (Constraints.of_list (List.map (fun c -> map_constraint' c.value) attr.extra)) ~meta:attr.meta
-
-let map_create_target_schema (cts : Internal.create_target_schema) : Sql.create_target_schema =
-  { schema = List.map map_attr cts.schema;
-    constraints = cts.constraints;
-    indexes = cts.indexes;
-  }
-
-let map_create_target (ct : Internal.create_target) : Sql.create_target =
-  match ct with
-  | Internal.Schema cts -> Sql.Schema (map_create_target_schema cts)
-  | Internal.Select sf -> Sql.Select sf
-
-let map_alter_action (aa : Internal.alter_action) : Sql.alter_action =
-  match aa with
-  | `Add (attr, pos) -> `Add (map_attr attr, pos)
-  | `Change (name, attr, pos) -> `Change (name, map_attr attr, pos)
-  | `RenameTable tn -> `RenameTable tn
-  | `RenameColumn (s1, s2) -> `RenameColumn (s1, s2)
-  | `RenameIndex (s1, s2) -> `RenameIndex (s1, s2)
-  | `Drop s -> `Drop s
-  | `Default_or_convert_to _
-  | `None -> `None
-
-let rec map_stmt (stmt : Internal.stmt) : Sql.stmt =
-  match stmt with
-  | Internal.Create (tn, ct) -> Sql.Create (tn, map_create_target ct)
-  | Internal.Drop tn -> Sql.Drop tn
-  | Internal.Alter (tn, actions) -> Sql.Alter (tn, List.map map_alter_action actions)
-  | Internal.Rename pairs -> Sql.Rename pairs
-  | Internal.CreateIndex (name, tn, cols) -> Sql.CreateIndex (name, tn, List.map (fun i -> i.collated) cols)
-  | Internal.Insert ia -> Sql.Insert ia
-  | Internal.Delete (tn, expr) -> Sql.Delete (tn, expr)
-  | Internal.DeleteMulti (tns, nested, expr) -> Sql.DeleteMulti (tns, nested, expr)
-  | Internal.Set (assignments, stmt_opt) -> 
-      Sql.Set (assignments, Option.map map_stmt stmt_opt)
-  | Internal.Update (tn, assigns, where, order, params) ->
-      Sql.Update (tn, assigns, where, order, params)
-  | Internal.UpdateMulti (nesteds, assigns, where, order, params) ->
-      Sql.UpdateMulti (nesteds, assigns, where, order, params)
-  | Internal.Select sf -> Sql.Select sf
-  | Internal.CreateRoutine (tn, kind, params) -> 
-      Sql.CreateRoutine (tn, Option.map (fun i -> i.value.collated) kind, 
-        List.map (fun (n, t, e) -> n, t.value.collated, e) params
-      )
-
 let check_unsigned_type pos = function
   | Type.UInt64 -> 
       [Dialect.get_unsigned_types pos]
@@ -215,29 +118,24 @@ and analyze_assignment_expr = function
 and analyze_assignments assignments =
   List.concat_map (fun (_, assignment_expr) -> analyze_assignment_expr assignment_expr) assignments
 
-and analyze_column_def_internal ({ kind; extra; _ } : Internal.attr) =
+and analyze_column_def_internal (({ kind; extra; _ }: Alter_action_attr.t)) =
   let autoincrement_features = 
-    let autoincrement = List.find_opt (fun c -> 
+    let autoincrement = List.find_opt (fun c ->
       match c.value with 
-      | Internal.Sql_constraint { value = Sql.Constraint.Autoincrement; _ } -> true 
+      | Alter_action_attr.Syntax_constraint Autoincrement -> true 
       | _ -> false
     ) extra in
     match autoincrement with
-    | Some { pos; _ } ->
-        [Dialect.get_autoincrement pos]
+    | Some { pos; _ } -> [Dialect.get_autoincrement pos]
     | None -> []
   in
-  let default_features =
-    let with_default = List.find_opt (fun c ->
-      match c.value with
-      | Internal.WithDefault _ -> true
-      | _ -> false
-    ) extra in
-    match with_default with
-    | Some { value = Internal.WithDefault { value = expr; pos }; _ } ->
-        let col_kind = Option.map (fun k -> k.value.collated) kind in
-        [Dialect.get_default_expr ~kind:col_kind ~expr pos]
-    | _ -> []
+  let default_features = extra
+    |> List.find_map (function
+        | { value = Alter_action_attr.Default { value = expr; pos }; _ } ->
+            let col_kind = Option.map (fun k -> k.value.collated) kind in
+            Some [Dialect.get_default_expr ~kind:col_kind ~expr pos]
+        | _ -> None)
+    |> Option.default []
   in
   let collation_features = kind |> Option.map (fun k -> k.value) |> Option.map_default check_collated [] in
   let unsigned_features = match kind with
@@ -246,7 +144,7 @@ and analyze_column_def_internal ({ kind; extra; _ } : Internal.attr) =
   in
   autoincrement_features @ default_features @ collation_features @ unsigned_features
 
-and analyze_alter_action : Internal.alter_action -> Dialect.dialect_support list = function
+and analyze_alter_action : alter_action -> Dialect.dialect_support list = function
   | `Add (col, _) -> analyze_column_def_internal col
   | `Change (_, col, _) -> analyze_column_def_internal col
   | `Default_or_convert_to collation -> check_collation_opt collation
@@ -281,11 +179,11 @@ let analyze_schema_index idx = match idx.value with
   | Fulltext -> Some (Dialect.get_fulltext_index idx.pos)
   | Spatial -> None
 
-let rec analyze_features : Internal.stmt -> Dialect.dialect_support list = function 
-  | Internal.Create (_, Internal.Schema { schema; indexes; _ }) ->
+let rec analyze = function 
+  | Sql.Create (_, Schema { schema; indexes; _ }) ->
     let schema_idx_features = List.filter_map analyze_schema_index indexes in
     schema_idx_features @ List.concat_map analyze_column_def_internal schema
-  | Create (_, Internal.Select { value = select; pos }) ->
+  | Create (_, Select { value = select; pos }) ->
     Dialect.get_create_table_as_select pos :: analyze_select_full select
   | Drop _ -> []
   | Alter (_, actions) ->
@@ -302,7 +200,7 @@ let rec analyze_features : Internal.stmt -> Dialect.dialect_support list = funct
       nested_features @ where_features
   | Set (assignments, stmt_opt) ->
       let assignments_features = List.concat_map (fun (_, expr) -> analyze_expr expr) assignments in
-      let stmt_features = Option.map_default analyze_features [] stmt_opt in
+      let stmt_features = Option.map_default analyze [] stmt_opt in
       assignments_features @ stmt_features
   | Update (_, assignments, where_opt, order, _) ->
       let assignments_features = analyze_assignments assignments in
@@ -329,10 +227,5 @@ let rec analyze_features : Internal.stmt -> Dialect.dialect_support list = funct
         typ_collation @ typ_unsigned @ Option.map_default analyze_expr [] default_expr_opt
       ) params in
       kind_collation @ kind_unsigned @ params_features
-
-let analyze (stmt : Internal.stmt) : result =
-  let dialect_features = analyze_features stmt in
-  let ast = map_stmt stmt in
-  { ast; dialect_features }
 
     

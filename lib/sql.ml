@@ -547,16 +547,6 @@ and tuple_list_kind =
 and vars = var list [@@deriving show]
 
 type alter_pos = [ `After of string | `Default | `First ] [@@deriving show {with_path=false}]
-type alter_action = [
-  | `Add of attr * alter_pos
-  | `RenameTable of table_name
-  | `RenameColumn of string * string
-  | `RenameIndex of string * string
-  | `Drop of string
-  | `Change of string * attr * alter_pos
-  | `None ] [@@deriving show {with_path=false}]
-
-type select_result = (schema * param list)
 
 type direction = [ `Fixed | `Param of param_id ] [@@deriving show]
 
@@ -709,29 +699,58 @@ type index_kind  =
   | Spatial
   [@@deriving show {with_path=false}]
 
-type create_target_schema = { schema: schema; constraints: table_constraints list; indexes: index_kind located list; }
-  [@@deriving show]
+module Alter_action_attr = struct
+
+  type constraint_ = Syntax_constraint of Constraint.t | Default of expr located
+    [@@deriving show {with_path=false}]
+
+  type t = {name : string; kind : Type.kind collated located option; extra : constraint_ located list; meta: (string * string) list; }
+    [@@deriving show {with_path=false}]
+
+  let constraint_to_syntax_constraint = function
+    | Syntax_constraint c -> c
+    | Default _ -> WithDefault
+
+  let to_attr (x: t): attr = make_attribute x.name 
+    (Option.map_default (fun k -> Some k.value.collated) None x.kind)
+    (Constraints.of_list (List.map (fun c -> constraint_to_syntax_constraint c.value) x.extra))
+    ~meta:x.meta
+end
+
+type create_target_schema = { schema: Alter_action_attr.t list; constraints: table_constraints list; indexes: index_kind located list; }
+    [@@deriving show]
 
 type create_target = 
-  | Schema of create_target_schema
-  | Select of select_full located
-  [@@deriving show {with_path=false}]
+    | Schema of create_target_schema
+    | Select of select_full located
+    [@@deriving show {with_path=false}]
+
+type alter_action = [
+    | `Add of Alter_action_attr.t * alter_pos
+    | `RenameTable of table_name
+    | `RenameColumn of string * string
+    | `RenameIndex of string * string
+    | `Drop of string
+    | `Change of string * Alter_action_attr.t * alter_pos
+    | `Default_or_convert_to of string located option
+    | `None ] [@@deriving show {with_path=false}]
 
 type stmt =
-| Create of table_name * create_target
-| Drop of table_name
-| Alter of table_name * alter_action list
-| Rename of (table_name * table_name) list
-| CreateIndex of string * table_name * string list (* index name, table name, columns *)
-| Insert of insert_action
-| Delete of table_name * expr option
-| DeleteMulti of table_name list * nested * expr option
-| Set of (string * expr) list * stmt option
-| Update of table_name * assignments * expr option * order * param list (* where, order, limit *)
-| UpdateMulti of nested list * assignments * expr option * order * param list (* where, order, limit *)
-| Select of select_full
-| CreateRoutine of table_name * Type.kind option * (string * Type.kind * expr option) list (* table_name represents possibly namespaced function name *)
-[@@deriving show {with_path=false}]
+  | Create of table_name * create_target
+  | Drop of table_name
+  | Alter of table_name * alter_action list
+  | Rename of (table_name * table_name) list
+  | CreateIndex of string * table_name * string collated list (* index name, table name, columns *)
+  | Insert of insert_action
+  | Delete of table_name * expr option
+  | DeleteMulti of table_name list * nested * expr option
+  | Set of (string * expr) list * stmt option
+  | Update of table_name * assignments * expr option * order * param list (* where, order, limit *)
+  | UpdateMulti of nested list * assignments * expr option * order * param list (* where, order, limit *)
+  | Select of select_full
+  | CreateRoutine of table_name * Type.kind collated located option * (string * Type.kind collated located * expr option) list (* table_name represents possibly namespaced function name *)
+  [@@deriving show {with_path=false}]
+
 (*
 open Schema
 
