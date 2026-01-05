@@ -83,10 +83,6 @@
 %nonassoc INTERVAL
 
 %type <Sql.expr> expr
-%type <Sql.Source_type.kind> sql_type_flavor
-%type <Sql.Source_type.kind> int_type
-%type <Sql.Source_type.kind Sql.collated> sql_type
-%type <Sql.Source_type.kind Sql.collated Sql.located> located_sql_type
 
 %start <Sql.stmt> input
 
