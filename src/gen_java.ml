@@ -34,7 +34,6 @@ module L = struct
 
 let as_lang_type t =
   match t.Type.t with
-  | UInt32
   | Int -> "int"
   | Text -> "String"
   | Any -> "String"

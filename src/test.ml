@@ -41,7 +41,7 @@ let parse sql =
       | None -> assert_failure @@ sprintf "Failed to parse : %s" sql
       | Some stmt -> stmt
 let assert_params_with_meta stmt meta = 
-    let meta = List.map (fun (p, m) -> (p, Meta.of_list m)) meta in
+    let meta = List.map (fun (p, m) -> p, Meta.of_list m) meta in
     assert_equal 
       ~msg:"params with meta" 
       ~cmp:(fun p1 p2 ->
@@ -51,7 +51,7 @@ let assert_params_with_meta stmt meta =
             p1 
             p2
         with _ -> false)
-      ~printer:[%derive.show: (Sql.param * Sql.Meta.t) list]
+      ~printer:[%derive.show: (Type.t Sql.param * Sql.Meta.t) list]
       meta
       (List.map 
         (
@@ -98,10 +98,10 @@ let attr' ?(extra=[]) ?(nullability=Type.Strict) ?(meta = []) name kind =
   let domain: Type.t = { t = kind; nullability; } in
   {name;domain;extra=Constraints.of_list extra; meta = Meta.of_list meta; }
 
-let named s t = new_param { value = Some s; pos = (0,0) } (Type.strict t)
-let named_nullable s t = new_param { value = Some s; pos = (0,0) } (Type.nullable t)
-let param_nullable t = new_param { value = None; pos = (0,0) } (Type.nullable t)
-let param t = new_param { value = None; pos = (0,0) } (Type.strict t)
+let named s t = make_param ~id:{ value = Some s; pos = (0,0) } ~typ:(Type.strict t)
+let named_nullable s t = make_param ~id:{ value = Some s; pos = (0,0) } ~typ:(Type.nullable t)
+let param_nullable t = make_param ~id:{ value = None; pos = (0,0) } ~typ:(Type.nullable t)
+let param t = make_param ~id:{ value = None; pos = (0,0) } ~typ:(Type.strict t)
 
 let test = Type.[
   tt "CREATE TABLE test (id INT, str TEXT, name TEXT)" [] [];

@@ -13,8 +13,8 @@
   let make_limit l =
     let param = function
       | _, `Const _ -> None
-      | x, `Param { value=None; pos } -> Some (new_param { value = Some (match x with `Limit -> "limit" | `Offset -> "offset"); pos } (strict Int))
-      | _, `Param id -> Some (new_param id (strict Int))
+      | x, `Param { value=None; pos } -> Some (make_param ~id:{ value = Some (match x with `Limit -> "limit" | `Offset -> "offset"); pos } ~typ:(Source_type.strict Int))
+      | _, `Param id -> Some (make_param ~id ~typ:(Source_type.strict Int))
     in
     List.filter_map param l, List.mem (`Limit,`Const 1) l
 
@@ -83,6 +83,10 @@
 %nonassoc INTERVAL
 
 %type <Sql.expr> expr
+%type <Sql.Source_type.kind> sql_type_flavor
+%type <Sql.Source_type.kind> int_type
+%type <Sql.Source_type.kind Sql.collated> sql_type
+%type <Sql.Source_type.kind Sql.collated Sql.located> located_sql_type
 
 %start <Sql.stmt> input
 
@@ -174,12 +178,12 @@ statement: CREATE ioption(temporary) TABLE ioption(if_not_exists) name=table_nam
               }
          | SET STATEMENT vars=separated_nonempty_list(COMMA, assign) FOR stmt=statement { Set (vars, Some stmt) }
          | CREATE or_replace? FUNCTION name=table_name params=sequence(func_parameter)
-           RETURNS ret=located(sql_type)
+           RETURNS ret=located_sql_type
            routine_extra?
            AS? routine_body
            routine_extra?
               {
-                Function.add (List.length params) (Ret (depends ret.value.collated)) name.tn; (* FIXME store function namespace *)
+                Function.add (List.length params) (Ret { Source_type.t = ret.value.collated; nullability = Type.Depends }) name.tn; (* FIXME store function namespace *)
                 CreateRoutine (name, Some ret, params)
               }
          | CREATE or_replace? PROCEDURE name=table_name params=sequence(proc_parameter)
@@ -187,13 +191,13 @@ statement: CREATE ioption(temporary) TABLE ioption(if_not_exists) name=table_nam
            AS? routine_body
            routine_extra?
               {
-                Function.add (List.length params) (Ret (depends Any)) name.tn; (* FIXME void *)
+                Function.add (List.length params) (Ret (Source_type.depends Any)) name.tn; (* FIXME void *)
                 CreateRoutine (name, None, params)
               }   
 
 parameter_default_: DEFAULT | EQUAL { }
 parameter_default: parameter_default_ e=expr { e }
-func_parameter: n=IDENT AS? t=located(sql_type) e=parameter_default? { (n,t,e) }
+func_parameter: n=IDENT AS? t=located_sql_type e=parameter_default? { (n,t,e) }
 parameter_mode: IN | OUT | INOUT { }
 proc_parameter: parameter_mode? p=func_parameter { p }
 
@@ -371,12 +375,12 @@ alter_pos: AFTER col=IDENT { `After col }
          | { `Default }
 drop_behavior: CASCADE | RESTRICT { }
 
-column_def: name=IDENT kind=located(sql_type)? extra=located(column_def_extra)*
+column_def: name=IDENT sql_kind=located_sql_type? extra=located(column_def_extra)*
   {
     let rule_start_pos_cnum = $startpos.Lexing.pos_cnum in
     let meta = List.concat @@ Parser_state.Stmt_metadata.find_all rule_start_pos_cnum in
     let extra = List.filter_map (fun { value; pos } -> Option.map (fun v -> { value = v; pos }) value) extra in
-    { Alter_action_attr.name = name; meta; kind; extra; }
+    { Alter_action_attr.name = name; meta; kind = sql_kind; extra; }
   }
 
 column_def1: c=column_def { `Attr c }
@@ -444,10 +448,10 @@ distinct_from: DISTINCT FROM { }
 like_expr: e1=expr mnot(like) e2=expr %prec LIKE { Fun { fn_name = "like"; kind = (fixed Bool [Text; Text]); parameters = [e1;e2]; is_over_clause = false } }
 
 expr:
-      e1=expr numeric_bin_op e2=expr %prec PLUS { Fun { fn_name = "numeric_bin_op"; kind = (Ret (depends Any)); parameters = [e1;e2]; is_over_clause = false } } (* TODO default Int *)
-    | MOD LPAREN e1=expr COMMA e2=expr RPAREN { Fun { fn_name = "mod"; kind = (Ret (depends Any)); parameters = [e1;e2]; is_over_clause = false } } (* mysql special *)
-    | e1=expr NUM_DIV_OP e2=expr %prec PLUS { Fun { fn_name = "num_div"; kind = (Ret (depends Float)); parameters = [e1;e2]; is_over_clause = false } }
-    | e1=expr DIV e2=expr %prec PLUS { Fun { fn_name = "div"; kind = (Ret (depends Int)); parameters = [e1;e2]; is_over_clause = false } }
+      e1=expr numeric_bin_op e2=expr %prec PLUS { Fun { fn_name = "numeric_bin_op"; kind = (Ret (Source_type.depends Any)); parameters = [e1;e2]; is_over_clause = false } } (* TODO default Int *)
+    | MOD LPAREN e1=expr COMMA e2=expr RPAREN { Fun { fn_name = "mod"; kind = (Ret (Source_type.depends Any)); parameters = [e1;e2]; is_over_clause = false } } (* mysql special *)
+    | e1=expr NUM_DIV_OP e2=expr %prec PLUS { Fun { fn_name = "num_div"; kind = (Ret (Source_type.depends Float)); parameters = [e1;e2]; is_over_clause = false } }
+    | e1=expr DIV e2=expr %prec PLUS { Fun { fn_name = "div"; kind = (Ret (Source_type.depends Int)); parameters = [e1;e2]; is_over_clause = false } }
     | e1=expr bool_op=boolean_bin_op e2=expr %prec AND { Fun { fn_name = "boolean_bin_op"; kind = (Logical bool_op); parameters = [e1;e2]; is_over_clause = false } }
     | e1=expr comp_op=comparison_op anyall? e2=expr %prec EQUAL { Fun { fn_name = "comparison"; kind = Comparison comp_op; parameters = [e1; e2]; is_over_clause = false } }
     | e1=expr CONCAT_OP e2=expr { Fun { fn_name = "concat"; kind = (fixed Text [Text;Text]); parameters = [e1;e2]; is_over_clause = false } }
@@ -475,15 +479,15 @@ expr:
     | e1=expr IN table=table_name { Tables.check table; e1 }
     | e1=expr k=in_or_not_in p=param
       {
-        let e = poly "in_param" (depends Bool) [ e1; Inparam (new_param p (depends Any), Meta.empty()) ] in
+        let e = poly "in_param" (depends Bool) [ e1; Inparam (make_param ~id:p ~typ:(Source_type.depends Any), Meta.empty()) ] in
         InChoice ({ value = p.value; pos = ($startofs, $endofs) }, k, e )
       }
     | LPAREN exprs=commas(expr) RPAREN k=in_or_not_in p=param
       {
-        InTupleList({ value = { exprs; param_id = p; kind = k; }; pos = ($startofs, $endofs)  })
+        InTupleList({ value = { exprs; param_id = p; kind_in_tuple_list = k; }; pos = ($startofs, $endofs)  })
       }
     | LPAREN select=select_stmt RPAREN { SelectExpr (select, `AsValue) }
-    | p=param t=preceded(DOUBLECOLON, manual_type)? { Param (new_param { p with pos=($startofs, $endofs) } (Option.default (depends Any) t), Meta.empty())  }
+    | p=param t=preceded(DOUBLECOLON, manual_type)? { Param (make_param ~id:{ p with pos=($startofs, $endofs) } ~typ:(Option.default (Source_type.depends Any) t), Meta.empty())  }
     | LCURLY e=expr RCURLY QSTN { OptionActions ({ choice=e; pos=(($startofs, $endofs), ($startofs + 1, $endofs - 2)); kind = BoolChoices}) }
     | p=param parser_state_ident LCURLY l=choices c2=RCURLY { let { value; pos=(p1,_p2) } = p in Choices ({ value; pos = (p1,c2+1)},l) }
     | SUBSTRING LPAREN s=expr FROM p=expr FOR n=expr RPAREN
@@ -618,16 +622,16 @@ interval_unit: INTERVAL_UNIT
              | DAY_MICROSECOND | DAY_SECOND | DAY_MINUTE | DAY_HOUR
              | YEAR_MONTH { Value { collated = (strict Datetime); collation = None; } }
 
-int1:
-  | T_INTEGER     { (Int, UInt32) }
-  | T_BIG_INTEGER { (Int, UInt64) }
-
+(* int_type returns Source_type.kind to preserve UInt32 for dialect checks *)
 int_type:
-  | kind=int1 int_arg? u=UNSIGNED? {
-      let (signed, unsigned) = kind in
-      Option.map_default (fun _ -> unsigned) signed u
+  | T_INTEGER int_arg? u=UNSIGNED? {
+      Option.map_default (fun _ -> Source_type.UInt32) (Source_type.Infer Int) u
+    }
+  | T_BIG_INTEGER int_arg? u=UNSIGNED? {
+      Option.map_default (fun _ -> Source_type.Infer UInt64) (Source_type.Infer Int) u
     }
 
+(* expr_sql_type_flavor returns Type.kind for use in CAST *)
 expr_sql_type_flavor:
                  | T_DECIMAL p=option(delimited(LPAREN, pair(INTEGER, option(preceded(COMMA, INTEGER))), RPAREN)) { 
                       match p with
@@ -642,18 +646,19 @@ expr_sql_type_flavor:
                  | T_UUID { Blob }
                  | T_JSON { Json }
 
+(* sql_type_flavor returns Source_type.kind *)
 sql_type_flavor: 
   | t=int_type ZEROFILL? { t }
-  | expr_sql_type_flavor { $1 }
-  | ENUM ctors=sequence(TEXT) { make_enum_kind ctors }
+  | t=expr_sql_type_flavor { Source_type.Infer t }
+  | ENUM ctors=sequence(TEXT) { Source_type.Infer (make_enum_kind ctors) }
 
 binary: T_BLOB | BINARY | BINARY VARYING { }
 text: T_TEXT | T_TEXT LPAREN INTEGER RPAREN | CHARACTER { }
 
 cast_as:
-    | t=cast_sql_type { (fun e -> Fun { fn_name = "cast"; kind = (Ret (depends t)); parameters = [e]; is_over_clause = false }) }
-    | UNSIGNED { (fun e -> Fun { fn_name = "cast_unsigned"; kind = (Ret (depends UInt64)); parameters = [e]; is_over_clause = false }) }
-    | SIGNED { (fun e -> Fun { fn_name = "cast_signed"; kind = (Ret (depends Int)); parameters = [e]; is_over_clause = false }) }
+    | t=cast_sql_type { (fun e -> Fun { fn_name = "cast"; kind = (Ret (Source_type.depends t)); parameters = [e]; is_over_clause = false }) }
+    | UNSIGNED { (fun e -> Fun { fn_name = "cast_unsigned"; kind = (Ret (Source_type.depends UInt64)); parameters = [e]; is_over_clause = false }) }
+    | SIGNED { (fun e -> Fun { fn_name = "cast_signed"; kind = (Ret (Source_type.depends Int)); parameters = [e]; is_over_clause = false }) }
 
 %inline either(X,Y): X | Y { }
 %inline commas(X): l=separated_nonempty_list(COMMA,X) { l }
@@ -669,6 +674,8 @@ sql_type: t=collated(sql_type_flavor)
         | t=collated(sql_type_flavor) LPAREN INTEGER COMMA INTEGER RPAREN
         { t }
 
+located_sql_type: t=sql_type { { value = t; pos = ($startofs, $endofs) } }
+
 cast_sql_type: t=expr_sql_type_flavor
         | t=expr_sql_type_flavor LPAREN INTEGER RPAREN
         | t=expr_sql_type_flavor LPAREN INTEGER COMMA INTEGER RPAREN
@@ -680,18 +687,22 @@ compound_op:
   | EXCEPT { `Except }
   | INTERSECT { `Intersect }
 
-strict_type:
-    | T_TEXT                 { Text }
-    | T_JSON                 { Json }
-    | T_BLOB                 { Blob }
-    | int_type               { $1 }
-    | T_FLOAT                { Float }
-    | T_BOOLEAN              { Bool }
-    | T_DATETIME             { Datetime }
-
+(* manual_type returns Source_type.t for parameter type annotations *)
 manual_type:
-    | strict_type      { strict   $1 }
-    | strict_type NULL { nullable $1 }
+    | T_TEXT                 { Source_type.strict Text }
+    | T_JSON                 { Source_type.strict Json }
+    | T_BLOB                 { Source_type.strict Blob }
+    | t=int_type             { { Source_type.t; nullability = Type.Strict } }
+    | T_FLOAT                { Source_type.strict Float }
+    | T_BOOLEAN              { Source_type.strict Bool }
+    | T_DATETIME             { Source_type.strict Datetime }
+    | T_TEXT NULL            { Source_type.nullable Text }
+    | T_JSON NULL            { Source_type.nullable Json }
+    | T_BLOB NULL            { Source_type.nullable Blob }
+    | t=int_type NULL        { { Source_type.t; nullability = Type.Nullable } }
+    | T_FLOAT NULL           { Source_type.nullable Float }
+    | T_BOOLEAN NULL         { Source_type.nullable Bool }
+    | T_DATETIME NULL        { Source_type.nullable Datetime }
 
 algorithm:
  | INPLACE { }

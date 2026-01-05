@@ -24,7 +24,7 @@ struct
 
     type t = Ctors.t [@@deriving eq, show{with_path=false}]
 
-    let make ctors =  Ctors.of_list ctors
+    let make ctors = Ctors.of_list ctors
   end
 
   type union = { ctors: Enum_kind.t; is_closed: bool } [@@deriving eq, show{with_path=false}]
@@ -34,7 +34,6 @@ struct
   type kind =
     | Int
     | UInt64
-    | UInt32
     | Text
     | Blob
     | Float
@@ -51,11 +50,6 @@ struct
     [@@deriving eq, show{with_path=false}]
     (* TODO NULL is currently typed as Any? which actually is a misnormer *)
 
-    (* UInt32 should be equal to Int for comparison purposes *)
-    let equal_kind a b = match a, b with
-      | UInt32, Int | Int, UInt32 -> true
-      | a, b -> equal_kind a b
-
     let show_kind = function
       | Union { ctors; _ } -> sprintf "Union (%s)" (String.concat "| " (Enum_kind.Ctors.elements ctors))
       | StringLiteral l -> sprintf "StringLiteral (%s)" l
@@ -63,7 +57,6 @@ struct
       | Decimal { precision = Some p; scale = Some s } -> sprintf "Decimal(%d,%d)" p s
       | Decimal { precision = Some p; scale = None } -> sprintf "Decimal(%d)" p
       | Decimal _ -> "Decimal"
-      | UInt32 -> show_kind Int
       | k -> show_kind k
 
   type nullability =
@@ -110,7 +103,7 @@ struct
   | _ -> true
 
   (** @return (subtype, supertype) *)
-  let rec order_kind x y =  
+  let order_kind x y =  
     match x, y with
     | x, y when equal_kind x y -> `Equal
     | StringLiteral a, StringLiteral b -> 
@@ -153,8 +146,6 @@ struct
      representation up to 2^53 (~9e15), but UInt64 can hold values up to 2^64-1 (~18e18).
      Converting large UInt64 values to Float would lose precision *)
     | UInt64, Int | Int, UInt64 -> `Order (Int, UInt64)
-    | x, UInt32 -> order_kind x Int
-    | UInt32, x -> order_kind Int x
     | Text, Blob | Blob, Text -> `Order (Text, Blob)
     | Int, Datetime | Datetime, Int -> `Order (Int, Datetime)
     | Text, Datetime | Datetime, Text -> `Order (Datetime, Text)
@@ -522,17 +513,42 @@ let print_table out (name,schema) =
 (** optional name and start/end position in string *)
 type param_id = string option located [@@deriving show]
 type shared_query_ref_id = string located [@@deriving show]
-type param = { id : param_id; typ : Type.t; } [@@deriving show]
-let new_param id typ = { id; typ; }
+
+module Source_type = struct
+  type kind = Infer of Type.kind | UInt32 [@@deriving show, eq]
+
+  type t = { t : kind; nullability : Type.nullability; } [@@deriving eq, show{with_path=false}, make]
+
+  let nullability nullability t = { t = Infer t; nullability }
+  let strict = nullability Type.Strict
+  let depends = nullability Type.Depends
+  let nullable = nullability Type.Nullable
+
+  let to_infer_type { t; nullability; } =
+    let t = match t with
+      | Infer ty -> ty
+      | UInt32 -> Type.Int 
+    in
+    { Type.t; nullability }
+
+  let show { t; nullability; } = 
+    let kind_str = match t with
+      | Infer ty -> Type.show_kind ty
+      | UInt32 -> "UInt32"
+    in
+    kind_str ^ (match nullability with Type.Nullable -> "?" | Type.Depends -> "??" | Type.Strict -> "")
+end
+
+type 't param = { id : param_id; typ : 't; } [@@deriving show, make]
 type option_actions_kind = BoolChoices | SetDefault [@@deriving show]
-type params = param list [@@deriving show]
+type params = Type.t param list [@@deriving show]
 type in_or_not_in = [`In | `NotIn] [@@deriving show]
 type ctor =
 | Simple of param_id * var list option
 | Verbatim of string * string
 and var =
-| Single of param * Meta.t
-| SingleIn of param * Meta.t
+| Single of Type.t param * Meta.t
+| SingleIn of Type.t param * Meta.t
 | ChoiceIn of { param: param_id; kind : in_or_not_in; vars: var list }
 | Choice of param_id * ctor list
 | TupleList of param_id * tuple_list_kind
@@ -554,7 +570,7 @@ type cte_supported_compound_op = [ `Union | `Union_all ] [@@deriving show]
 
 type compound_op = [ cte_supported_compound_op | `Except | `Intersect ] [@@deriving show]
 
-type int_or_param = [`Const of int | `Limit of param]
+type int_or_param = [`Const of int | `Limit of Source_type.t param]
 type limit_t = [ `Limit | `Offset ]
 type col_name = {
   cname : string; (** column name *)
@@ -565,7 +581,7 @@ type comparison_op = Comp_equal | Comp_num_cmp | Comp_num_eq | Not_distinct_op |
 type null_handling_fn_kind = Coalesce of Type.tyvar * Type.tyvar | Null_if | If_null [@@deriving show]
 type source_alias = { table_name : table_name; column_aliases : schema option } [@@deriving show]
 type select_row_locking_kind = For_update | For_share [@@deriving show]
-and limit = param list * bool
+and limit = Source_type.t param list * bool
 and nested = source * (source * Schema.Join.typ located * join_condition) located list [@@deriving show]
 and source_kind = [ `Select of select_full | `Table of table_name | `Nested of nested | `ValueRows of row_values ]
 and source = (source_kind * source_alias option) (* alias, position *)
@@ -587,7 +603,7 @@ and select_complete = {
   select_row_locking: select_row_locking_kind located option;
 }
 and select_full = { select_complete: select_complete; cte: cte option; }
-and row_constructor_list = RowExprList of expr list list | RowParam of { id : param_id; types : Type.t list; values_start_pos: int; } 
+and row_constructor_list = RowExprList of expr list list | RowParam of { id : param_id; types : Source_type.t list; values_start_pos: int; } 
 and row_values = {
   row_constructor_list: row_constructor_list;
   row_order: order;
@@ -604,13 +620,13 @@ and agg_fun = Self (* self means that it returns the same type what aggregated c
         with_order_kind: agg_with_order_kind;
         order: order; 
       }
-and func =
+and 't func =
   | Agg of agg_fun (* 'a -> 'a | 'a -> t *)
   | Null_handling of null_handling_fn_kind
   | Comparison of comparison_op
   | Logical of logical_op
   | Negation
-  | Ret of Type.t (* _ -> t *) (* TODO eliminate *)
+  | Ret of 't (* _ -> t *) (* TODO eliminate *)
   | F of Type.tyvar * Type.tyvar list
   | Col_assign of { ret_t: Type.tyvar; col_t: Type.tyvar; arg_t: Type.tyvar; }
   | Multi of { 
@@ -624,22 +640,23 @@ and func =
      - fixed_args: required initial arguments [json_doc, path, val] 
      - repeating_pattern: list of types that repeat [path_type, val_type]
      Valid calls: f(a,b,c) or f(a,b,c,d,e) or f(a,b,c,d,e,f,g) etc. *)
+  [@@deriving show]
 and 'expr choices = (param_id * 'expr option) list
-and fun_ = { fn_name: string; kind: func; parameters: expr list; is_over_clause: bool; }
+and 't fun_ = { fn_name: string; kind: 't func; parameters: expr list; is_over_clause: bool; } [@@deriving show]
 and case_branch = { when_: expr; then_: expr }
 and case = {  
   case: expr option;
   branches: case_branch list;
   else_: expr option;
 } [@@deriving show]
-and in_tuple_list = { exprs: expr list; param_id: param_id; kind: in_or_not_in; } [@@deriving show]
+and in_tuple_list = { exprs: expr list; param_id: param_id; kind_in_tuple_list: in_or_not_in; } [@@deriving show]
 and expr =
   | Value of Type.t collated (** literal value *)
-  | Param of param * Meta.t
-  | Inparam of param * Meta.t
+  | Param of Source_type.t param * Meta.t
+  | Inparam of Source_type.t param * Meta.t
   | Choices of param_id * expr choices
   | InChoice of param_id * in_or_not_in * expr
-  | Fun of fun_
+  | Fun of Source_type.t fun_
   | SelectExpr of select_full * [ `AsValue | `Exists ]
   | Column of col_name collated
   | InTupleList of in_tuple_list located
@@ -656,6 +673,13 @@ and column =
   [@@deriving show {with_path=false}]
 
 type columns = column list [@@deriving show]
+
+let source_fun_kind_to_infer = function
+  | Ret t -> Ret (Source_type.to_infer_type t)
+  | Agg (Self | Count | Avg | With_order _) 
+  | Null_handling _ | Comparison _
+  | Logical _ | Negation | F _ 
+  | Col_assign _ | Multi _ as fn -> fn
 
 let expr_to_string = show_expr
 
@@ -704,26 +728,39 @@ module Alter_action_attr = struct
   type constraint_ = Syntax_constraint of Constraint.t | Default of expr located
     [@@deriving show {with_path=false}]
 
-  type t = {name : string; kind : Type.kind collated located option; extra : constraint_ located list; meta: (string * string) list; }
-    [@@deriving show {with_path=false}]
+  type t = {  
+    name : string; 
+    kind : Source_type.kind collated located option;
+    extra : constraint_ located list; 
+    meta: (string * string) list; 
+  }
+  [@@deriving show {with_path=false}]
 
   let constraint_to_syntax_constraint = function
     | Syntax_constraint c -> c
     | Default _ -> WithDefault
 
+  let kind_to_type_kind = function
+    | Source_type.Infer k -> k
+    | Source_type.UInt32 -> Type.Int
+
   let to_attr (x: t): attr = make_attribute x.name 
-    (Option.map_default (fun k -> Some k.value.collated) None x.kind)
+    (Option.map_default (fun k -> Some (kind_to_type_kind k.value.collated)) None x.kind)
     (Constraints.of_list (List.map (fun c -> constraint_to_syntax_constraint c.value) x.extra))
     ~meta:x.meta
 end
 
-type create_target_schema = { schema: Alter_action_attr.t list; constraints: table_constraints list; indexes: index_kind located list; }
-    [@@deriving show]
+type create_target_schema = { 
+  schema: Alter_action_attr.t list; 
+  constraints: table_constraints list; 
+  indexes: index_kind located list; 
+}
+[@@deriving show]
 
 type create_target = 
-    | Schema of create_target_schema
-    | Select of select_full located
-    [@@deriving show {with_path=false}]
+  | Schema of create_target_schema
+  | Select of select_full located
+[@@deriving show {with_path=false}]
 
 type alter_action = [
     | `Add of Alter_action_attr.t * alter_pos
@@ -745,10 +782,10 @@ type stmt =
   | Delete of table_name * expr option
   | DeleteMulti of table_name list * nested * expr option
   | Set of (string * expr) list * stmt option
-  | Update of table_name * assignments * expr option * order * param list (* where, order, limit *)
-  | UpdateMulti of nested list * assignments * expr option * order * param list (* where, order, limit *)
+  | Update of table_name * assignments * expr option * order * Source_type.t param list (* where, order, limit *)
+  | UpdateMulti of nested list * assignments * expr option * order * Source_type.t param list (* where, order, limit *)
   | Select of select_full
-  | CreateRoutine of table_name * Type.kind collated located option * (string * Type.kind collated located * expr option) list (* table_name represents possibly namespaced function name *)
+  | CreateRoutine of table_name * Source_type.kind collated located option * (string * Source_type.kind collated located * expr option) list (* table_name represents possibly namespaced function name *)
   [@@deriving show {with_path=false}]
 
 (*
@@ -801,16 +838,16 @@ let is_grouping = function
 
 module Function : sig
 
-val lookup : string -> int -> func
-val lookup_agg : string -> int -> func
+val lookup : string -> int -> Source_type.t func
+val lookup_agg : string -> int -> Source_type.t func
 
-val add : int -> func -> string -> unit
+val add : int -> Source_type.t func -> string -> unit
 val exclude : int -> string -> unit
 val monomorphic : Type.t -> Type.t list -> string -> unit
 val multi : ret:Type.tyvar -> Type.tyvar -> string -> unit
 val multi_polymorphic : string -> unit
-val add_multi: func -> string -> unit
-val sponge : func
+val add_multi: Source_type.t func -> string -> unit
+val sponge : Source_type.t func
 val add_fixed_then_pairs : ret:Type.tyvar -> fixed_args:Type.tyvar list -> repeating_pattern:Type.tyvar list -> string -> unit
 
 end = struct

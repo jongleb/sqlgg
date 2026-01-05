@@ -34,7 +34,6 @@ module L = struct
 
 let as_api_type t =
   match t.Type.t with
-  | UInt32
   | Int -> "Int64"
   | Text -> "String"
   | FloatingLiteral _

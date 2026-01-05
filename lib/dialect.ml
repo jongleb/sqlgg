@@ -196,7 +196,7 @@ let get_default_expr ~kind ~expr pos =
         However, you can only use expressions, not literals, to define default values for these data types.
        *)
       | Value _ when List.exists (fun x -> 
-          Option.map_default (Type.equal_kind x) false kind) [Json; Text; Blob] -> all_except [ TiDB ]
+          Option.map_default (Sql.Source_type.equal_kind (Sql.Source_type.Infer x)) false kind) [Json; Text; Blob] -> all_except [ TiDB ]
       | _ -> all
     in
     let dialects =

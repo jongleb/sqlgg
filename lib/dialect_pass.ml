@@ -1,9 +1,9 @@
 open Sql
 
 let check_unsigned_type pos = function
-  | Type.UInt64 -> 
+  | Source_type.Infer Type.UInt64 -> 
       [Dialect.get_unsigned_types pos]
-  | Type.UInt32 -> 
+  | UInt32 ->
       [Dialect.get_unsigned_types pos]
   | _ -> []
 

@@ -130,12 +130,11 @@ let get_enum_name ctors = ctors |> enum_get_hash |> Hashtbl.find enums_hash_tbl 
 module L = struct
   open Type
 
-  let rec as_lang_type = function
+  let as_lang_type = function
   | { t = Blob; nullability } -> type_name { t = Text; nullability }
   | { t = StringLiteral _; nullability } -> type_name { t = Text; nullability }
   | { t = FloatingLiteral _; nullability } -> type_name { t = Float; nullability }
   | { t = Decimal _; nullability; } -> type_name { t = Decimal { precision = None; scale = None }; nullability } 
-  | ({ t = UInt32; _ } as x) -> as_lang_type { x with t = Int }
   | { t = Int; _ }
   | { t = Text; _ }
   | { t = Float; _ }
@@ -155,7 +154,6 @@ module L = struct
   | { t = Union _; _ }
   | { t = Json_path; _ }
   | { t = StringLiteral _; _ } -> "string"
-  | { t = UInt32; _ }
   | { t = Int; _ } -> "int64"
   | { t = Float; _ }
   | { t = FloatingLiteral _; _ } -> "float"
@@ -306,9 +304,9 @@ let set_param ~meta index param =
         output "T.set_param_%s p (%s);" runtime_repr_name (sprintf "%s.%s %s" m set_param_name pname)
   | None ->
       match param with
-      | { typ = { t=Union { ctors; _ }; _ }; _ } when nullable ->
+      | { typ = { t=(Union { ctors; _ }); _ }; _ } when nullable ->
           set_param_nullable "v" @@ (get_enum_name ctors) ^ ".set_param p v"
-      | { typ = { t=Union { ctors; _ }; _ }; _ } ->
+      | { typ = { t=(Union { ctors; _ }); _ }; _ } ->
           output "%s.set_param p %s;" (get_enum_name ctors) pname
       | param' ->
           if nullable then
@@ -627,6 +625,7 @@ let make_sql l =
     | SubstTuple (id, Where_in { value = (types, _); pos = _ }) :: tl ->
       if app then bprintf b " ^ ";
       let label = resolve_tuple_label id in
+      let types = List.map (fun (t, m) -> (t, m)) types in
       let schema = make_schema_of_tuple_types label types in
       bprintf b "%s ^ " (quote "(");
       Buffer.add_string b (gen_tuple_substitution ~is_row:false label schema);
@@ -745,7 +744,7 @@ let generate_enum_modules stmts =
 
   let get_enum typ = match typ.Sql.Type.t with 
     | Union { ctors; _ } -> Some ctors
-    | Int | Text | Blob | Float | Bool | Json | UInt64 | UInt32
+    | Int | Text | Blob | Float | Bool | Json | UInt64
     | Datetime | Decimal _ | FloatingLiteral _ | Any | StringLiteral  _ | Json_path | One_or_all -> None
   in
 
