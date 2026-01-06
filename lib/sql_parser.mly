@@ -208,7 +208,7 @@ routine_extra: LANGUAGE IDENT { }
 %inline table_name: name=IDENT { Sql.make_table_name name }
                   | db=IDENT DOT name=IDENT { Sql.make_table_name ~db name }
 index_prefix: LPAREN n=INTEGER RPAREN { n }
-index_column: name=IDENT index_prefix? c=collate? order_type? {{ collated = name; collation = c }}
+index_column: name=IDENT index_prefix? c=collate? order_type? { make_collated ?collation:c ~collated:name ()}
 
 table_definition: t=sequence_(column_def1) ignore_after(RPAREN) 
                       { 
@@ -219,7 +219,7 @@ table_definition: t=sequence_(column_def1) ignore_after(RPAREN)
                           | `Index i -> { schema; constraints; indexes = i::indexes })
                           t { schema = []; constraints = []; indexes = [] }
                       }
-                // | LIKE name=maybe_parenth(table_name) { Tables.get name |> snd |> fun attrs -> { schema = attrs; constraints = []; indexes = [] } } (* mysql *)
+                | LIKE name=maybe_parenth(table_name) { Tables.get name |> snd |> fun attrs -> { schema = List.map Alter_action_attr.from_attr attrs; constraints = []; indexes = [] } } (* mysql *)
 
 (* ignoring everything after given token with a "lexer hack" (NB one look-ahead token) *)
 ignore_after(X): parser_state_ignore X IGNORED* parser_state_normal { }
@@ -257,7 +257,7 @@ natural(join): j=anyorder(NATURAL,join) JOIN src=source { src, snd j, Schema.Joi
 cond(join): j=join JOIN src=source c=join_cond { src, j, c }
 straight_cond(join): j=join src=source c=join_cond { src, j, c }
 
-join_source: COMMA src=source c=join_cond { src, { value = Schema.Join.Inner; pos = ($startofs, $endofs) }, c }
+join_source: COMMA src=source c=join_cond { src, make_located ~value:Schema.Join.Inner ~pos:($startofs, $endofs), c }
            | j=natural(located(left_join))
            | j=natural(located(right_join))
            | j=natural(located(full_join))
@@ -381,9 +381,9 @@ column_def: name=IDENT sql_kind=located_sql_type? extra=located(column_def_extra
 
 column_def1: c=column_def { `Attr c }
            | pair(CONSTRAINT,IDENT?)? l=table_constraint_1 index_options { `Constraint l }
-           | index_or_key table_index { `Index { value = Regular_idx; pos = ($startofs, $endofs); } }
-           | FULLTEXT index_or_key? table_index { `Index { value = Fulltext; pos = ($startofs, $endofs); } }
-           | SPATIAL index_or_key? table_index { `Index { value = Spatial; pos = ($startofs, $endofs); } }
+           | index_or_key table_index { `Index (make_located ~value:Regular_idx ~pos:($startofs, $endofs)) }
+           | FULLTEXT index_or_key? table_index { `Index (make_located ~value:Fulltext ~pos:($startofs, $endofs)) }
+           | SPATIAL index_or_key? table_index { `Index (make_located ~value:Spatial ~pos:($startofs, $endofs)) }
 
 int_arg: delimited(LPAREN,INTEGER,RPAREN) {}
 
@@ -414,7 +414,7 @@ column_def_extra: PRIMARY? KEY { Some (Alter_action_attr.Syntax_constraint Prima
                 | NULL { Some (Alter_action_attr.Syntax_constraint Null) }
                 | UNIQUE KEY? { Some (Alter_action_attr.Syntax_constraint Unique) }
                 | AUTOINCREMENT { Some (Alter_action_attr.Syntax_constraint Autoincrement) }
-                | DEFAULT def=default_value { Some (Alter_action_attr.Default { value = def; pos = ($startofs, $endofs) }) }
+                | DEFAULT def=default_value { Some (Alter_action_attr.Default (make_located ~value:def ~pos:($startofs, $endofs))) }
                 | on_conflict { None }
                 | CHECK LPAREN expr RPAREN { None }
                 | COLLATE IDENT { None }
@@ -466,21 +466,21 @@ expr:
     | MINUS e=expr %prec UNARY_MINUS { e }
     | INTERVAL e=expr interval_unit { Fun { fn_name = "interval"; kind = (fixed Datetime [Int]); parameters = [e]; is_over_clause = false } }
     | LPAREN e=expr RPAREN { e }
-    | a=attr_name c=collate? { Column { collated = a; collation = c; } }
+    | a=attr_name c=collate? { Column (make_collated ?collation:c ~collated:a ()) }
     | VALUES LPAREN n=IDENT RPAREN { Of_values n }
     | v=literal_value | v=datetime_value { v }
-    | INTERVAL_UNIT { Value { collated = (strict Datetime); collation = None; } }
+    | INTERVAL_UNIT { Value (make_collated ~collated:(strict Datetime) ()) }
     | e1=expr mnot(IN) l=sequence(expr) { poly "in" (depends Bool) (e1::l) }
     | e1=expr mnot(IN) LPAREN select=select_stmt RPAREN { poly "in_select" (depends Bool) [e1; SelectExpr (select, `AsValue)] }
     | e1=expr IN table=table_name { Tables.check table; e1 }
     | e1=expr k=in_or_not_in p=param
       {
         let e = poly "in_param" (depends Bool) [ e1; Inparam (make_param ~id:p ~typ:(Source_type.depends Any), Meta.empty()) ] in
-        InChoice ({ value = p.value; pos = ($startofs, $endofs) }, k, e )
+        InChoice (make_located ~value:p.value ~pos:($startofs, $endofs), k, e )
       }
     | LPAREN exprs=commas(expr) RPAREN k=in_or_not_in p=param
       {
-        InTupleList({ value = { exprs; param_id = p; kind_in_tuple_list = k; }; pos = ($startofs, $endofs)  })
+        InTupleList(make_located ~value:{ exprs; param_id = p; kind_in_tuple_list = k; } ~pos:($startofs, $endofs))
       }
     | LPAREN select=select_stmt RPAREN { SelectExpr (select, `AsValue) }
     | p=param t=preceded(DOUBLECOLON, manual_type)? { Param (make_param ~id:{ p with pos=($startofs, $endofs) } ~typ:(Option.default (Source_type.depends Any) t), Meta.empty())  }
@@ -494,7 +494,7 @@ expr:
     | TIME LPAREN e=expr RPAREN { Fun { fn_name = "time"; kind = (Function.lookup "time" 1); parameters = [e]; is_over_clause = false } }
     | f=INTERVAL_UNIT LPAREN e=expr RPAREN { Fun { fn_name = f; kind = Function.lookup f 1; parameters = [e]; is_over_clause = false } }
     | EXTRACT LPAREN interval_unit FROM e=expr RPAREN { Fun { fn_name = "extract"; kind = Function.lookup "extract" 1; parameters = [e]; is_over_clause = false } }
-    | DEFAULT LPAREN a=attr_name RPAREN { Fun { fn_name = "default"; kind = fun_identity; parameters = [Column { collated = a; collation = None }]; is_over_clause = false } }
+    | DEFAULT LPAREN a=attr_name RPAREN { Fun { fn_name = "default"; kind = fun_identity; parameters = [Column (make_collated ~collated:a ())]; is_over_clause = false } }
     | CONVERT LPAREN e=expr USING IDENT RPAREN { e }
     | CONVERT LPAREN e=expr COMMA f=cast_as RPAREN { f e }
     | GROUP_CONCAT LPAREN p=func_params order=loption(order) preceded(SEPARATOR, TEXT)? RPAREN
@@ -616,7 +616,7 @@ interval_unit: INTERVAL_UNIT
              | SECOND_MICROSECOND | MINUTE_MICROSECOND | MINUTE_SECOND
              | HOUR_MICROSECOND | HOUR_SECOND | HOUR_MINUTE
              | DAY_MICROSECOND | DAY_SECOND | DAY_MINUTE | DAY_HOUR
-             | YEAR_MONTH { Value { collated = (strict Datetime); collation = None; } }
+             | YEAR_MONTH { Value (make_collated ~collated:(strict Datetime) ()) }
 
 (* int_type returns Source_type.kind to preserve UInt32 for dialect checks *)
 int_type:
@@ -663,14 +663,14 @@ cast_as:
 %inline sequence(X): l=sequence_(X) RPAREN { l }
 
 charset: CHARSET either(IDENT,BINARY) | CHARACTER SET either(IDENT,BINARY) | ASCII | UNICODE { }
-collate: COLLATE c=IDENT { { value = c; pos = ($startofs, $endofs) } }
+collate: COLLATE c=IDENT { make_located ~value:c ~pos:($startofs, $endofs) }
 
 sql_type: t=collated(sql_type_flavor)
         | t=collated(sql_type_flavor) LPAREN INTEGER RPAREN UNSIGNED?
         | t=collated(sql_type_flavor) LPAREN INTEGER COMMA INTEGER RPAREN
         { t }
 
-located_sql_type: t=sql_type { { value = t; pos = ($startofs, $endofs) } }
+located_sql_type: t=sql_type { make_located ~value:t ~pos:($startofs, $endofs) }
 
 cast_sql_type: t=expr_sql_type_flavor
         | t=expr_sql_type_flavor LPAREN INTEGER RPAREN
@@ -711,6 +711,6 @@ lock:
  | DEFAULT {}
  | SHARED {}
 
-%inline located(X): X { { value = $1; pos = ($startofs, $endofs) } }
+%inline located(X): X { make_located ~value:$1 ~pos:($startofs, $endofs) }
 
-collated(X): X c=collate? {{ collated = $1; collation = c; }}
+collated(X): X c=collate? { make_collated ?collation:c ~collated:$1 () }

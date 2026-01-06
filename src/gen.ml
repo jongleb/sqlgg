@@ -131,7 +131,7 @@ let substitute_vars s vars subst_param =
           in
           { ctor; sql; args; is_poly=true }
         | Verbatim (n,v) ->
-          { ctor = { value = Some n; pos = (0,0) }; args=Some []; sql=[Static v]; is_poly=true }
+          { ctor = Sql.make_located ~value:(Some n) ~pos:(0,0); args=Some []; sql=[Static v]; is_poly=true }
         end
       in
       let (i1,i2) = name.pos in

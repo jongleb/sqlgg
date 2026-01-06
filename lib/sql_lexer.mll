@@ -341,7 +341,7 @@ ruleMain = parse
 
   | "?"   { QSTN }
   | "??"  { TWO_QSTN }
-  | [':' '@'] (ident as str) { PARAM { value = Some str; pos = pos lexbuf } }
+  | [':' '@'] (ident as str) { PARAM (Sql.make_located ~value:(Some str) ~pos:(pos lexbuf)) }
   | '&' (ident as value) { SHARED_QUERY_REF { value; pos = pos lexbuf } }
   | "::" { DOUBLECOLON }
 

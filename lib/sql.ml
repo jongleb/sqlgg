@@ -6,8 +6,8 @@ open Prelude
 
 type pos = (int * int) [@@deriving show]
 
-type 'a located  = { value : 'a; pos : pos } [@@deriving show]
-type 'a collated = { collated: 'a; collation: string located option } [@@deriving show]
+type 'a located  = { value : 'a; pos : pos } [@@deriving show, make]
+type 'a collated = { collated: 'a; collation: string located option } [@@deriving show, make]
 
 module Type =
 struct
@@ -731,7 +731,7 @@ module Alter_action_attr = struct
   type t = {  
     name : string; 
     kind : Source_type.kind collated located option;
-    extra : constraint_ located list; 
+    extra : constraint_ located list;
     meta: (string * string) list; 
   }
   [@@deriving show {with_path=false}]
@@ -748,6 +748,22 @@ module Alter_action_attr = struct
     (Option.map_default (fun k -> Some (kind_to_type_kind k.value.collated)) None x.kind)
     (Constraints.of_list (List.map (fun c -> constraint_to_syntax_constraint c.value) x.extra))
     ~meta:x.meta
+
+  (* All attributes were already checked for dialect and default expression when writing to Tables,
+     we deliberately make the fields dummy to reconstruct
+   *)
+  let from_attr (attr: attr): t =
+    let extra = attr.extra |> Constraints.elements |> List.map (fun c -> 
+      let c = match c with
+      | Constraint.WithDefault -> Default (make_located ~pos:(0,0) ~value:(Value 
+        (make_collated ~collated:(Type.depends Any) ()))) 
+      | x -> Syntax_constraint x
+      in
+      make_located ~pos:(0,0) ~value:c
+    ) in
+    let kind = Some (make_located ~pos:(0,0) ~value:(make_collated ~collated:(Source_type.Infer attr.domain.Type.t) ())) in
+    let meta = Meta.StringMap.to_seq attr.meta |> List.of_seq in
+    { name = attr.name; kind; extra; meta }
 end
 
 type create_target_schema = { 

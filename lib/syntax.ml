@@ -243,7 +243,7 @@ let resolve_column_assignments ~env l =
         Sql.Type.nullable attr.attr.domain.t 
       else
         attr.attr.domain in
-    let typ = { collated = typ; collation = None; } in
+    let typ = Sql.make_collated ~collated:typ () in
     if !Config.debug then eprintfn "column assignment %s type %s" col.cname (Type.show typ.collated);
     (* add equality on param and column type *)
     let equality typ expr = Fun { fn_name = "col_assign"; kind = (Col_assign { ret_t = Var 0; col_t = Var 0; arg_t = Var 0 }); parameters = [Value typ; expr]; is_over_clause = false } in
