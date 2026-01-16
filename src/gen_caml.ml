@@ -742,7 +742,7 @@ let sanitize_to_variant_name s =
 
 (* Dynamic select support *)
 
-(* Get column type for dynamic select module *)
+(* Get column type for dynamic select module - use T.Types.X.t *)
 let dynamic_select_column_type attr =
   let nullable_suffix = if is_attr_nullable attr then " option" else "" in
   match Sql.Meta.find_opt attr.meta "module" with
@@ -752,8 +752,8 @@ let dynamic_select_column_type attr =
     | { t = Union { ctors; _ }; _ } ->
       sprintf "%s.t%s" (get_enum_name ctors) nullable_suffix
     | _ ->
-      let type_name = L.as_lang_type attr.domain in
-      sprintf "T.%s%s" type_name nullable_suffix
+      let type_name = Sql.Type.type_name attr.domain in
+      sprintf "T.Types.%s.t%s" type_name nullable_suffix
 
 (* Generate the read expression for a column in dynamic select *)
 let dynamic_select_read_expr attr =

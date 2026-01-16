@@ -3535,10 +3535,10 @@ Dynamic select generates query module with column names:
     module IO = Sqlgg_io.Blocking
     module Select_projects_query = struct
       type _ field =
-        | Id : T.Int field
-        | Company_id : T.Int field
-        | Created_at : T.Datetime field
-        | Name : T.Text option field
+        | Id : T.Types.Int.t field
+        | Company_id : T.Types.Int.t field
+        | Created_at : T.Types.Datetime.t field
+        | Name : T.Types.Text.t option field
   
       type a_field = A_field : 'a field -> a_field
   
