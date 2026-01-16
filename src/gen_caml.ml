@@ -755,24 +755,22 @@ let dynamic_select_column_type attr =
       let type_name = Sql.Type.type_name attr.domain in
       sprintf "T.Types.%s.t%s" type_name nullable_suffix
 
-(* Generate the read expression for a column in dynamic select *)
-let dynamic_select_read_expr attr =
+(* Generate read expression for a column - base function for reuse *)
+let get_column_read_expr ~row ~idx attr =
   let nullable_suffix = if is_attr_nullable attr then "_nullable" else "" in
   match Sql.Meta.find_opt attr.meta "module" with
   | Some m ->
     let runtime_repr_name = L.as_runtime_repr_name attr.domain in
     let get_column = "get_column" in
     let get_column_name = get_column |> Sql.Meta.find_opt attr.meta |> Option.default get_column in
-    sprintf "fun row idx -> (%s.%s%s (T.get_column_%s%s row idx), idx + 1)"
-      m get_column_name nullable_suffix runtime_repr_name nullable_suffix
+    sprintf "%s.%s%s (T.get_column_%s%s %s %s)" m get_column_name nullable_suffix runtime_repr_name nullable_suffix row idx
   | None ->
     match attr.domain with
     | { t = Union { ctors; _ }; _ } ->
-      sprintf "fun row idx -> (%s.get_column%s row idx, idx + 1)"
-        (get_enum_name ctors) nullable_suffix
+      sprintf "%s.get_column%s %s %s" (get_enum_name ctors) nullable_suffix row idx
     | _ ->
       let type_name = L.as_lang_type attr.domain in
-      sprintf "fun row idx -> (T.get_column_%s%s row idx, idx + 1)" type_name nullable_suffix
+      sprintf "T.get_column_%s%s %s %s" type_name nullable_suffix row idx
 
 (* Generate Select_X_query module for dynamic select - GADT based *)
 let generate_dynamic_select_module index stmt =
@@ -853,15 +851,14 @@ let generate_dynamic_select_module index stmt =
   dec_indent ();
   empty_line ();
   
-  (* field_read *)
+  (* field_read - uses get_column_read_expr *)
   output "let field_read : type a. a field -> T.row -> int -> a = function";
   inc_indent ();
   schema |> List.iter (fun attr ->
     let col_name = Name.ident ~prefix:"col" attr.name in
     let ctor_name = String.capitalize_ascii col_name in
-    let nullable_suffix = if is_attr_nullable attr then "_nullable" else "" in
-    let type_name = L.as_lang_type attr.domain in
-    output "| %s -> fun row idx -> T.get_column_%s%s row idx" ctor_name type_name nullable_suffix;
+    let read_expr = get_column_read_expr ~row:"row" ~idx:"idx" attr in
+    output "| %s -> fun row idx -> %s" ctor_name read_expr;
   );
   dec_indent ();
   empty_line ();
