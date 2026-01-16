@@ -566,6 +566,7 @@ and join_condition = expr Schema.Join.condition
 and select = {
   columns : column list;
   from : nested option;
+  from_pos : int option; (* position where FROM starts, for dynamic_select *)
   where : expr option;
   group : expr list;
   having : expr option;

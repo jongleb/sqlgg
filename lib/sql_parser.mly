@@ -245,7 +245,7 @@ select_stmt_plain: core=select_core other=list(pair(compound_op,select_core)) o=
 
 select_core: SELECT select_type? r=commas(column1) f=from?  w=where?  g=loption(group) h=having?
               {
-                { columns=r; from=f; where=w; group=g; having=h; }
+                { columns=r; from=f; from_pos=Option.map (fun _ -> $startpos(f).Lexing.pos_cnum) f; where=w; group=g; having=h; }
               }
 
 table_list: src=source joins=join_source* { (src,joins) }

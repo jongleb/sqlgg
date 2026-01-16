@@ -3601,9 +3601,190 @@ Dynamic select generates query module with column names:
   )") T.no_params
   
     let select_projects ~dynamic_select db callback acc =
-      let sql = "SELECT " ^ Select_projects_query.column dynamic_select ^ " FROM projects" in
+      let sql = "SELECT " ^ Select_projects_query.column dynamic_select ^ " " ^ "FROM projects" in
       let r_acc = ref acc in
       IO.(>>=) (T.select db sql T.no_params (fun row ->
+        r_acc := callback (Select_projects_query.read_row dynamic_select row) !r_acc
+      ))
+      (fun () -> IO.return !r_acc)
+  
+    module Fold = struct
+    end (* module Fold *)
+    
+    module List = struct
+    end (* module List *)
+  end (* module Sqlgg *)
+
+Dynamic select with parameters:
+  $ sqlgg -no-header -gen caml -params unnamed - <<'SQL'
+  > CREATE TABLE projects (id INT NOT NULL, company_id INT NOT NULL, name TEXT);
+  > -- @select_projects
+  > -- [sqlgg] dynamic_select=true
+  > SELECT id, company_id, name FROM projects WHERE company_id = @company_id;
+  > SQL
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+    module Select_projects_query = struct
+      type _ field =
+        | Id : T.Types.Int.t field
+        | Company_id : T.Types.Int.t field
+        | Name : T.Types.Text.t option field
+  
+      type a_field = A_field : 'a field -> a_field
+  
+      type _ t =
+        | V : 'a field -> 'a t
+        | Return : 'a -> 'a t
+        | Map : 'a t * ('a -> 'b) -> 'b t
+        | Both : 'a t * 'b t -> ('a * 'b) t
+  
+      let id = V Id
+      let company_id = V Company_id
+      let name = V Name
+  
+      let return x = Return x
+      let map f t = Map (t, f)
+      let both a b = Both (a, b)
+      let (let+) t f = Map (t, f)
+      let (and+) a b = Both (a, b)
+  
+      let rec to_a_field_list : type a. a t -> a_field list = function
+        | V f -> [A_field f]
+        | Return _ -> []
+        | Map (t, _) -> to_a_field_list t
+        | Both (a, b) -> to_a_field_list a @ to_a_field_list b
+  
+      let field_to_column : type a. a field -> string = function
+        | Id -> "id"
+        | Company_id -> "company_id"
+        | Name -> "name"
+  
+      let column t =
+        to_a_field_list t
+        |> List.map (fun (A_field f) -> field_to_column f)
+        |> String.concat ", "
+  
+      let field_read : type a. a field -> T.row -> int -> a = function
+        | Id -> fun row idx -> T.get_column_Int row idx
+        | Company_id -> fun row idx -> T.get_column_Int row idx
+        | Name -> fun row idx -> T.get_column_Text_nullable row idx
+  
+      let rec read : type a. a t -> T.row -> int -> a * int = function
+        | V f -> fun row idx -> (field_read f row idx, idx + 1)
+        | Return x -> fun _row idx -> (x, idx)
+        | Map (t, f) -> fun row idx -> let (v, idx') = read t row idx in (f v, idx')
+        | Both (a, b) -> fun row idx -> let (va, i1) = read a row idx in let (vb, i2) = read b row i1 in ((va, vb), i2)
+  
+      let read_row t row = fst (read t row 0)
+    end
+  
+  
+    let create_projects db  =
+      T.execute db ("CREATE TABLE projects (id INT NOT NULL, company_id INT NOT NULL, name TEXT)") T.no_params
+  
+    let select_projects ~dynamic_select ~company_id db callback acc =
+      let sql = "SELECT " ^ Select_projects_query.column dynamic_select ^ " " ^ "FROM projects WHERE company_id = ?" in
+      let set_params stmt =
+        let p = T.start_params stmt (1) in
+        T.set_param_Int p company_id;
+        T.finish_params p
+      in
+      let r_acc = ref acc in
+      IO.(>>=) (T.select db sql set_params (fun row ->
+        r_acc := callback (Select_projects_query.read_row dynamic_select row) !r_acc
+      ))
+      (fun () -> IO.return !r_acc)
+  
+    module Fold = struct
+    end (* module Fold *)
+    
+    module List = struct
+    end (* module List *)
+  end (* module Sqlgg *)
+
+Dynamic select with choices:
+  $ sqlgg -no-header -gen caml -params unnamed - <<'SQL'
+  > CREATE TABLE projects (id INT NOT NULL, company_id INT NOT NULL, name TEXT, status TEXT);
+  > -- @select_projects
+  > -- [sqlgg] dynamic_select=true
+  > SELECT id, name, status FROM projects WHERE company_id = @company_id AND @filter { Active { status = 'active' } | ByStatus { status = @status } };
+  > SQL
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+    module Select_projects_query = struct
+      type _ field =
+        | Id : T.Types.Int.t field
+        | Name : T.Types.Text.t option field
+        | Status : T.Types.Text.t option field
+  
+      type a_field = A_field : 'a field -> a_field
+  
+      type _ t =
+        | V : 'a field -> 'a t
+        | Return : 'a -> 'a t
+        | Map : 'a t * ('a -> 'b) -> 'b t
+        | Both : 'a t * 'b t -> ('a * 'b) t
+  
+      let id = V Id
+      let name = V Name
+      let status = V Status
+  
+      let return x = Return x
+      let map f t = Map (t, f)
+      let both a b = Both (a, b)
+      let (let+) t f = Map (t, f)
+      let (and+) a b = Both (a, b)
+  
+      let rec to_a_field_list : type a. a t -> a_field list = function
+        | V f -> [A_field f]
+        | Return _ -> []
+        | Map (t, _) -> to_a_field_list t
+        | Both (a, b) -> to_a_field_list a @ to_a_field_list b
+  
+      let field_to_column : type a. a field -> string = function
+        | Id -> "id"
+        | Name -> "name"
+        | Status -> "status"
+  
+      let column t =
+        to_a_field_list t
+        |> List.map (fun (A_field f) -> field_to_column f)
+        |> String.concat ", "
+  
+      let field_read : type a. a field -> T.row -> int -> a = function
+        | Id -> fun row idx -> T.get_column_Int row idx
+        | Name -> fun row idx -> T.get_column_Text_nullable row idx
+        | Status -> fun row idx -> T.get_column_Text_nullable row idx
+  
+      let rec read : type a. a t -> T.row -> int -> a * int = function
+        | V f -> fun row idx -> (field_read f row idx, idx + 1)
+        | Return x -> fun _row idx -> (x, idx)
+        | Map (t, f) -> fun row idx -> let (v, idx') = read t row idx in (f v, idx')
+        | Both (a, b) -> fun row idx -> let (va, i1) = read a row idx in let (vb, i2) = read b row i1 in ((va, vb), i2)
+  
+      let read_row t row = fst (read t row 0)
+    end
+  
+  
+    let create_projects db  =
+      T.execute db ("CREATE TABLE projects (id INT NOT NULL, company_id INT NOT NULL, name TEXT, status TEXT)") T.no_params
+  
+    let select_projects ~dynamic_select ~company_id ~filter db callback acc =
+      let sql = "SELECT " ^ Select_projects_query.column dynamic_select ^ " " ^ "FROM projects WHERE company_id = ? AND " ^ (match filter with `Active -> " status = 'active' " | `ByStatus _ -> " status = " ^ "?" ^ " ") in
+      let set_params stmt =
+        let p = T.start_params stmt (1 + (match filter with `Active -> 0 | `ByStatus _ -> 1)) in
+        T.set_param_Int p company_id;
+        begin match filter with
+        | `Active -> ()
+        | `ByStatus (status) ->
+          T.set_param_Text p status;
+        end;
+        T.finish_params p
+      in
+      let r_acc = ref acc in
+      IO.(>>=) (T.select db sql set_params (fun row ->
         r_acc := callback (Select_projects_query.read_row dynamic_select row) !r_acc
       ))
       (fun () -> IO.return !r_acc)

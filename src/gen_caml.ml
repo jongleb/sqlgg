@@ -649,6 +649,92 @@ let make_sql l =
   Buffer.add_string b ")";
   Buffer.contents b
 
+(* Helper: make_sql without outer parentheses *)
+let make_sql_no_parens l =
+  let b = Buffer.create 100 in
+  let rec loop app = function
+    | [] -> ()
+    | Static "" :: tl when app -> loop app tl
+    | Static s :: tl ->
+      if app then bprintf b " ^ ";
+      Buffer.add_string b (quote s);
+      loop true tl
+    | SubstIn (param, m) :: tl ->
+      if app then bprintf b " ^ ";
+      Buffer.add_string b (gen_in_substitution m param);
+      loop true tl
+    | DynamicIn (name, in_or_not_in, sqls) :: tl ->
+      if app then bprintf b " ^ ";
+      bprintf b "(match %s with" (make_param_name 0 name);
+      bprintf b " [] -> \"%s\" | _ :: _ -> "
+        (String.uppercase_ascii @@ string_of_bool @@ match in_or_not_in with `In -> false | `NotIn -> true);
+      loop false sqls;
+      bprintf b ")";
+      loop true tl
+    | Dynamic (name, ctors) :: tl ->
+      if app then bprintf b " ^ ";
+      bprintf b "(match %s with" (make_param_name 0 name);
+      ctors |> List.iteri (fun i ({ ctor; args; sql; is_poly }) -> 
+        bprintf b " %s%s -> " (if i = 0 then "" else "| ") 
+          (match_variant_pattern i ctor.label args ~is_poly:is_poly); loop false sql);
+      bprintf b ")";
+      loop true tl
+    | SubstTuple (id, Insertion schema) :: tl ->
+      if app then bprintf b " ^ ";
+      let label = resolve_tuple_label id in
+      Buffer.add_string b (gen_tuple_substitution ~is_row:false label schema);
+      loop true tl
+    | SubstTuple (id, Where_in (types, _, _)) :: tl ->
+      if app then bprintf b " ^ ";
+      let label = resolve_tuple_label id in
+      let schema = make_schema_of_tuple_types label types in
+      bprintf b "%s ^ " (quote "(");
+      Buffer.add_string b (gen_tuple_substitution ~is_row:false label schema);
+      bprintf b " ^ %s" (quote ")");
+      loop true tl
+    | SubstTuple (id, ValueRows { types; _ }) :: tl ->
+      if app then bprintf b " ^ ";
+      let label = resolve_tuple_label id in
+      let types = List.map (fun typ -> typ, Meta.empty()) types in
+      let schema = make_schema_of_tuple_types label types in
+      let empty = schema 
+        |> List.map (const "NULL") 
+        |> String.join ", " 
+        |> sprintf {|"SELECT %s WHERE FALSE"|} in
+      let not_empty = gen_tuple_substitution ~is_row:true label schema in
+      Buffer.add_string b @@ sprintf {|( if %s = [] then %s else ( "VALUES " ^ %s ) )|} label empty not_empty;
+      loop true tl  
+  in
+  loop false l;
+  Buffer.contents b
+
+(* Make SQL for dynamic select - cuts first Static at from_pos *)
+let make_sql_for_dynamic_select module_name from_pos sql_chunks =
+  match from_pos with
+  | None -> failwith "dynamic_select: FROM position not found (missing FROM clause?)"
+  | Some from_pos ->
+    (* Find the Static chunk containing from_pos, split it, keep everything after *)
+    let rec split_at_from_pos pos acc = function
+      | [] -> failwith "dynamic_select: cannot find FROM in chunks"
+      | Static s :: rest ->
+        let s_end = pos + String.length s in
+        if s_end <= from_pos then
+          split_at_from_pos s_end acc rest
+        else if pos >= from_pos then
+          List.rev_append acc (Static s :: rest)
+        else
+          let offset = from_pos - pos in
+          let from_part = String.slice ~first:offset s in
+          List.rev_append acc (Static from_part :: rest)
+      | chunk :: rest ->
+        if pos >= from_pos then
+          split_at_from_pos pos (chunk :: acc) rest
+        else
+          split_at_from_pos pos acc rest
+    in
+    let from_chunks = split_at_from_pos 0 [] sql_chunks in
+    sprintf {|"SELECT " ^ %s.column dynamic_select ^ " " ^ %s|} module_name (make_sql_no_parens from_chunks)
+
 let is_dynamic_select stmt =
   Props.get stmt.Gen.props "dynamic_select" = Some "true"
 
@@ -889,21 +975,23 @@ let generate_dynamic_select_modules stmts =
 let generate_dynamic_select_func index stmt =
   let name = choose_name stmt.props stmt.kind index |> String.uncapitalize_ascii in
   let module_name = sprintf "%s_query" (String.capitalize_ascii name) in
-  let sql_str = Props.get stmt.props "sql" |> Option.get in
-  (* Find FROM position to split SQL *)
-  let from_pos = 
-    try String.find sql_str "FROM" 
-    with Not_found -> 
-      try String.find sql_str "from"
-      with Not_found -> failwith "dynamic_select: cannot find FROM in SQL"
-  in
-  let sql_rest = String.slice ~first:from_pos sql_str in
   
-  output "let %s ~dynamic_select db callback acc =" name;
+  (* Get params like regular select *)
+  let subst = Props.get_all stmt.props "subst" in
+  let inputs = (subst @ names_of_vars stmt.vars) |> List.map (fun v -> sprintf "~%s" v) |> inline_values in
+  
+  let inputs_with_space = if inputs = "" then "" else " " ^ inputs in
+  output "let %s ~dynamic_select%s db callback acc =" name inputs_with_space;
   inc_indent ();
-  output "let sql = \"SELECT \" ^ %s.column dynamic_select ^ \" %s\" in" module_name (quote_comment_inline sql_rest);
+  
+  (* Use get_sql which does proper substitution (@param -> ?) *)
+  let from_pos = Props.get stmt.props "from_pos" |> Option.map int_of_string in
+  let sql = make_sql_for_dynamic_select module_name from_pos @@ get_sql stmt in
+  output "let sql = %s in" sql;
+  
+  let params_binder_name = output_params_binder index stmt.vars in
   output "let r_acc = ref acc in";
-  output "IO.(>>=) (T.select db sql T.no_params (fun row ->";
+  output "IO.(>>=) (T.select db sql %s (fun row ->" params_binder_name;
   inc_indent ();
   output "r_acc := callback (%s.read_row dynamic_select row) !r_acc" module_name;
   dec_indent ();

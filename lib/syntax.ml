@@ -964,7 +964,7 @@ and extract_not_null_column_keys env = function
 
     expr |> analyze |> extract
 
-and eval_select env { columns; from; where; group; having; } =
+and eval_select env { columns; from; where; group; having; _ } =
   let (env,p2) = eval_nested env from in
   let env = { env with query_has_grouping = List.length group > 0 } in
   (* Extract IS NOT NULL predicates from WHERE and HAVING *)
@@ -1093,7 +1093,7 @@ and resolve_source env (x, alias) =
       https://dev.mysql.com/doc/refman/8.4/en/values.html
     *)
     let exprs_to_cols = List.mapi (fun idx expr -> Expr (expr, Some (Printf.sprintf "column_%d" idx))) in
-    let dummy_select exprs = { columns = exprs_to_cols exprs; from = None; where = None; group = []; having = None } in
+    let dummy_select exprs = { columns = exprs_to_cols exprs; from = None; from_pos = None; where = None; group = []; having = None } in
     let (s, p, _) = match row_constructor_list with
       | RowExprList [] -> failwith "Each row of a VALUES clause must have at least one column"
       | RowExprList (exprs :: xs) ->
@@ -1423,7 +1423,7 @@ let rec eval (stmt:Sql.stmt) =
     [], p, Delete [table]
   | DeleteMulti (targets, tables, where) ->
     (* use dummy columns to verify targets match the provided tables  *)
-    let select = ({ columns = [All]; from = Some tables; where; group = []; having = None }, []) in
+    let select = ({ columns = [All]; from = Some tables; from_pos = None; where; group = []; having = None }, []) in
     let select_complete = { select; order = []; limit = None} in
     let _attrs, params, _ = eval_select_full empty_env {select_complete; cte=None } in
     [], params, Delete targets
@@ -1561,12 +1561,26 @@ let complete_sql kind sql =
     (B.contents b, List.rev !params)
   | _ -> (sql,[])
 
+type parse_result = {
+  sql: string;
+  schema: Sql.Schema.t;
+  vars: Sql.var list;
+  kind: Stmt.kind;
+  dialect_features: Dialect.dialect_support list;
+  from_pos: int option;
+}
+
 let parse sql =
   let open Parser in
   let { statement; dialect_features } = parse_stmt sql in
   let (schema,p1,kind) = eval statement in
   let (sql,p2) = complete_sql kind sql in
-  (sql, schema, unify_params (p1 @ p2), kind, dialect_features)
+  (* Extract from_pos for SELECT statements (for dynamic_select) *)
+  let from_pos = match statement with
+    | Select select_full -> (fst select_full.select_complete.select).from_pos
+    | _ -> None
+  in
+  { sql; schema; vars = unify_params (p1 @ p2); kind; dialect_features; from_pos }
   
 let eval_select select_full =
   let (schema, p1, kind) = eval @@ Select select_full in
