@@ -649,7 +649,12 @@ let make_sql l =
   Buffer.add_string b ")";
   Buffer.contents b
 
+let is_dynamic_select stmt =
+  Props.get stmt.Gen.props "dynamic_select" = Some "true"
+
 let generate_stmt style index stmt =
+  (* Skip dynamic_select statements - they have their own generator *)
+  if is_dynamic_select stmt then () else
   let name = choose_name stmt.props stmt.kind index |> String.uncapitalize_ascii in
   let subst = Props.get_all stmt.props "subst" in
   let inputs = (subst @ names_of_vars stmt.vars) |> List.map (fun v -> sprintf "~%s" v) |> inline_values in
@@ -734,6 +739,181 @@ let sanitize_to_variant_name s =
   in match normalized.[0] with
     | '0'..'9' -> "Num_" ^ normalized
     | _ -> normalized
+
+(* Dynamic select support *)
+
+(* Get column type for dynamic select module *)
+let dynamic_select_column_type attr =
+  let nullable_suffix = if is_attr_nullable attr then " option" else "" in
+  match Sql.Meta.find_opt attr.meta "module" with
+  | Some m -> sprintf "%s.t%s" m nullable_suffix
+  | None ->
+    match attr.domain with
+    | { t = Union { ctors; _ }; _ } ->
+      sprintf "%s.t%s" (get_enum_name ctors) nullable_suffix
+    | _ ->
+      let type_name = L.as_lang_type attr.domain in
+      sprintf "T.%s%s" type_name nullable_suffix
+
+(* Generate the read expression for a column in dynamic select *)
+let dynamic_select_read_expr attr =
+  let nullable_suffix = if is_attr_nullable attr then "_nullable" else "" in
+  match Sql.Meta.find_opt attr.meta "module" with
+  | Some m ->
+    let runtime_repr_name = L.as_runtime_repr_name attr.domain in
+    let get_column = "get_column" in
+    let get_column_name = get_column |> Sql.Meta.find_opt attr.meta |> Option.default get_column in
+    sprintf "fun row idx -> (%s.%s%s (T.get_column_%s%s row idx), idx + 1)"
+      m get_column_name nullable_suffix runtime_repr_name nullable_suffix
+  | None ->
+    match attr.domain with
+    | { t = Union { ctors; _ }; _ } ->
+      sprintf "fun row idx -> (%s.get_column%s row idx, idx + 1)"
+        (get_enum_name ctors) nullable_suffix
+    | _ ->
+      let type_name = L.as_lang_type attr.domain in
+      sprintf "fun row idx -> (T.get_column_%s%s row idx, idx + 1)" type_name nullable_suffix
+
+(* Generate Select_X_query module for dynamic select - GADT based *)
+let generate_dynamic_select_module index stmt =
+  let name = choose_name stmt.props stmt.kind index in
+  let module_name = sprintf "%s_query" (String.capitalize_ascii name) in
+  let schema = stmt.Gen.schema in
+  
+  output "module %s = struct" module_name;
+  inc_indent ();
+  
+  (* GADT field type *)
+  output "type _ field =";
+  inc_indent ();
+  schema |> List.iter (fun attr ->
+    let ctor_name = String.capitalize_ascii (Name.ident ~prefix:"col" attr.name) in
+    let col_type = dynamic_select_column_type attr in
+    output "| %s : %s field" ctor_name col_type;
+  );
+  dec_indent ();
+  empty_line ();
+  
+  output "type a_field = A_field : 'a field -> a_field";
+  empty_line ();
+  
+  (* GADT expression type *)
+  output "type _ t =";
+  inc_indent ();
+  output "| V : 'a field -> 'a t";
+  output "| Return : 'a -> 'a t";
+  output "| Map : 'a t * ('a -> 'b) -> 'b t";
+  output "| Both : 'a t * 'b t -> ('a * 'b) t";
+  dec_indent ();
+  empty_line ();
+  
+  (* Field values *)
+  schema |> List.iter (fun attr ->
+    let col_name = Name.ident ~prefix:"col" attr.name in
+    let ctor_name = String.capitalize_ascii col_name in
+    output "let %s = V %s" col_name ctor_name;
+  );
+  empty_line ();
+  
+  (* Combinators *)
+  output "let return x = Return x";
+  output "let map f t = Map (t, f)";
+  output "let both a b = Both (a, b)";
+  output "let (let+) t f = Map (t, f)";
+  output "let (and+) a b = Both (a, b)";
+  empty_line ();
+  
+  (* to_a_field_list *)
+  output "let rec to_a_field_list : type a. a t -> a_field list = function";
+  inc_indent ();
+  output "| V f -> [A_field f]";
+  output "| Return _ -> []";
+  output "| Map (t, _) -> to_a_field_list t";
+  output "| Both (a, b) -> to_a_field_list a @ to_a_field_list b";
+  dec_indent ();
+  empty_line ();
+  
+  (* field_to_column *)
+  output "let field_to_column : type a. a field -> string = function";
+  inc_indent ();
+  schema |> List.iter (fun attr ->
+    let col_name = Name.ident ~prefix:"col" attr.name in
+    let ctor_name = String.capitalize_ascii col_name in
+    output "| %s -> %s" ctor_name (quote attr.name);
+  );
+  dec_indent ();
+  empty_line ();
+  
+  (* column - get SQL column string *)
+  output "let column t =";
+  inc_indent ();
+  output "to_a_field_list t";
+  output "|> List.map (fun (A_field f) -> field_to_column f)";
+  output "|> String.concat \", \"";
+  dec_indent ();
+  empty_line ();
+  
+  (* field_read *)
+  output "let field_read : type a. a field -> T.row -> int -> a = function";
+  inc_indent ();
+  schema |> List.iter (fun attr ->
+    let col_name = Name.ident ~prefix:"col" attr.name in
+    let ctor_name = String.capitalize_ascii col_name in
+    let nullable_suffix = if is_attr_nullable attr then "_nullable" else "" in
+    let type_name = L.as_lang_type attr.domain in
+    output "| %s -> fun row idx -> T.get_column_%s%s row idx" ctor_name type_name nullable_suffix;
+  );
+  dec_indent ();
+  empty_line ();
+  
+  (* read *)
+  output "let rec read : type a. a t -> T.row -> int -> a * int = function";
+  inc_indent ();
+  output "| V f -> fun row idx -> (field_read f row idx, idx + 1)";
+  output "| Return x -> fun _row idx -> (x, idx)";
+  output "| Map (t, f) -> fun row idx -> let (v, idx') = read t row idx in (f v, idx')";
+  output "| Both (a, b) -> fun row idx -> let (va, i1) = read a row idx in let (vb, i2) = read b row i1 in ((va, vb), i2)";
+  dec_indent ();
+  empty_line ();
+  
+  output "let read_row t row = fst (read t row 0)";
+  
+  dec_indent ();
+  output "end";
+  empty_line ()
+
+let generate_dynamic_select_modules stmts =
+  stmts |> List.iteri (fun index stmt ->
+    if is_dynamic_select stmt then
+      generate_dynamic_select_module index stmt
+  )
+
+(* Generate function for dynamic select *)
+let generate_dynamic_select_func index stmt =
+  let name = choose_name stmt.props stmt.kind index |> String.uncapitalize_ascii in
+  let module_name = sprintf "%s_query" (String.capitalize_ascii name) in
+  let sql_str = Props.get stmt.props "sql" |> Option.get in
+  (* Find FROM position to split SQL *)
+  let from_pos = 
+    try String.find sql_str "FROM" 
+    with Not_found -> 
+      try String.find sql_str "from"
+      with Not_found -> failwith "dynamic_select: cannot find FROM in SQL"
+  in
+  let sql_rest = String.slice ~first:from_pos sql_str in
+  
+  output "let %s ~dynamic_select db callback acc =" name;
+  inc_indent ();
+  output "let sql = \"SELECT \" ^ %s.column dynamic_select ^ \" %s\" in" module_name (quote_comment_inline sql_rest);
+  output "let r_acc = ref acc in";
+  output "IO.(>>=) (T.select db sql T.no_params (fun row ->";
+  inc_indent ();
+  output "r_acc := callback (%s.read_row dynamic_select row) !r_acc" module_name;
+  dec_indent ();
+  output "))";
+  output "(fun () -> IO.return !r_acc)";
+  dec_indent ();
+  empty_line ()
 
 let generate_enum_modules stmts = 
   let open Sql.Type.Enum_kind in
@@ -825,8 +1005,13 @@ let generate ~gen_io name stmts =
   inc_indent ();
   output "module IO = %s" io;
   generate_enum_modules stmts;
+  generate_dynamic_select_modules stmts;
   empty_line ();
   List.iteri (generate_stmt `Direct) stmts;
+  (* Generate dynamic select functions *)
+  stmts |> List.iteri (fun index stmt ->
+    if is_dynamic_select stmt then generate_dynamic_select_func index stmt
+  );
   let has_fold = List.exists is_callback stmts in
   let has_list = has_fold in
   let has_single = List.exists (fun stmt ->

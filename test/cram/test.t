@@ -3517,3 +3517,100 @@ Test IS NOT NULL type refinement with IS NULL:
   
     end (* module List *)
   end (* module Sqlgg *)
+
+Dynamic select generates query module with column names:
+  $ sqlgg -no-header -gen caml - <<'SQL'
+  > CREATE TABLE projects (
+  >   id INT NOT NULL,
+  >   company_id INT NOT NULL,
+  >   created_at DATETIME NOT NULL,
+  >   name TEXT
+  > );
+  > -- @select_projects
+  > -- [sqlgg] dynamic_select=true
+  > SELECT id, company_id, created_at, name FROM projects;
+  > SQL
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+    module Select_projects_query = struct
+      type _ field =
+        | Id : T.Int field
+        | Company_id : T.Int field
+        | Created_at : T.Datetime field
+        | Name : T.Text option field
+  
+      type a_field = A_field : 'a field -> a_field
+  
+      type _ t =
+        | V : 'a field -> 'a t
+        | Return : 'a -> 'a t
+        | Map : 'a t * ('a -> 'b) -> 'b t
+        | Both : 'a t * 'b t -> ('a * 'b) t
+  
+      let id = V Id
+      let company_id = V Company_id
+      let created_at = V Created_at
+      let name = V Name
+  
+      let return x = Return x
+      let map f t = Map (t, f)
+      let both a b = Both (a, b)
+      let (let+) t f = Map (t, f)
+      let (and+) a b = Both (a, b)
+  
+      let rec to_a_field_list : type a. a t -> a_field list = function
+        | V f -> [A_field f]
+        | Return _ -> []
+        | Map (t, _) -> to_a_field_list t
+        | Both (a, b) -> to_a_field_list a @ to_a_field_list b
+  
+      let field_to_column : type a. a field -> string = function
+        | Id -> "id"
+        | Company_id -> "company_id"
+        | Created_at -> "created_at"
+        | Name -> "name"
+  
+      let column t =
+        to_a_field_list t
+        |> List.map (fun (A_field f) -> field_to_column f)
+        |> String.concat ", "
+  
+      let field_read : type a. a field -> T.row -> int -> a = function
+        | Id -> fun row idx -> T.get_column_Int row idx
+        | Company_id -> fun row idx -> T.get_column_Int row idx
+        | Created_at -> fun row idx -> T.get_column_Datetime row idx
+        | Name -> fun row idx -> T.get_column_Text_nullable row idx
+  
+      let rec read : type a. a t -> T.row -> int -> a * int = function
+        | V f -> fun row idx -> (field_read f row idx, idx + 1)
+        | Return x -> fun _row idx -> (x, idx)
+        | Map (t, f) -> fun row idx -> let (v, idx') = read t row idx in (f v, idx')
+        | Both (a, b) -> fun row idx -> let (va, i1) = read a row idx in let (vb, i2) = read b row i1 in ((va, vb), i2)
+  
+      let read_row t row = fst (read t row 0)
+    end
+  
+  
+    let create_projects db  =
+      T.execute db ("CREATE TABLE projects (\n\
+    id INT NOT NULL,\n\
+    company_id INT NOT NULL,\n\
+    created_at DATETIME NOT NULL,\n\
+    name TEXT\n\
+  )") T.no_params
+  
+    let select_projects ~dynamic_select db callback acc =
+      let sql = "SELECT " ^ Select_projects_query.column dynamic_select ^ " FROM projects" in
+      let r_acc = ref acc in
+      IO.(>>=) (T.select db sql T.no_params (fun row ->
+        r_acc := callback (Select_projects_query.read_row dynamic_select row) !r_acc
+      ))
+      (fun () -> IO.return !r_acc)
+  
+    module Fold = struct
+    end (* module Fold *)
+    
+    module List = struct
+    end (* module List *)
+  end (* module Sqlgg *)
