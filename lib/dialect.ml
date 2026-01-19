@@ -156,7 +156,7 @@ let get_default_expr ~function_name ~kind ~expr pos =
     ; "NEXTVAL"; "VEC_FROM_TEXT"
     ]
   in
-  let rec analyze = function
+  let rec analyze expr = match expr.Sql.e with
     | Value _ -> (true, false, true)
     | Column _ -> (true, true, false)
     | Case { case; branches; else_ } ->
@@ -183,7 +183,7 @@ let get_default_expr ~function_name ~kind ~expr pos =
   if not valid then only DefaultExpr [] pos
   else
     let base_dialects =
-      match expr with
+      match expr.Sql.e with
       | Case _ | Fun _ ->
           begin match function_name with
           | Some name

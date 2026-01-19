@@ -4,6 +4,9 @@ open Printf
 open ExtLib
 open Prelude
 
+type pos = (int * int) [@@deriving show]
+type 'a located  = { value : 'a; pos : pos } [@@deriving show, make]
+
 module Type =
 struct
 
@@ -497,7 +500,6 @@ let show_table_name { db; tn } = match db with Some db -> sprintf "%s.%s" db tn 
 let make_table_name ?db tn = { db; tn }
 type schema = Schema.t [@@deriving show]
 type table = table_name * schema [@@deriving show]
-type pos = (int * int) [@@deriving show]
 
 let print_table out (name,schema) =
   IO.write_line out (show_table_name name);
@@ -529,6 +531,23 @@ and var =
 and tuple_list_kind = Insertion of schema | Where_in of (Type.t * Meta.t) list * in_or_not_in * pos | ValueRows of { types: Type.t list; values_start_pos: int; }
 [@@deriving show]
 and vars = var list [@@deriving show]
+
+(* For dynamic select columns *)
+type dynamic_column = {
+  attr: attr;        (* attribute info for this column *)
+  expr_pos: pos;       (* position in SQL for extracting expression *)
+  col_params: var list;    (* parameters in this expr, [] for static like 2+2 *)
+} [@@deriving show]
+
+type dynamic_select_info = {
+  columns_range: pos;          (* range of columns list in SQL, to replace with dynamic *)
+  columns: dynamic_column list;
+} [@@deriving show]
+
+type schema_kind =
+  | RegularSchema of Schema.t
+  | DynamicSchema of dynamic_select_info
+  [@@deriving show]
 
 type alter_pos = [ `After of string | `Default | `First ] [@@deriving show {with_path=false}]
 type alter_action = [
@@ -564,9 +583,8 @@ and source_kind = [ `Select of select_full | `Table of table_name | `Nested of n
 and source = source_kind * source_alias option (* alias *)
 and join_condition = expr Schema.Join.condition
 and select = {
-  columns : column list;
+  columns : column list located;
   from : nested option;
-  from_pos : int option; (* position where FROM starts, for dynamic_select *)
   where : expr option;
   group : expr list;
   having : expr option;
@@ -624,8 +642,8 @@ and case = {
   case: expr option;
   branches: case_branch list;
   else_: expr option;
-} [@@deriving show]
-and expr =
+}
+and expr_desc =
   | Value of Type.t (** literal value *)
   | Param of param * Meta.t
   | Inparam of param * Meta.t
@@ -641,17 +659,23 @@ and expr =
   | OptionActions of { choice: expr; pos: (pos * pos); kind: option_actions_kind }
   | Case of case
   | Of_values of string (** VALUES(col_name) *)
+and expr = { e: expr_desc; pos: pos option } [@@deriving show]
 and column =
   | All
   | AllOf of table_name
-  | Expr of expr * string option (** name *)
+  | Expr of expr * string option (** expr with pos, alias *)
   [@@deriving show {with_path=false}]
 
 type columns = column list [@@deriving show]
 
+(* Helper to create expr without position *)
+let make_expr e = { e; pos = None }
+(* Helper to create expr with position *)
+let make_expr_pos pos e = { e; pos = Some pos }
+
 let expr_to_string = show_expr
 
-let make_partition_by = List.iter (function
+let make_partition_by = List.iter (fun expr -> match expr.e with
   | Value _ -> fail "ORDER BY or PARTITION BY uses legacy position indication which is not supported, use expression."
   | _ -> ())
 

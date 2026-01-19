@@ -10,6 +10,7 @@ module Config = struct
   let debug = ref false
   (* If strict mode is not enabled, some dbs allow this. *)
   let allow_write_notnull_null = ref false
+  let dynamic_select = ref false
 end
 
 type env = {
@@ -106,7 +107,7 @@ let list_same l =
   | [] -> None
   | x::xs -> if List.for_all (fun y -> x = y) xs then Some x else None
 
-let rec is_grouping = function
+let rec is_grouping expr = match expr.Sql.e with
 | Value _
 | Param _
 | Column _
@@ -116,7 +117,7 @@ let rec is_grouping = function
 | Of_values _
 | OptionActions _ -> false
 | Choices (p,l) ->
-  begin match list_same @@ List.map (fun (_,expr) -> Option.map_default is_grouping false expr) l with
+  begin match list_same @@ List.map (fun (_,e) -> Option.map_default is_grouping false e) l with
   | None -> failed ~at:p.pos "inconsistent grouping in choice branches"
   | Some v -> v
   end
@@ -130,7 +131,7 @@ let rec is_grouping = function
   (* grouping function of zero or single parameter or function on grouping result *)
   (Sql.is_grouping kind && List.length parameters <= 1) || List.exists is_grouping parameters
 
-let rec is_windowing = function
+let rec is_windowing expr = match expr.Sql.e with
 | Value _
 | Param _
 | Column _
@@ -192,7 +193,7 @@ let resolve_column ~env {cname;tname} =
   | Some result -> result
 
 let rec merge_meta_into_params ~shallow meta expr =
-  match expr, shallow with
+  let new_e = match expr.Sql.e, shallow with
   | Param (p, m), _ -> Param (p, Meta.merge_right meta m)
   | Inparam (p, m), _ -> Inparam (p, Meta.merge_right meta m)
   | OptionActions ({ choice; _ } as o), _->
@@ -212,8 +213,10 @@ let rec merge_meta_into_params ~shallow meta expr =
     InTupleList { tl with exprs = List.map (merge_meta_into_params ~shallow meta) exprs }
   | Choices (n, l), false ->
     Choices (n, List.map (fun (n, e) -> n, Option.map (merge_meta_into_params ~shallow meta) e) l)
-  | (Value _ | Column _ | SelectExpr _ | Of_values _) as e, false -> e
-  | expr , true -> expr
+  | (Value _ | Column _ | SelectExpr _ | Of_values _), false -> expr.e
+  | _ , true -> expr.e
+  in
+  { expr with e = new_e }
 
 let set_param_meta ~env col e = 
   let m' = (resolve_column ~env col).attr.meta in
@@ -245,18 +248,18 @@ let resolve_column_assignments ~env l =
         attr.attr.domain in
     if !Config.debug then eprintfn "column assignment %s type %s" col.cname (Type.show typ);
     (* add equality on param and column type *)
-    let equality typ expr = Fun { kind = (Col_assign { ret_t = Var 0; col_t = Var 0; arg_t = Var 0 }); parameters = [Value typ; expr]; is_over_clause = false } in
+    let equality typ expr = Sql.make_expr (Fun { kind = (Col_assign { ret_t = Var 0; col_t = Var 0; arg_t = Var 0 }); parameters = [Sql.make_expr (Value typ); expr]; is_over_clause = false }) in
     let with_default assign = if not @@ Constraints.mem WithDefault attr.attr.extra then fail "Column %s doesn't have default value" col.cname else assign in
     match expr with
-    | RegularExpr (Choices (n,l)) ->
+    | RegularExpr { e = Choices (n,l); _ } ->
       (* Apply metadata to params inside each choice branch *)
       let l_with_meta = List.map (fun (n,e) -> n, Option.map (set_param_meta ~env col) e) l in
-      Choices (n, List.map (fun (n,e) -> n, Option.map (equality typ) e) l_with_meta)
-    | RegularExpr (OptionActions ch) ->
-      OptionActions { ch with choice = (equality typ) ch.choice }  (* FIXME hack, should propagate properly *)
-    | RegularExpr expr -> equality typ (set_param_meta ~env col expr)
-    | WithDefaultParam (e, pos) -> with_default @@ OptionActions { choice = equality typ (set_param_meta ~env col e); pos; kind = SetDefault }
-    | AssignDefault -> with_default @@ (Value typ)
+      Sql.make_expr (Choices (n, List.map (fun (n,e) -> n, Option.map (equality typ) e) l_with_meta))
+    | RegularExpr { e = OptionActions ch; _ } ->
+      Sql.make_expr (OptionActions { ch with choice = (equality typ) ch.choice })  (* FIXME hack, should propagate properly *)
+    | RegularExpr e -> equality typ (set_param_meta ~env col e)
+    | WithDefaultParam (e, pos) -> with_default @@ Sql.make_expr (OptionActions { choice = equality typ (set_param_meta ~env col e); pos; kind = SetDefault })
+    | AssignDefault -> with_default @@ Sql.make_expr (Value typ)
   end
 
 let _print_env env =
@@ -268,7 +271,7 @@ let update_schema_with_aliases all_schema final_schema =
   let applied = all_schema |> List.filter (fun s1 -> List.for_all Schema.Source.Attr.(fun s2 -> s2.attr.name <> s1.attr.name) final_schema) in  
   applied @ final_schema
 
-let rec bool_choice_id = function
+let rec bool_choice_id expr = match expr.Sql.e with
   | Column _
   | SelectExpr _
   | OptionActions _
@@ -287,16 +290,18 @@ let rec bool_choice_id = function
      option_list else_)
 
 let extract_meta_from_col ~env expr = 
-  let rec aux = function 
+  let rec aux expr = 
+    let new_e = match expr.Sql.e with 
     (* col_name = @param *)
-    | Sql.Fun ({ parameters = ([Column a; b]); kind = Comparison _; _ } as fn)
+    | Sql.Fun ({ parameters = [({ e = Column col; _ } as a); b]; kind = Comparison _; _ } as fn) ->
+      Fun { fn with parameters = [a; set_param_meta ~env col b] }
+    | Sql.Fun ({ parameters = [a; ({ e = Column col; _ } as b)]; kind = Comparison _; _ } as fn) ->
+      Fun { fn with parameters = [set_param_meta ~env col a; b] }
     (* col_name IN @param *)
-    | Fun ({ parameters = ([Column a; (Inparam _) as b]); _ } as fn) -> 
-      Fun { fn with parameters = [Column a; set_param_meta ~env a b] }
-    | Sql.Fun ({ parameters = ([b; Column a]); kind = Comparison _; _ } as fn)
-    (* col_name IN @param *)
-    | Fun ({ parameters = ([(Inparam _) as b; Column a;]); _ } as fn) -> 
-      Fun { fn with parameters = [set_param_meta ~env a b; Column a;] }
+    | Fun ({ parameters = [({ e = Column col; _ } as a); { e = Inparam _; _ } as b]; _ } as fn) ->
+      Fun { fn with parameters = [a; set_param_meta ~env col b] }
+    | Fun ({ parameters = [({ e = Inparam _; _ } as a); ({ e = Column col; _ } as b)]; _ } as fn) ->
+      Fun { fn with parameters = [set_param_meta ~env col a; b] }
     (* (col_name, ..., any_expr, col_name2) IN @param *)
     | InTupleList ({ exprs;_ } as in_tuple_list) -> 
       InTupleList { in_tuple_list with exprs = List.map aux exprs }
@@ -316,7 +321,9 @@ let extract_meta_from_col ~env expr =
     | Choices (n,l) -> 
       Choices (n, List.map (fun (n,e) -> n, Option.map aux e) l)
     | (Value _ | Param _ | Inparam _
-      | SelectExpr (_, _) | Column _  | Of_values _) as e -> e
+      | SelectExpr (_, _) | Column _  | Of_values _) -> expr.e
+    in
+    { expr with e = new_e }
   in
   aux expr
     
@@ -331,7 +338,7 @@ let rec resolve_columns env expr =
   end;
   let expr = extract_meta_from_col ~env expr in
   let rec each e =
-    match e with
+    match e.Sql.e with
     | Value x -> ResValue x
     | Column col ->
       let attr = (resolve_column ~env col).attr in
@@ -401,7 +408,7 @@ let rec resolve_columns env expr =
         | ResInChoice _ -> fail "unsupported expression %s kind for WHERE e IN @tuplelist" (show_res_expr res_expr)
       ) exprs in
       let res_exprs = List.map2 (fun e re ->
-        match e with
+        match e.Sql.e with
         | Column col -> re, (resolve_column ~env col).attr.meta 
         | _ -> re, Meta.empty ()
       ) exprs res_exprs in
@@ -428,7 +435,7 @@ let rec resolve_columns env expr =
       match schema, usage with
       | [ {domain; _} ], `AsValue -> 
         (* This function should be raised? *)
-        let rec with_count = function 
+        let rec with_count expr = match expr.Sql.e with
             | Case { case = _; branches; else_ } ->
               let then_exprs = List.map (fun b -> b.Sql.then_) branches in
               let all_results_exprs = then_exprs @ (option_list else_) in 
@@ -451,8 +458,8 @@ let rec resolve_columns env expr =
            Any other expression could possibly return no rows. *)
         let typ = match select.select_complete.select with 
         | ({ having = Some _; _ }, _) -> Type.nullable domain.t
-        | ({ columns = [Expr(c, _)]; _ }, _) -> c |> with_count |> Option.default default_null
-        | ({ columns = [_]; _ }, _) -> default_null
+        | ({ columns = { value = [Expr(c, _)]; _ }; _ }, _) -> c |> with_count |> Option.default default_null
+        | ({ columns = { value = [_]; _ }; _ }, _) -> default_null
         | _ -> raise (Schema.Error (schema, "nested sub-select used as an expression returns more than one column"))
         in
         ResSelect (typ, p)
@@ -725,7 +732,7 @@ and resolve_types env expr =
 
 and infer_schema ~not_null_keys env columns =
 (*   let all = tables |> List.map snd |> List.flatten in *)
-  let rec propagate_meta ~env = function
+  let rec propagate_meta ~env expr = match expr.Sql.e with
     | Column col ->
       let result = resolve_column ~env col in
       result.attr.meta
@@ -734,7 +741,7 @@ and infer_schema ~not_null_keys env columns =
      (* null handling functions that preserve metadata from first argument *)
     | Fun { kind = Null_handling (Coalesce _ | If_null); parameters = e :: _; _ } -> propagate_meta ~env e
     (* Or for subselect which always requests only one column, TODO: consider CTE in subselect, perhaps a rare occurrence *)
-    | SelectExpr ({ select_complete = { select = ({columns = [Expr(e, _)]; from; _}, _); _ }; _ }, _) ->
+    | SelectExpr ({ select_complete = { select = ({columns = { value = [Expr(e, _)]; _ }; from; _}, _); _ }; _ }, _) ->
       let (env,_) = eval_nested env from in
       propagate_meta ~env e
     | Case _
@@ -758,9 +765,11 @@ and infer_schema ~not_null_keys env columns =
     | AllOf t -> List.map refine_column (schema_of ~env t)
     | Expr (e,name) ->
       let col =
-        match e with
-        | Column col -> resolve_column ~env col
-        | e -> {
+        match e.Sql.e with
+        | Column col -> 
+          (* For simple column reference, don't set expr_pos - use column name *)
+          resolve_column ~env col
+        | _ -> {
           attr = unnamed_attribute ~meta:(propagate_meta ~env e) (resolve_types env e |> snd |> get_or_failwith);
           sources = []
         }
@@ -851,7 +860,7 @@ and params_of_order order final_schema env =
        p1 @ p2)
     order
 
-and ensure_res_expr = function
+and ensure_res_expr expr = match expr.Sql.e with
   | Value x -> ResValue x
   | Param (x, m) -> ResParam (x, m)
   | Inparam (x, m) -> ResInparam (x, m)
@@ -910,12 +919,12 @@ and extract_not_null_column_keys env = function
     end in
 
     (* Build nullability AST from expression *)
-    let rec analyze = function
+    let rec analyze expr = match expr.Sql.e with
       | Column _ -> NullCheck.Unknown
-      | Fun { kind = Comparison Is_not_null; parameters = [Column col]; _ } ->
+      | Fun { kind = Comparison Is_not_null; parameters = [{ e = Column col; _ }]; _ } ->
           let resolved = resolve_column ~env col in
           NullCheck.IsNotNull (resolved.sources, resolved.attr.name)
-      | Fun { kind = Comparison Is_null; parameters = [Column col]; _ } ->
+      | Fun { kind = Comparison Is_null; parameters = [{ e = Column col; _ }]; _ } ->
           let resolved = resolve_column ~env col in
           NullCheck.IsNull (resolved.sources, resolved.attr.name)
       | Fun { kind = Negation; parameters = [e]; _ } ->
@@ -991,10 +1000,10 @@ and eval_select env { columns; from; where; group; having; _ } =
         match expr_list with
         | [] -> acc
         | expr :: expr_list ->
-          match expr with
+          match expr.Sql.e with
           | Fun { kind = Comparison Comp_equal; parameters = [v1; v2]; _ } ->
             let columns_in_eql_check =
-            match v1, v2 with
+            match v1.Sql.e, v2.Sql.e with
             | Column _, Column _ -> [] (* Columns may refer to each other in foreign
                                           key constraints, so don't add any of them for now. 
                                           TODO: consider foreign key constraints *)
@@ -1045,7 +1054,7 @@ and eval_select env { columns; from; where; group; having; _ } =
       `One
     | None, Some _ ->
       `Zero_one
-    | Some _, _ when group = [] && exists_grouping columns && not (exists_windowing columns) ->
+    | Some _, _ when group = [] && exists_grouping columns.value && not (exists_windowing columns.value) ->
       `One
       (* TODO: analyse join types to determine if cardinality optimization can be done *)
     | Some ((`Table t, _), []), Some w when satisfies_some_relevant_constraint t w env ->
@@ -1093,7 +1102,8 @@ and resolve_source env (x, alias) =
       https://dev.mysql.com/doc/refman/8.4/en/values.html
     *)
     let exprs_to_cols = List.mapi (fun idx expr -> Expr (expr, Some (Printf.sprintf "column_%d" idx))) in
-    let dummy_select exprs = { columns = exprs_to_cols exprs; from = None; from_pos = None; where = None; group = []; having = None } in
+    (* HEEERREEE *)
+    let dummy_select exprs = { columns = { value = exprs_to_cols exprs; pos = (0, 0) }; from = None; where = None; group = []; having = None } in
     let (s, p, _) = match row_constructor_list with
       | RowExprList [] -> failwith "Each row of a VALUES clause must have at least one column"
       | RowExprList (exprs :: xs) ->
@@ -1190,13 +1200,14 @@ let annotate_select select attrs =
       | Expr (e,name) :: cols, a :: attrs ->
         let e = merge_meta_into_params ~shallow:false a.meta e in
         let t = a.domain in
-        loop (Expr (Fun { kind = (F (Typ t, [Typ t])); parameters = [e]; is_over_clause = false}, name) :: acc) cols attrs
+        loop (Expr (Sql.make_expr (Fun { kind = (F (Typ t, [Typ t])); parameters = [e]; is_over_clause = false}), name) :: acc) cols attrs
       | _, [] | [], _ -> failwith "Select cardinality doesn't match Insert"
     in
     loop [] cols attrs
   in
-  let select1' = { select1 with columns = apply_to_columns select1.columns attrs } in
-  let compound' = List.map (fun (op, sel) -> (op, { sel with columns = apply_to_columns sel.columns attrs })) compound in
+   (* HEEERREEE *)
+  let select1' = { select1 with columns = { value = apply_to_columns select1.columns.value attrs; pos = (0, 0) } } in
+  let compound' = List.map (fun (op, sel) -> (op, { sel with columns = { value = apply_to_columns sel.columns.value attrs; pos = (0, 0) } })) compound in
   { select with select = (select1', compound') }
 
 let resolve_on_conflict_clause ~env tn' = Option.map_default (function
@@ -1225,8 +1236,8 @@ let resolve_on_conflict_clause ~env tn' = Option.map_default (function
             and to rows proposed for insertion using the special excluded table.
             From our perspective, it is the same as accessing the table into which we write.
           *)
-         | col, RegularExpr (Column { cname ; tname = Some { tn = "excluded"; db }; }) -> 
-          col, RegularExpr(Column { cname; tname = Some { tn = tn'; db }; })
+         | col, RegularExpr { e = Column { cname; tname = Some { tn = "excluded"; db }; }; _ } ->
+            col, RegularExpr (Sql.make_expr (Column { cname; tname = Some { tn = tn'; db }; }))
          | e -> e
         ) values in
         ss
@@ -1423,14 +1434,14 @@ let rec eval (stmt:Sql.stmt) =
     [], p, Delete [table]
   | DeleteMulti (targets, tables, where) ->
     (* use dummy columns to verify targets match the provided tables  *)
-    let select = ({ columns = [All]; from = Some tables; from_pos = None; where; group = []; having = None }, []) in
+    let select = ({ columns = { value = [All]; pos = (0, 0) }; from = Some tables; where; group = []; having = None }, []) in
     let select_complete = { select; order = []; limit = None} in
     let _attrs, params, _ = eval_select_full empty_env {select_complete; cte=None } in
     [], params, Delete targets
   | Set (vars, stmt) ->
     let p =
       vars |> List.map (fun (_k,e) ->
-        match e with
+        match e.Sql.e with
         | Column _ -> [] (* this is not column but some db-specific identifier *)
         | _ -> get_params_of_res_expr empty_env (ensure_res_expr e)) |> List.concat
     in
@@ -1567,7 +1578,6 @@ type parse_result = {
   vars: Sql.var list;
   kind: Stmt.kind;
   dialect_features: Dialect.dialect_support list;
-  from_pos: int option;
 }
 
 let parse sql =
@@ -1575,12 +1585,7 @@ let parse sql =
   let { statement; dialect_features } = parse_stmt sql in
   let (schema,p1,kind) = eval statement in
   let (sql,p2) = complete_sql kind sql in
-  (* Extract from_pos for SELECT statements (for dynamic_select) *)
-  let from_pos = match statement with
-    | Select select_full -> (fst select_full.select_complete.select).from_pos
-    | _ -> None
-  in
-  { sql; schema; vars = unify_params (p1 @ p2); kind; dialect_features; from_pos }
+  { sql; schema; vars = unify_params (p1 @ p2); kind; dialect_features }
   
 let eval_select select_full =
   let (schema, p1, kind) = eval @@ Select select_full in
