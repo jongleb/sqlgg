@@ -132,16 +132,15 @@ let get_enum_name ctors = ctors |> enum_get_hash |> Hashtbl.find enums_hash_tbl 
 let field_name_of_param_id (p : Sql.param_id) =
   match p.label with Some s -> String.capitalize_ascii s | None -> "Field"
 
-let has_params args = match args with Some (_ :: _) -> true | _ -> false
-
 (* Generate pattern for match case on ctor *)
 let ctor_pattern = function
   | Sql.Simple (param_id, args) ->
     let field_name = field_name_of_param_id param_id in
-    if has_params args then field_name ^ " _" else field_name
+    (match args with Some (_ :: _) -> field_name ^ " _" | _ -> field_name)
   | Sql.Verbatim (n, _) -> String.capitalize_ascii n
 
 type dynamic_info = {
+  di_param_id: Sql.param_id;
   di_module_name: string;
   di_param_name: string;
   di_ctors: Sql.ctor list;
@@ -476,7 +475,7 @@ let rec eval_count_params vars =
       | SharedVarsGroup (vars, _) -> `SharedVarsGroup vars
       | OptionActionChoice (param_id, vars, _, _) -> `OptionActionChoice (param_id, vars)
       | Choice (name, c) -> `Choice (name, c)
-      | DynamicSelect _ -> `Static false (* handled separately in generate_stmt_with_dynamic_multi *)
+      | DynamicSelect _ -> `Static false (* handled separately in generate_stmt_with_dynamic *)
     in
     let rec group_vars (static, choices, bool_choices, choices_in) = function
       | [] -> (List.rev static, List.rev choices, List.rev bool_choices, List.rev choices_in)
@@ -682,105 +681,8 @@ let make_sql l =
   Buffer.add_string b ")";
   Buffer.contents b
 
-(* Generate helper functions for one dynamic select *)
-let generate_dynamic_helpers di sql_pieces =
-  let { di_param_name = suffix; di_module_name = module_name; di_ctors = ds_ctors; di_schema_fields = schema_fields } = di in
-  output "let rec params_count_%s : type a. a %s.t -> int = function" suffix module_name;
-  inc_indent ();
-  List.iter (fun ctor ->
-    match ctor with
-    | Sql.Simple (param_id, args) ->
-      let field_name = field_name_of_param_id param_id in
-      let arg_count = match args with Some l -> List.length l | None -> 0 in
-      if arg_count = 0 then
-        output "| %s.V %s -> 0" module_name field_name
-      else
-        output "| %s.V (%s _) -> %d" module_name field_name arg_count
-    | Sql.Verbatim (n, _) ->
-      output "| %s.V %s -> 0" module_name (String.capitalize_ascii n)
-  ) ds_ctors;
-  output "| Return _ -> 0";
-  output "| Map (t, _) -> params_count_%s t" suffix;
-  output "| Both (a, b) -> params_count_%s a + params_count_%s b" suffix suffix;
-  dec_indent ();
-  output "in";
-  
-  output "let field_set_%s : type a. a %s.field -> T.params -> unit = function" suffix module_name;
-  inc_indent ();
-  List.iter (fun ctor ->
-    match ctor with
-    | Sql.Simple (param_id, args) ->
-      let field_name = field_name_of_param_id param_id in
-      let param_types = Option.default [] args |> List.filter_map (function Sql.Single (p, _) -> Some p.typ | _ -> None) in
-      begin match param_types with
-      | [] ->
-        output "| %s -> fun _p -> ()" field_name
-      | [t] ->
-        output "| %s x -> fun p -> T.set_param_%s p x" field_name (L.as_lang_type t)
-      | types ->
-        let vars = List.mapi (fun i _ -> sprintf "x%d" i) types in
-        let pattern = sprintf "(%s)" (String.concat ", " vars) in
-        let sets = List.map2 (fun v t -> sprintf "T.set_param_%s p %s" (L.as_lang_type t) v) vars types in
-        output "| %s %s -> fun p -> %s" field_name pattern (String.concat "; " sets)
-      end
-    | Sql.Verbatim (n, _) ->
-      output "| %s -> fun _p -> ()" (String.capitalize_ascii n)
-  ) ds_ctors;
-  dec_indent ();
-  output "in";
-  
-  output "let rec set_%s : type a. a %s.t -> T.params -> unit = function" suffix module_name;
-  inc_indent ();
-  output "| %s.V f -> fun p -> field_set_%s f p" module_name suffix;
-  output "| Return _ -> fun _p -> ()";
-  output "| Map (t, _) -> fun p -> set_%s t p" suffix;
-  output "| Both (a, b) -> fun p -> set_%s a p; set_%s b p" suffix suffix;
-  dec_indent ();
-  output "in";
-  
-  output "let field_to_column_%s : type a. a %s.field -> string = function" suffix module_name;
-  inc_indent ();
-  let field_sqls = List.find_map (function
-    | Gen.Dynamic (pid, ctors) when Option.default "x" pid.Sql.label = suffix -> 
-      Some (List.map (fun c -> c.Gen.ctor, c.Gen.sql) ctors)
-    | _ -> None
-  ) sql_pieces |> Option.default [] in
-  List.iter2 (fun ctor (_, sql) ->
-    let body = match ctor with Sql.Verbatim (_, v) -> quote v | _ -> make_sql sql in
-    output "| %s -> %s" (ctor_pattern ctor) body
-  ) ds_ctors field_sqls;
-  dec_indent ();
-  output "in";
-  
-  output "let rec to_a_field_list_%s : type a. a %s.t -> %s.a_field list = function" suffix module_name module_name;
-  inc_indent ();
-  output "| %s.V f -> [Any_field f]" module_name;
-  output "| Return _ -> []";
-  output "| Map (t, _) -> to_a_field_list_%s t" suffix;
-  output "| Both (a, b) -> to_a_field_list_%s a @ to_a_field_list_%s b" suffix suffix;
-  dec_indent ();
-  output "in";
-  
-  output "let field_read_%s : type a. a %s.field -> T.row -> int -> a = function" suffix module_name;
-  inc_indent ();
-  List.iter2 (fun ctor (_, attr) ->
-    let result_type = L.as_lang_type attr.Sql.domain in
-    output "| %s -> fun row idx -> T.get_column_%s%s row idx" (ctor_pattern ctor) result_type (nullable_suffix attr)
-  ) ds_ctors schema_fields;
-  dec_indent ();
-  output "in";
-  
-  output "let rec read_%s : type a. a %s.t -> T.row -> int -> a * int = function" suffix module_name;
-  inc_indent ();
-  output "| %s.V f -> fun row idx -> (field_read_%s f row idx, idx + 1)" module_name suffix;
-  output "| Return x -> fun _row idx -> (x, idx)";
-  output "| Map (t, f) -> fun row idx -> let (v, idx') = read_%s t row idx in (f v, idx')" suffix;
-  output "| Both (a, b) -> fun row idx -> let (va, i1) = read_%s a row idx in let (vb, i2) = read_%s b row i1 in ((va, vb), i2)" suffix suffix;
-  dec_indent ();
-  output "in"
-
 (* Generate stmt with multiple dynamic selects *)
-let generate_stmt_with_dynamic_multi style index stmt dynamic_infos =
+let generate_stmt_with_dynamic style index stmt dynamic_infos =
   let name = choose_name stmt.props stmt.kind index |> String.uncapitalize_ascii in
   let subst = Props.get_all stmt.props "subst" in
   let inputs = (subst @ names_of_vars stmt.vars) |> List.map (fun v -> sprintf "~%s" v) |> inline_values in
@@ -794,7 +696,106 @@ let generate_stmt_with_dynamic_multi style index stmt dynamic_infos =
   let sql_pieces = get_sql stmt in
   
   (* Generate helpers for each dynamic select *)
-  List.iter (fun di -> generate_dynamic_helpers di sql_pieces) dynamic_infos;
+  List.iter (fun di ->
+    let suffix = di.di_param_name in
+    let module_name = di.di_module_name in
+    let ds_ctors = di.di_ctors in
+    let schema_fields = di.di_schema_fields in
+    
+    output "let rec params_count_%s : type a. a %s.t -> int = function" suffix module_name;
+    inc_indent ();
+    List.iter (fun ctor ->
+      match ctor with
+      | Sql.Simple (param_id, args) ->
+        let field_name = field_name_of_param_id param_id in
+        let arg_count = match args with Some l -> List.length l | None -> 0 in
+        if arg_count = 0 then
+          output "| %s.V %s -> 0" module_name field_name
+        else
+          output "| %s.V (%s _) -> %d" module_name field_name arg_count
+      | Sql.Verbatim (n, _) ->
+        output "| %s.V %s -> 0" module_name (String.capitalize_ascii n)
+    ) ds_ctors;
+    output "| Return _ -> 0";
+    output "| Map (t, _) -> params_count_%s t" suffix;
+    output "| Both (a, b) -> params_count_%s a + params_count_%s b" suffix suffix;
+    dec_indent ();
+    output "in";
+    
+    output "let field_set_%s : type a. a %s.field -> T.params -> unit = function" suffix module_name;
+    inc_indent ();
+    List.iter (fun ctor ->
+      match ctor with
+      | Sql.Simple (param_id, args) ->
+        let field_name = field_name_of_param_id param_id in
+        let param_types = Option.default [] args |> List.filter_map (function Sql.Single (p, _) -> Some p.typ | _ -> None) in
+        begin match param_types with
+        | [] ->
+          output "| %s -> fun _p -> ()" field_name
+        | [t] ->
+          output "| %s x -> fun p -> T.set_param_%s p x" field_name (L.as_lang_type t)
+        | types ->
+          let vars = List.mapi (fun i _ -> sprintf "x%d" i) types in
+          let pattern = sprintf "(%s)" (String.concat ", " vars) in
+          let sets = List.map2 (fun v t -> sprintf "T.set_param_%s p %s" (L.as_lang_type t) v) vars types in
+          output "| %s %s -> fun p -> %s" field_name pattern (String.concat "; " sets)
+        end
+      | Sql.Verbatim (n, _) ->
+        output "| %s -> fun _p -> ()" (String.capitalize_ascii n)
+    ) ds_ctors;
+    dec_indent ();
+    output "in";
+    
+    output "let rec set_%s : type a. a %s.t -> T.params -> unit = function" suffix module_name;
+    inc_indent ();
+    output "| %s.V f -> fun p -> field_set_%s f p" module_name suffix;
+    output "| Return _ -> fun _p -> ()";
+    output "| Map (t, _) -> fun p -> set_%s t p" suffix;
+    output "| Both (a, b) -> fun p -> set_%s a p; set_%s b p" suffix suffix;
+    dec_indent ();
+    output "in";
+    
+    output "let field_to_column_%s : type a. a %s.field -> string = function" suffix module_name;
+    inc_indent ();
+    let field_sqls = List.find_map (function
+      | Gen.Dynamic (pid, ctors) when pid = di.di_param_id -> 
+        Some (List.map (fun c -> c.Gen.ctor, c.Gen.sql) ctors)
+      | _ -> None
+    ) sql_pieces |> Option.default [] in
+    List.iter2 (fun ctor (_, sql) ->
+      let body = match ctor with Sql.Verbatim (_, v) -> quote v | _ -> make_sql sql in
+      output "| %s -> %s" (ctor_pattern ctor) body
+    ) ds_ctors field_sqls;
+    dec_indent ();
+    output "in";
+    
+    output "let rec to_a_field_list_%s : type a. a %s.t -> %s.a_field list = function" suffix module_name module_name;
+    inc_indent ();
+    output "| %s.V f -> [Any_field f]" module_name;
+    output "| Return _ -> []";
+    output "| Map (t, _) -> to_a_field_list_%s t" suffix;
+    output "| Both (a, b) -> to_a_field_list_%s a @ to_a_field_list_%s b" suffix suffix;
+    dec_indent ();
+    output "in";
+    
+    output "let field_read_%s : type a. a %s.field -> T.row -> int -> a = function" suffix module_name;
+    inc_indent ();
+    List.iter2 (fun ctor (_, attr) ->
+      let result_type = L.as_lang_type attr.Sql.domain in
+      output "| %s -> fun row idx -> T.get_column_%s%s row idx" (ctor_pattern ctor) result_type (nullable_suffix attr)
+    ) ds_ctors schema_fields;
+    dec_indent ();
+    output "in";
+    
+    output "let rec read_%s : type a. a %s.t -> T.row -> int -> a * int = function" suffix module_name;
+    inc_indent ();
+    output "| %s.V f -> fun row idx -> (field_read_%s f row idx, idx + 1)" module_name suffix;
+    output "| Return x -> fun _row idx -> (x, idx)";
+    output "| Map (t, f) -> fun row idx -> let (v, idx') = read_%s t row idx in (f v, idx')" suffix;
+    output "| Both (a, b) -> fun row idx -> let (va, i1) = read_%s a row idx in let (vb, i2) = read_%s b row i1 in ((va, vb), i2)" suffix suffix;
+    dec_indent ();
+    output "in"
+  ) dynamic_infos;
   
   (* Generate set_params *)
   let other_vars = List.filter (function Sql.DynamicSelect _ -> false | _ -> true) stmt.vars in
@@ -815,12 +816,13 @@ let generate_stmt_with_dynamic_multi style index stmt dynamic_infos =
   output "in";
   
   (* Build SQL string with all dynamic parts *)
-  let param_to_module = List.map (fun di -> (di.di_param_name, di.di_module_name)) dynamic_infos in
+  let find_di_by_pid pid = List.find (fun di -> di.di_param_id = pid) dynamic_infos in
   let rec build_sql_parts acc = function
     | [] -> List.rev acc
     | Gen.Dynamic (pid, _) :: rest ->
-      let param_name = Option.default "x" pid.Sql.label in
-      let module_name = List.assoc param_name param_to_module in
+      let di = find_di_by_pid pid in
+      let param_name = di.di_param_name in
+      let module_name = di.di_module_name in
       let dyn_expr = sprintf "(%s |> to_a_field_list_%s |> List.map (fun (%s.Any_field f) -> field_to_column_%s f) |> String.concat \", \")" 
         param_name param_name module_name param_name in
       build_sql_parts (dyn_expr :: acc) rest
@@ -828,7 +830,7 @@ let generate_stmt_with_dynamic_multi style index stmt dynamic_infos =
       build_sql_parts (make_sql [x] :: acc) rest
   in
   let sql_parts = build_sql_parts [] sql_pieces in
-  output "let __sqlgg_sql = %s in" (String.concat " ^ " sql_parts);
+  let sql_expr = String.concat " ^ " sql_parts in
   
   if style = `Fold then output "let r_acc = ref acc in";
   if style = `List then output "let r_acc = ref [] in";
@@ -839,8 +841,8 @@ let generate_stmt_with_dynamic_multi style index stmt dynamic_infos =
   let rec split_schema_multi acc current = function
     | [] -> List.rev ((List.rev current, None) :: acc)
     | Syntax.Dynamic (pid, _) :: rest ->
-      let param_name = Option.default "x" pid.Sql.label in
-      split_schema_multi (((List.rev current), Some param_name) :: acc) [] rest
+      let di = find_di_by_pid pid in
+      split_schema_multi (((List.rev current), Some di.di_param_name) :: acc) [] rest
     | Syntax.Attr a :: rest ->
       split_schema_multi acc (a :: current) rest
   in
@@ -901,7 +903,7 @@ let generate_stmt_with_dynamic_multi style index stmt dynamic_infos =
     | `Direct | `Single -> "", "", sprintf "(fun row -> %s)" callback_body
   in
   
-  output "%sT.%s db __sqlgg_sql set_params %s%s" bind_start func full_callback bind_end;
+  output "%sT.%s db (%s) set_params %s%s" bind_start func sql_expr full_callback bind_end;
   if style = `Fold then output "(fun () -> IO.return !r_acc)";
   if style = `List then output "(fun () -> IO.return (List.rev !r_acc))";
   dec_indent ();
@@ -1084,11 +1086,11 @@ let get_all_dynamic_select_infos index stmt =
   let query_name = Gen.choose_name stmt.Gen.props stmt.Gen.kind index in
   let ds_from_vars = stmt.Gen.vars |> List.filter_map (function Sql.DynamicSelect (param_id, ctors) -> Some (param_id, ctors) | _ -> None) in
   let ds_from_schema = stmt.Gen.schema |> List.filter_map (function Syntax.Dynamic (param_id, fields) -> Some (param_id, fields) | _ -> None) in
-  List.map2 (fun (param_id, ctors) (_, schema_fields) ->
-    let param_name = match param_id.Sql.label with Some s -> s | None -> "x" in
+  List.mapi (fun i ((param_id, ctors), (_, schema_fields)) ->
+    let param_name = Gen.make_param_name i param_id in
     let module_name = sprintf "%s_%s" (String.capitalize_ascii query_name) param_name in
-    { di_module_name = module_name; di_param_name = param_name; di_ctors = ctors; di_schema_fields = schema_fields }
-  ) ds_from_vars ds_from_schema
+    { di_param_id = param_id; di_module_name = module_name; di_param_name = param_name; di_ctors = ctors; di_schema_fields = schema_fields }
+  ) (List.combine ds_from_vars ds_from_schema)
 
 (* Generate DynamicSelect GADT modules for all stmts that need them *)
 let generate_dynamic_select_modules stmts =
@@ -1160,7 +1162,7 @@ let generate_stmt_wrapper style index stmt =
   let dynamic_infos = get_all_dynamic_select_infos index stmt in
   match dynamic_infos with
   | [] -> generate_stmt style index stmt
-  | _ -> generate_stmt_with_dynamic_multi style index stmt dynamic_infos
+  | _ -> generate_stmt_with_dynamic style index stmt dynamic_infos
 
 let generate ~gen_io name stmts =
 (*

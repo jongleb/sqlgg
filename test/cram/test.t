@@ -3599,8 +3599,7 @@ Test DynamicSelect with dynamic_select flag:
         T.set_param_Int p t;
         T.finish_params p
       in
-      let __sqlgg_sql = ("SELECT id, balance, ") ^ (x |> to_a_field_list_x |> List.map (fun (Select_ids2_x.Any_field f) -> field_to_column_x f) |> String.concat ", ") ^ (" FROM accounts WHERE id > ?") in
-      T.select db __sqlgg_sql set_params (fun row -> let (__sqlgg_r_x, __sqlgg_idx_after_x) = read_x x row 2 in callback ~id:(T.get_column_Int row 0) ~balance:(T.get_column_Decimal_nullable row 1) ~x:__sqlgg_r_x)
+      T.select db (("SELECT id, balance, ") ^ (x |> to_a_field_list_x |> List.map (fun (Select_ids2_x.Any_field f) -> field_to_column_x f) |> String.concat ", ") ^ (" FROM accounts WHERE id > ?")) set_params (fun row -> let (__sqlgg_r_x, __sqlgg_idx_after_x) = read_x x row 2 in callback ~id:(T.get_column_Int row 0) ~balance:(T.get_column_Decimal_nullable row 1) ~x:__sqlgg_r_x)
   
     module Fold = struct
       let select_ids2 db ~x ~t callback acc =
@@ -3647,9 +3646,8 @@ Test DynamicSelect with dynamic_select flag:
           T.set_param_Int p t;
           T.finish_params p
         in
-        let __sqlgg_sql = ("SELECT id, balance, ") ^ (x |> to_a_field_list_x |> List.map (fun (Select_ids2_x.Any_field f) -> field_to_column_x f) |> String.concat ", ") ^ (" FROM accounts WHERE id > ?") in
         let r_acc = ref acc in
-        IO.(>>=) (T.select db __sqlgg_sql set_params (fun row -> r_acc := (let (__sqlgg_r_x, __sqlgg_idx_after_x) = read_x x row 2 in callback ~id:(T.get_column_Int row 0) ~balance:(T.get_column_Decimal_nullable row 1) ~x:__sqlgg_r_x !r_acc)))
+        IO.(>>=) (T.select db (("SELECT id, balance, ") ^ (x |> to_a_field_list_x |> List.map (fun (Select_ids2_x.Any_field f) -> field_to_column_x f) |> String.concat ", ") ^ (" FROM accounts WHERE id > ?")) set_params (fun row -> r_acc := (let (__sqlgg_r_x, __sqlgg_idx_after_x) = read_x x row 2 in callback ~id:(T.get_column_Int row 0) ~balance:(T.get_column_Decimal_nullable row 1) ~x:__sqlgg_r_x !r_acc)))
         (fun () -> IO.return !r_acc)
   
     end (* module Fold *)
@@ -3699,9 +3697,8 @@ Test DynamicSelect with dynamic_select flag:
           T.set_param_Int p t;
           T.finish_params p
         in
-        let __sqlgg_sql = ("SELECT id, balance, ") ^ (x |> to_a_field_list_x |> List.map (fun (Select_ids2_x.Any_field f) -> field_to_column_x f) |> String.concat ", ") ^ (" FROM accounts WHERE id > ?") in
         let r_acc = ref [] in
-        IO.(>>=) (T.select db __sqlgg_sql set_params (fun row -> r_acc := (let (__sqlgg_r_x, __sqlgg_idx_after_x) = read_x x row 2 in callback ~id:(T.get_column_Int row 0) ~balance:(T.get_column_Decimal_nullable row 1) ~x:__sqlgg_r_x) :: !r_acc))
+        IO.(>>=) (T.select db (("SELECT id, balance, ") ^ (x |> to_a_field_list_x |> List.map (fun (Select_ids2_x.Any_field f) -> field_to_column_x f) |> String.concat ", ") ^ (" FROM accounts WHERE id > ?")) set_params (fun row -> r_acc := (let (__sqlgg_r_x, __sqlgg_idx_after_x) = read_x x row 2 in callback ~id:(T.get_column_Int row 0) ~balance:(T.get_column_Decimal_nullable row 1) ~x:__sqlgg_r_x) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
   
     end (* module List *)
