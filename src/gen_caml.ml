@@ -301,9 +301,6 @@ let schema_to_attrs schema =
     | Syntax.Dynamic _ -> None
   ) schema
 
-let has_dynamic_column schema =
-  List.exists (function Syntax.Dynamic _ -> true | Syntax.Attr _ -> false) schema
-
 let output_schema_binder_labeled _ schema =
   let attrs = schema_to_attrs schema in
   let name = "invoke_callback" in
@@ -344,13 +341,6 @@ let is_callback stmt =
   | [],_ -> false
   | _, Stmt.Select (`Zero_one | `One) -> false
   | _ -> true
-
-let list_separate f l =
-  let a = ref [] in
-  let b = ref [] in
-  List.iter (fun x -> match f x with `Left x -> tuck a x | `Right x -> tuck b x) l;
-  List.rev !a, List.rev !b
-
 
 let make_variant_name i name ~is_poly =
   let prefix = if is_poly then "`" else "" in 
