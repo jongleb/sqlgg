@@ -132,9 +132,6 @@ let get_enum_name ctors = ctors |> enum_get_hash |> Hashtbl.find enums_hash_tbl 
 let field_name_of_param_id (p : Sql.param_id) =
   match p.label with Some s -> String.capitalize_ascii s | None -> "Field"
 
-let param_name_of_param_id (p : Sql.param_id) =
-  match p.label with Some s -> String.lowercase_ascii s | None -> "v"
-
 let has_params args = match args with Some (_ :: _) -> true | _ -> false
 
 (* Generate pattern for match case on ctor *)
@@ -150,18 +147,6 @@ type dynamic_info = {
   di_ctors: Sql.ctor list;
   di_schema_fields: (Sql.param_id * Sql.attr) list;
 }
-
-let extract_all_dynamic_selects_from_vars vars =
-  List.filter_map (function
-    | Sql.DynamicSelect (param_id, ctors) -> Some (param_id, ctors)
-    | _ -> None
-  ) vars
-
-let extract_all_dynamic_from_schema schema =
-  List.filter_map (function
-    | Syntax.Dynamic (param_id, fields) -> Some (param_id, fields)
-    | Syntax.Attr _ -> None
-  ) schema
 
 module L = struct
   open Type
@@ -234,73 +219,6 @@ module T = Translate(L)
 
 (* open L *)
 open T
-
-(* Generate the GADT module for DynamicSelect *)
-let generate_dynamic_select_module module_name ctors schema_fields =
-  (* Extract field info from ctors and schema - param_types is list of param types (empty for Verbatim or no params) *)
-  let fields = List.map2 (fun ctor (_field_param_id, attr) ->
-    match ctor with
-    | Sql.Simple (ctor_param_id, args) ->
-      let param_types = Option.default [] args |> List.filter_map (function Sql.Single (p, _) -> Some p.typ | _ -> None) in
-      (field_name_of_param_id ctor_param_id, param_name_of_param_id ctor_param_id, param_types, attr.Sql.domain)
-    | Sql.Verbatim (name, _) ->
-      (String.capitalize_ascii name, String.lowercase_ascii name, [], attr.Sql.domain)
-  ) ctors schema_fields in
-  
-  output "module %s = struct" module_name;
-  inc_indent ();
-  
-  (* Generate field GADT *)
-  output "type _ field =";
-  inc_indent ();
-  List.iter (fun (field_name, _param_name, param_types, result_type) ->
-    let result_type_str = L.as_lang_type result_type in
-    let is_nullable = result_type.Sql.Type.nullability = Sql.Type.Nullable in
-    let result_full = if is_nullable then sprintf "T.Types.%s.t option" result_type_str else sprintf "T.Types.%s.t" result_type_str in
-    match param_types with
-    | [] ->
-      output "| %s : %s field" field_name result_full
-    | [t] ->
-      output "| %s : T.Types.%s.t -> %s field" field_name (L.as_lang_type t) result_full
-    | types ->
-      let tuple = types |> List.map (fun t -> sprintf "T.Types.%s.t" (L.as_lang_type t)) |> String.concat " * " in
-      output "| %s : (%s) -> %s field" field_name tuple result_full
-  ) fields;
-  dec_indent ();
-  empty_line ();
-  
-  (* Generate a_field existential *)
-  output "type a_field = Any_field : 'a field -> a_field";
-  empty_line ();
-  
-  (* Generate t GADT *)
-  output "type _ t =";
-  inc_indent ();
-  output "| V : 'a field -> 'a t";
-  output "| Return : 'a -> 'a t";
-  output "| Map : 'a t * ('a -> 'b) -> 'b t";
-  output "| Both : 'a t * 'b t -> ('a * 'b) t";
-  dec_indent ();
-  empty_line ();
-  
-  (* Generate smart constructors *)
-  List.iter (fun (field_name, param_name, param_types, _result_type) ->
-    match param_types with
-    | [] -> output "let %s = V %s" (String.lowercase_ascii field_name) field_name
-    | _ -> output "let %s %s = V (%s %s)" (String.lowercase_ascii field_name) param_name field_name param_name
-  ) fields;
-  empty_line ();
-  
-  (* Generate combinators *)
-  output "let return x = Return x";
-  output "let map f t = Map (t, f)";
-  output "let both a b = Both (a, b)";
-  output "let (let+) t f = Map (t, f)";
-  output "let (and+) a b = Both (a, b)";
-  
-  dec_indent ();
-  output "end";
-  empty_line ()
 
 let schema_to_attrs schema =
   List.filter_map (function
@@ -1164,19 +1082,76 @@ let generate_enum_modules stmts =
 (* Extract all DynamicSelect infos from stmt *)
 let get_all_dynamic_select_infos index stmt =
   let query_name = Gen.choose_name stmt.Gen.props stmt.Gen.kind index in
-  let ds_from_vars = extract_all_dynamic_selects_from_vars stmt.Gen.vars in
-  let ds_from_schema = extract_all_dynamic_from_schema stmt.Gen.schema in
+  let ds_from_vars = stmt.Gen.vars |> List.filter_map (function Sql.DynamicSelect (param_id, ctors) -> Some (param_id, ctors) | _ -> None) in
+  let ds_from_schema = stmt.Gen.schema |> List.filter_map (function Syntax.Dynamic (param_id, fields) -> Some (param_id, fields) | _ -> None) in
   List.map2 (fun (param_id, ctors) (_, schema_fields) ->
     let param_name = match param_id.Sql.label with Some s -> s | None -> "x" in
     let module_name = sprintf "%s_%s" (String.capitalize_ascii query_name) param_name in
     { di_module_name = module_name; di_param_name = param_name; di_ctors = ctors; di_schema_fields = schema_fields }
   ) ds_from_vars ds_from_schema
 
-(* Generate DynamicSelect modules for all stmts that need them *)
+(* Generate DynamicSelect GADT modules for all stmts that need them *)
 let generate_dynamic_select_modules stmts =
   List.iteri (fun index stmt ->
     get_all_dynamic_select_infos index stmt |> List.iter (fun di ->
-      generate_dynamic_select_module di.di_module_name di.di_ctors di.di_schema_fields
+      let module_name = di.di_module_name in
+      let fields = List.map2 (fun ctor (_field_param_id, attr) ->
+        match ctor with
+        | Sql.Simple (ctor_param_id, args) ->
+          let param_types = Option.default [] args |> List.filter_map (function Sql.Single (p, _) -> Some p.typ | _ -> None) in
+          let param_name = match ctor_param_id.Sql.label with Some s -> String.lowercase_ascii s | None -> "v" in
+          (field_name_of_param_id ctor_param_id, param_name, param_types, attr.Sql.domain)
+        | Sql.Verbatim (name, _) ->
+          (String.capitalize_ascii name, String.lowercase_ascii name, [], attr.Sql.domain)
+      ) di.di_ctors di.di_schema_fields in
+      
+      output "module %s = struct" module_name;
+      inc_indent ();
+      
+      output "type _ field =";
+      inc_indent ();
+      List.iter (fun (field_name, _param_name, param_types, result_type) ->
+        let result_type_str = L.as_lang_type result_type in
+        let is_nullable = result_type.Sql.Type.nullability = Sql.Type.Nullable in
+        let result_full = if is_nullable then sprintf "T.Types.%s.t option" result_type_str else sprintf "T.Types.%s.t" result_type_str in
+        match param_types with
+        | [] -> output "| %s : %s field" field_name result_full
+        | [t] -> output "| %s : T.Types.%s.t -> %s field" field_name (L.as_lang_type t) result_full
+        | types ->
+          let tuple = types |> List.map (fun t -> sprintf "T.Types.%s.t" (L.as_lang_type t)) |> String.concat " * " in
+          output "| %s : (%s) -> %s field" field_name tuple result_full
+      ) fields;
+      dec_indent ();
+      empty_line ();
+      
+      output "type a_field = Any_field : 'a field -> a_field";
+      empty_line ();
+      
+      output "type _ t =";
+      inc_indent ();
+      output "| V : 'a field -> 'a t";
+      output "| Return : 'a -> 'a t";
+      output "| Map : 'a t * ('a -> 'b) -> 'b t";
+      output "| Both : 'a t * 'b t -> ('a * 'b) t";
+      dec_indent ();
+      empty_line ();
+      
+      List.iter (fun (field_name, param_name, param_types, _result_type) ->
+        match param_types with
+        | [] -> output "let %s = V %s" (String.lowercase_ascii field_name) field_name
+        | _ -> output "let %s %s = V (%s %s)" (String.lowercase_ascii field_name) param_name field_name param_name
+      ) fields;
+      empty_line ();
+      
+      output "let return x = Return x";
+      output "let map f t = Map (t, f)";
+      output "let both a b = Both (a, b)";
+      output "let (let+) t f = Map (t, f)";
+      output "let (and+) a b = Both (a, b)";
+      
+      dec_indent ();
+      output "end";
+      empty_line ()
     )
   ) stmts
 
