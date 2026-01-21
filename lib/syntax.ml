@@ -64,13 +64,6 @@ and res_fun = { kind: func ; parameters: res_expr list; is_over_clause: bool; } 
 and res_in_tuple_list = 
   ResTyped of (Type.t * Meta.t) list | Res of (res_expr * Meta.t) list [@@deriving show] 
 
-type res_dynamic_choices = (param_id * res_expr) list [@@deriving show] 
-
-type typed_resolved_expr = 
-  | ResExprTyped of res_expr
-  | ResDynamicSelectTyped of param_id * res_dynamic_choices
-  [@@deriving show]
-
 type 'a schema_column =
   | Attr of 'a
   | Dynamic of param_id * (param_id * 'a) list
@@ -733,24 +726,14 @@ and assign_types env expr =
   typeof expr
 
 and resolve_types env expr =
-  let res = expr |> resolve_columns env in
-  try
-    match res with
-    | ResChoices (p, choices) when not env.is_subquery && !Config.dynamic_select -> 
-      let typed_choices, errors = choices |> List.map (fun (p, e) -> 
-        match e with
-        | Some e -> let typed, err = assign_types env e in (p, typed), err
-        | None -> failwith "All branches of DynamicSelect must have expressions"
-      ) |> List.split in
-      ResDynamicSelectTyped (p, typed_choices), errors
-    | res -> let e, err = assign_types env res in ResExprTyped e, [err]
-  with
-    exn ->
-      if !Config.debug then begin
-        eprintfn "resolve_types failed with %s at:" (Printexc.to_string exn);
-        eprintfn "%s" (show_res_expr res)
-      end;
-      raise exn
+  let res = resolve_columns env expr in
+  try assign_types env res
+  with exn ->
+    if !Config.debug then begin
+      eprintfn "resolve_types failed with %s at:" (Printexc.to_string exn);
+      eprintfn "%s" (show_res_expr res)
+    end;
+    raise exn
 
 and infer_schema ~not_null_keys env columns =
 (*   let all = tables |> List.map snd |> List.flatten in *)
@@ -793,33 +776,28 @@ and infer_schema ~not_null_keys env columns =
           let col = refine_column col in
           let col = Option.map_default (fun n -> {col with attr = { col.attr with name = n }}) col name in
           Attr col
+        | Choices (p, choices) when not env.is_subquery && !Config.dynamic_select ->
+          let dynamic = choices |> List.filter_map (fun (choice_p, e_opt) -> 
+            Option.map (fun choice_e ->
+              let _, t = resolve_types env choice_e in
+              let col = {
+                Schema.Source.Attr.attr = unnamed_attribute ~meta:(propagate_meta ~env choice_e) (get_or_failwith t);
+                sources = []
+              } in 
+              let col = refine_column col in
+              choice_p, Option.map_default (fun n -> {col with attr = { col.attr with name = n }}) col name
+            ) e_opt
+          ) in 
+          Dynamic (p, dynamic)
         | e ->
-          let resolved = resolve_types env e in
-          match resolved with
-          | ResExprTyped _, t ->
-            let col = {
-              Schema.Source.Attr.attr = unnamed_attribute ~meta:(propagate_meta ~env e) (get_or_failwith (List.hd t));
-              sources = []
-            } in 
-            let col = refine_column col in
-            let col = Option.map_default (fun n -> {col with attr = { col.attr with name = n }}) col name in
-            Attr col
-          | ResDynamicSelectTyped (p, _), errs -> 
-            match e with
-            | Choices (_, choices) ->
-              let dynamic = List.map2 (fun (p, e_opt) t -> 
-                match e_opt with
-                | Some e -> 
-                  let col = {
-                    Schema.Source.Attr.attr = unnamed_attribute ~meta:(propagate_meta ~env e) (get_or_failwith t);
-                    sources = []
-                  } in 
-                  let col = refine_column col in
-                  p, Option.map_default (fun n -> {col with attr = { col.attr with name = n }}) col name
-                | None -> failwith "All branches of DynamicSelect must have expressions"
-              ) choices errs in 
-              Dynamic (p, dynamic)
-            | _ -> fail "DynamicSelect can only be created from Choices expression"
+          let _, t = resolve_types env e in
+          let col = {
+            Schema.Source.Attr.attr = unnamed_attribute ~meta:(propagate_meta ~env e) (get_or_failwith t);
+            sources = []
+          } in
+          let col = refine_column col in
+          let col = Option.map_default (fun n -> {col with attr = { col.attr with name = n }}) col name in
+          Attr col
       in
       (* Refine before applying alias, so we check against original column name *)
       [ col ]
@@ -837,7 +815,12 @@ let _ =
 and get_params_of_columns env =
   let get = function
   | All | AllOf _ -> []
-  | Expr (e,_) -> get_params env e
+  | Expr (Choices (p, choices), _) when not env.is_subquery && !Config.dynamic_select ->
+    (* For DynamicSelect, get params from each branch separately *)
+    [DynamicSelect (p, List.map (fun (n, e) -> 
+      Simple (n, Option.map (fun e -> e |> resolve_types env |> fst |> get_params_of_res_expr env) e)
+    ) choices)]
+  | Expr (e, _) -> get_params env e
   in
   flat_map get
 
@@ -868,34 +851,29 @@ and params_of_assigns env ss =
   get_params_l env exprs
 
 and get_params_of_res_expr env e =
-  let rec loop_res_expr_typed env e = 
-    let rec loop acc e =
-      match e with
-      | ResSelect (_, p) -> (List.rev p) @ acc
-      | ResCase { case; branches; else_ } ->
-        let acc = match case with Some e -> loop acc e | None -> acc in
-        let acc = List.fold_left (fun acc { when_; then_ } -> loop (loop acc when_) then_) acc branches in
-        Option.map_default (loop acc) acc else_
-      | ResParam (p, m) -> Single (p, m) ::acc
-      | ResOptionActions{ choice_id; res_choice; pos; kind} -> 
-        OptionActionChoice (choice_id, loop_res_expr_typed env res_choice, pos, kind) :: acc
-      | ResInTupleList { param_id; res_in_tuple_list = ResTyped types; kind; pos } -> TupleList (param_id, Where_in (types, kind, pos)) :: acc
-      | ResInparam (p, m) -> SingleIn (p, m)::acc
-      | ResFun { parameters; kind; _ } -> 
-        let p1 = match kind with
-        | Agg (With_order { order; _ }) -> List.rev @@ params_of_order order [] env
-        | _ -> [] in
-        p1 @ List.fold_left loop acc parameters
-      | ResInTupleList _
-      | ResValue _ -> acc
-      | ResInChoice (param, kind, e) -> ChoiceIn { param; kind; vars = loop_res_expr_typed env e } :: acc
-      | ResChoices (p,l) -> Choice (p, List.map (fun (n,e) -> Simple (n, Option.map (loop_res_expr_typed env) e)) l) :: acc
-    in
-    loop [] e |> List.rev
+  let rec loop acc e =
+    match e with
+    | ResSelect (_, p) -> (List.rev p) @ acc
+    | ResCase { case; branches; else_ } ->
+      let acc = match case with Some e -> loop acc e | None -> acc in
+      let acc = List.fold_left (fun acc { when_; then_ } -> loop (loop acc when_) then_) acc branches in
+      Option.map_default (loop acc) acc else_
+    | ResParam (p, m) -> Single (p, m) ::acc
+    | ResOptionActions{ choice_id; res_choice; pos; kind} -> 
+      OptionActionChoice (choice_id, loop [] res_choice |> List.rev, pos, kind) :: acc
+    | ResInTupleList { param_id; res_in_tuple_list = ResTyped types; kind; pos } -> TupleList (param_id, Where_in (types, kind, pos)) :: acc
+    | ResInparam (p, m) -> SingleIn (p, m)::acc
+    | ResFun { parameters; kind; _ } -> 
+      let p1 = match kind with
+      | Agg (With_order { order; _ }) -> List.rev @@ params_of_order order [] env
+      | _ -> [] in
+      p1 @ List.fold_left loop acc parameters
+    | ResInTupleList _
+    | ResValue _ -> acc
+    | ResInChoice (param, kind, e) -> ChoiceIn { param; kind; vars = loop [] e |> List.rev } :: acc
+    | ResChoices (p, l) -> Choice (p, List.map (fun (n, e) -> Simple (n, Option.map (fun e -> loop [] e |> List.rev) e)) l) :: acc
   in
-  match e with
-  | ResDynamicSelectTyped (p, l) -> [DynamicSelect (p, List.map (fun (n,e) -> Simple (n, Option.map (loop_res_expr_typed env) (Some e))) l) ]
-  | ResExprTyped e -> loop_res_expr_typed env e
+  loop [] e |> List.rev
 
 and params_of_order order final_schema env =
   List.concat_map
@@ -1453,7 +1431,7 @@ let rec eval (stmt:Sql.stmt) =
         List.map2 (fun e (c, _) -> 
           let (res, t) = resolve_types env e in 
           let params = get_params_of_res_expr env res in
-          c, params, get_or_failwith (List.first t)
+          c, params, get_or_failwith t
         ) resolved l
       ) assigns in
       (*
@@ -1550,7 +1528,7 @@ let rec eval (stmt:Sql.stmt) =
       vars |> List.map (fun (_k,e) ->
         match e with
         | Column _ -> [] (* this is not column but some db-specific identifier *)
-        | _ -> get_params_of_res_expr empty_env (ResExprTyped (ensure_res_expr e))) |> List.concat
+        | _ -> get_params_of_res_expr empty_env (ensure_res_expr e)) |> List.concat
     in
     begin match stmt with
     | None -> [], p, Other
