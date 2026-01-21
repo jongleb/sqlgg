@@ -117,23 +117,7 @@ let substitute_vars s vars subst_param =
       in
       loop s acc i2 parami tl
     | Choice (name,ctors) :: tl ->
-      let dyn = ctors |> List.map begin function
-        | Sql.Simple (ctor,args) ->
-          let (c1,c2) = ctor.pos in
-          assert ((c2 = 0 && c1 = 1) || c2 > c1);
-          assert (c1 > i);
-          let sql =
-            match args with
-            | None -> [Static ""]
-            | Some l ->
-              let (acc,last) = loop s [] c1 0 l in
-              List.rev (Static (String.slice ~first:last ~last:c2 s) :: acc)
-          in
-          { ctor; sql; args; is_poly=true }
-        | Verbatim (n,v) ->
-          { ctor = { label = Some n; pos = (0,0) }; args=Some []; sql=[Static v]; is_poly=true }
-        end
-      in
+      let dyn = process_ctors ~is_poly:true s i ctors in
       let (i1,i2) = name.pos in
       assert (i2 > i1);
       assert (i1 > i);
@@ -189,28 +173,29 @@ let substitute_vars s vars subst_param =
         let processed_shared = [Static "("] @ raw_processed @ [Static ")"] in
         loop s (List.rev processed_shared @ Static (String.slice ~first:i ~last:i1 s) :: acc) i2 parami tl
     | DynamicSelect (name,ctors) :: tl ->
-      let dyn = ctors |> List.map begin function
-        | Sql.Simple (ctor,args) ->
-          let (c1,c2) = ctor.pos in
-          assert ((c2 = 0 && c1 = 1) || c2 > c1);
-          assert (c1 > i);
-          let sql =
-            match args with
-            | None -> [Static ""]
-            | Some l ->
-              let (acc,last) = loop s [] c1 0 l in
-              List.rev (Static (String.slice ~first:last ~last:c2 s) :: acc)
-          in
-          { ctor; sql; args; is_poly=false }
-        | Verbatim (n,v) ->
-          { ctor = { label = Some n; pos = (0,0) }; args=Some []; sql=[Static v]; is_poly=false }
-        end
-      in
+      let dyn = process_ctors ~is_poly:false s i ctors in
       let (i1,i2) = name.pos in
       assert (i2 > i1);
       assert (i1 > i);
       let acc = Dynamic (name, dyn) :: Static (String.slice ~first:i ~last:i1 s) :: acc in
       loop s acc i2 parami tl
+  and process_ctors ~is_poly s i ctors =
+    ctors |> List.map begin function
+      | Sql.Simple (ctor, args) ->
+        let (c1, c2) = ctor.pos in
+        assert ((c2 = 0 && c1 = 1) || c2 > c1);
+        assert (c1 > i);
+        let sql =
+          match args with
+          | None -> [Static ""]
+          | Some l ->
+            let (acc, last) = loop s [] c1 0 l in
+            List.rev (Static (String.slice ~first:last ~last:c2 s) :: acc)
+        in
+        { ctor; sql; args; is_poly }
+      | Verbatim (n, v) ->
+        { ctor = { label = Some n; pos = (0,0) }; args = Some []; sql = [Static v]; is_poly }
+    end
   and loop_and_squash sql vars =
     let acc, last = loop sql [] 0 0 vars in
     let acc = List.rev (Static (String.slice ~first:last sql) :: acc) in
