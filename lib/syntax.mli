@@ -8,7 +8,7 @@ end
 
 type 'a schema_column =
   | Attr of 'a
-  | Dynamic : param_id * (param_id * 'a) list -> 'a schema_column
+  | Dynamic of param_id * (param_id * 'a) list
   [@@deriving show]
 
 val parse : string -> string * attr schema_column list * var list * Stmt.kind * Dialect.dialect_support list

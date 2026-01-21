@@ -64,11 +64,6 @@ and res_fun = { kind: func ; parameters: res_expr list; is_over_clause: bool; } 
 and res_in_tuple_list = 
   ResTyped of (Type.t * Meta.t) list | Res of (res_expr * Meta.t) list [@@deriving show] 
 
-type untyped_resolved_expr = 
-  | ResExpr of res_expr
-  | ResDynamicSelect of param_id * res_expr choices
-  [@@deriving show]
-
 type res_dynamic_choices = (param_id * res_expr) list [@@deriving show] 
 
 type typed_resolved_expr = 
@@ -78,7 +73,7 @@ type typed_resolved_expr =
 
 type 'a schema_column =
   | Attr of 'a
-  | Dynamic : param_id * (param_id * 'a) list -> 'a schema_column
+  | Dynamic of param_id * (param_id * 'a) list
   [@@deriving show]
 
 let empty_env = { query_has_grouping = false; 
@@ -105,7 +100,7 @@ let values_or_all table names =
   | Some names -> 
     let req_missing =
       List.filter_map
-        (fun ({ extra; name; _ }: attr) ->
+        (fun { extra; name; _ } ->
           let open Constraints in
           if inter (of_list [Autoincrement; WithDefault; NotNull]) extra = of_list [NotNull]
             && not @@ List.mem name names then Some name
@@ -350,10 +345,10 @@ let rec resolve_columns env expr =
     Tables.print stderr env.tables;
   end;
   let expr = extract_meta_from_col ~env expr in
-  let res_expr = function | ResExpr e -> e | ResDynamicSelect _ as e -> fail "unexpected dynamic select in resolve_columns: %s" (show_untyped_resolved_expr e) in
+  (* each : expr -> res_expr — always returns res_expr, Choices always becomes ResChoices *)
   let rec each e =
     match e with
-    | Value x -> ResExpr (ResValue x)
+    | Value x -> ResValue x
     | Column col ->
       let attr = (resolve_column ~env col).attr in
       let json_null_kind = Meta.find_opt attr.meta "json_null_kind" in
@@ -397,18 +392,18 @@ let rec resolve_columns env expr =
         | None, _, _ -> 
           attr.domain
       in
-      ResExpr (ResValue domain)
+      ResValue domain
     | OptionActions { choice; pos; kind } ->
       let choice_id = match bool_choice_id choice with
       | Some choice_id -> choice_id
       | None -> 
         fail "BoolChoices expected a parameter, but isn't presented. Use regular Choices for this kind of logic"
       in
-      ResExpr (ResOptionActions { res_choice = choice |> each |> res_expr; choice_id; pos; kind })
-    | Param (x, m) -> ResExpr (ResParam (x, m))
+      ResOptionActions { res_choice = each choice; choice_id; pos; kind }
+    | Param (x, m) -> ResParam (x, m)
     | InTupleList { exprs; param_id; kind; pos } -> 
       let res_exprs = List.map (fun expr ->
-        let res_expr = each expr |> res_expr in
+        let res_expr = each expr in
         match res_expr with 
         | ResCase _
         | ResValue _
@@ -426,21 +421,19 @@ let rec resolve_columns env expr =
         | Column col -> re, (resolve_column ~env col).attr.meta 
         | _ -> re, Meta.empty ()
       ) exprs res_exprs in
-      ResExpr (ResInTupleList {param_id; res_in_tuple_list = Res res_exprs; kind; pos })
-    | Inparam (x, m) -> ResExpr (ResInparam (x, m))
-    | InChoice (n, k, x) -> ResExpr (ResInChoice (n, k, x |> each |> res_expr))
-    | Choices (n,l) -> if not @@ env.is_subquery && !Config.dynamic_select then
-        ResDynamicSelect (n, List.map (fun (n,e) -> n, Option.map (fun x -> x |> each |> res_expr) e) l) 
-      else ResExpr (ResChoices (n, List.map (fun (n,e) -> n, Option.map (fun x -> x |> each |> res_expr) e) l))
+      ResInTupleList {param_id; res_in_tuple_list = Res res_exprs; kind; pos }
+    | Inparam (x, m) -> ResInparam (x, m)
+    | InChoice (n, k, x) -> ResInChoice (n, k, each x)
+    | Choices (n, l) -> ResChoices (n, List.map (fun (n, e) -> n, Option.map each e) l)
     | Fun { kind; parameters; is_over_clause } ->
-      ResExpr (ResFun { kind; parameters = List.map (fun x -> x |> each |> res_expr) parameters; is_over_clause })  
+      ResFun { kind; parameters = List.map each parameters; is_over_clause }
     | Case { case; branches; else_ } ->
-      let case = Option.map (fun x -> x |> each |> res_expr) case in
-      let branches = List.map (fun { Sql.when_; then_ } -> { when_ = when_ |> each |> res_expr; then_ = then_ |> each |> res_expr }) branches in
-      let else_ = Option.map (fun x -> x |> each |> res_expr) else_ in
-      ResExpr (ResCase { case; branches; else_ })
+      let case = Option.map each case in
+      let branches = List.map (fun { Sql.when_; then_ } -> { when_ = each when_; then_ = each then_ }) branches in
+      let else_ = Option.map each else_ in
+      ResCase { case; branches; else_ }
     | Of_values col -> begin match Hashtbl.find_opt env.insert_resolved_types col with
-      | Some t -> ResExpr (ResValue t)
+      | Some t -> ResValue t
       | None -> fail "VALUES(col) as an expression is only acceptable in ON DUPLICATE KEY UPDATE context" 
       end
     (* nested select *)
@@ -483,9 +476,9 @@ let rec resolve_columns env expr =
         | ({ columns = [_]; _ }, _) -> default_null
         | _ -> raise (Schema.Error (schema, "nested sub-select used as an expression returns more than one column"))
         in
-        ResExpr (ResSelect (typ, p))
+        ResSelect (typ, p)
       | s, `AsValue -> raise (Schema.Error (s, "only one column allowed for SELECT operator in this expression"))
-      | _, `Exists -> ResExpr (ResSelect (Type.depends Any, p))
+      | _, `Exists ->         ResSelect (Type.depends Any, p)
   in
   each expr
 
@@ -740,27 +733,22 @@ and assign_types env expr =
   typeof expr
 
 and resolve_types env expr =
-  let expr = expr |> resolve_columns env in
+  let res = expr |> resolve_columns env in
   try
-    match expr with
-    | ResExpr expr -> let e, err = assign_types env expr in ResExprTyped e, [err]
-    | ResDynamicSelect (p, choices) -> 
-      let exprs_res = List.map (fun (p, e) -> p, Option.map (assign_types env) e) choices in
-      let choices = List.map (fun e_opt -> match e_opt with
-        | p, Some (e, _)  -> p, e
-        | _, None -> failwith "All branches of DynamicSelect must have expressions"
-      ) exprs_res 
-      in
-      let errors = List.map (fun (_, e_opt) -> match e_opt with
-        | Some (_, err) -> err
+    match res with
+    | ResChoices (p, choices) when not env.is_subquery && !Config.dynamic_select -> 
+      let typed_choices, errors = choices |> List.map (fun (p, e) -> 
+        match e with
+        | Some e -> let typed, err = assign_types env e in (p, typed), err
         | None -> failwith "All branches of DynamicSelect must have expressions"
-      ) exprs_res in
-      ResDynamicSelectTyped (p, choices), errors
+      ) |> List.split in
+      ResDynamicSelectTyped (p, typed_choices), errors
+    | res -> let e, err = assign_types env res in ResExprTyped e, [err]
   with
     exn ->
       if !Config.debug then begin
         eprintfn "resolve_types failed with %s at:" (Printexc.to_string exn);
-        eprintfn "%s" (show_untyped_resolved_expr expr)
+        eprintfn "%s" (show_res_expr res)
       end;
       raise exn
 
