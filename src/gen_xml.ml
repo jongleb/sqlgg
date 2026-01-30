@@ -8,6 +8,12 @@ open Prelude
 open Stmt
 open Gen
 
+let schema_to_attrs schema =
+  List.filter_map (function
+    | Sql.Attr attr -> Some attr
+    | Dynamic _ -> None
+  ) schema
+
 type xml = | Node of (string * (string * string) list * xml list)
            | Comment of string
 
@@ -58,15 +64,17 @@ let value ?(inparam=false) v =
   Node ("value", attrs, [])
 
 let tuplelist_value_of_param = function
-  | Sql.Single _ | SingleIn _ | Choice _ | ChoiceIn _ | OptionActionChoice _ | SharedVarsGroup _ -> None
-  | TupleList ({ label = None; _ }, _) -> failwith "empty label in tuple subst"
-  | TupleList ({ label = Some name; _ }, kind) ->
+  | Sql.Single _ | SingleIn _ | Choice _ | ChoiceIn _ | OptionActionChoice _ | SharedVarsGroup _ | DynamicSelect _ -> None
+  | TupleList ({ value = None; _ }, _) -> failwith "empty label in tuple subst"
+  | TupleList ({ value = Some name; _ }, kind) ->
     let schema = match kind with 
     | Insertion schema -> schema 
     | ValueRows { types; _ } -> 
       let types = List.map (fun t -> t, Sql.Meta.empty()) types in
       Gen_caml.make_schema_of_tuple_types name types
-    | Where_in (types, _, _) -> Gen_caml.make_schema_of_tuple_types name types
+    | Where_in { value = (types, _); _ } -> 
+      let types = List.map (fun (t, m) -> t, m) types in
+      Gen_caml.make_schema_of_tuple_types name types
     in
     let typ = "list(" ^ String.concat ", " (List.map (fun { Sql.domain; _ } -> Sql.Type.type_name domain) schema) ^ ")" in
     let attrs = ["name", name; "type", typ] in
@@ -103,7 +111,8 @@ let rec params_only l =
       | SingleIn _ -> []
       | SharedVarsGroup (vars, _)
       | ChoiceIn { vars; _ } -> params_only vars
-      | Choice (_,choices) ->
+      | Choice (_,choices)
+      | DynamicSelect (_, choices) ->
         choices
         |> List.map (function Sql.Verbatim _ | Simple (_,None) -> [] | Simple (_name,Some vars) -> params_only vars) (* TODO prefix names *)
         |> List.concat
@@ -118,7 +127,7 @@ let generate_code (x,_) index stmt =
           @ (params_to_values @@ params_only stmt.vars)
           @ (inparams_to_values @@ inparams_only stmt.vars))
   in
-  let output = Node ("out",[],schema_to_values stmt.schema) in
+  let output = Node ("out",[],schema_to_values (schema_to_attrs stmt.schema)) in
   let sql = get_sql_string stmt in
   let attrs =
     match stmt.kind with
