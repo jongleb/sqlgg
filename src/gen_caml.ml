@@ -266,13 +266,17 @@ let should_generate_for_style style stmt =
   | `Single -> (match stmt.kind, stmt.schema with | Stmt.Select (`One | `Zero_one), _ :: _ -> true | _ -> false)
   | `Direct -> true
 
-let gen_func_signature ~single_needs_callback ?(dynamic_infos=[]) style stmt index =
-  let name = choose_name stmt.props stmt.kind index |> String.uncapitalize_ascii in
+let gen_func_signature ~single_needs_callback ?(dynamic_infos=[]) ?func_name ?(inside_dynamic_module=false) style stmt index =
+  let name = match func_name with
+    | Some n -> n
+    | None -> choose_name stmt.props stmt.kind index |> String.uncapitalize_ascii
+  in
   let subst = Props.get_all stmt.props "subst" in
   let dynamic_map = List.map (fun di -> (di.param_name, di.module_name)) dynamic_infos in
   let format_input v =
     match List.assoc_opt v dynamic_map with
-    | Some module_name -> sprintf "~(%s : _ %s.t)" v module_name
+    | Some _ when inside_dynamic_module -> sprintf "(%s : _ t)" v
+    | Some module_name -> sprintf "(%s : _ %s.t)" v module_name
     | None -> sprintf "~%s" v
   in
   let inputs = (subst @ names_of_vars stmt.vars) |> List.map format_input |> inline_values in
@@ -737,9 +741,9 @@ type callback_build_state = {
   idx_expr: string option;
 }
 
-let generate_stmt_with_dynamic style index stmt dynamic_infos =
+let generate_stmt_with_dynamic ?func_name ?(inside_dynamic_module=false) style index stmt dynamic_infos =
   if not (should_generate_for_style style stmt) then () else
-  let _subst = gen_func_signature ~single_needs_callback:(is_callback stmt) ~dynamic_infos style stmt index in
+  let _subst = gen_func_signature ~single_needs_callback:(is_callback stmt) ~dynamic_infos ?func_name ~inside_dynamic_module style stmt index in
   
   let sql_pieces = get_sql stmt in
   
@@ -827,7 +831,7 @@ let generate_stmt_with_dynamic style index stmt dynamic_infos =
       let start = col_idx_at ~base:st.idx_expr ~offset:st.static_idx in
       let binding = sprintf "let (%s, %s) = %s.read row %s in " read_var next_var di.param_name start in
       { bindings = binding :: st.bindings; 
-        reads = format_param di.param_name read_var :: st.reads;
+        reads = read_var :: st.reads;
         static_idx = 0;
         attr_n = st.attr_n + 1; idx_expr = Some next_var }
     in
@@ -1023,7 +1027,9 @@ let get_all_dynamic_select_infos index stmt =
 
 let generate_dynamic_select_modules stmts =
   List.iteri (fun index stmt ->
-    get_all_dynamic_select_infos index stmt |> List.iter (fun di ->
+    let all_dis = get_all_dynamic_select_infos index stmt in
+    let single_di = List.length all_dis = 1 in
+    all_dis |> List.iter (fun di ->
       let module_name = di.module_name in
       let sql_pieces = get_sql stmt in
       
@@ -1128,6 +1134,35 @@ let (and+) a b = apply (map (fun a b -> (a, b)) a) b|}
         output "}";
         dec_indent ()
       ) fields field_sqls;
+
+      if single_di then begin
+        empty_line ();
+        generate_stmt_with_dynamic ~func_name:"select" ~inside_dynamic_module:true `Direct index stmt [di];
+        if should_generate_for_style `Single stmt then begin
+          output "module Single = struct";
+          inc_indent ();
+          generate_stmt_with_dynamic ~func_name:"select" ~inside_dynamic_module:true `Single index stmt [di];
+          dec_indent ();
+          output "end";
+          empty_line ()
+        end;
+        if should_generate_for_style `Fold stmt then begin
+          output "module Fold = struct";
+          inc_indent ();
+          generate_stmt_with_dynamic ~func_name:"select" ~inside_dynamic_module:true `Fold index stmt [di];
+          dec_indent ();
+          output "end (* module Fold *)";
+          empty_line ()
+        end;
+        if should_generate_for_style `List stmt then begin
+          output "module List = struct";
+          inc_indent ();
+          generate_stmt_with_dynamic ~func_name:"select" ~inside_dynamic_module:true `List index stmt [di];
+          dec_indent ();
+          output "end (* module List *)";
+          empty_line ()
+        end
+      end;
       
       dec_indent ();
       output "end";
@@ -1139,6 +1174,7 @@ let generate_stmt_wrapper style index stmt =
   let dynamic_infos = get_all_dynamic_select_infos index stmt in
   match dynamic_infos with
   | [] -> generate_stmt style index stmt
+  | [_] -> ()
   | _ -> generate_stmt_with_dynamic style index stmt dynamic_infos
 
 let generate ~gen_io ~migration_names name stmts =
