@@ -230,51 +230,35 @@ let validate_record_fields rname fields =
 
 let group_attrs_into_records (attrs : Sql.attr list) : grouped_column list =
   let indexed = List.mapi (fun i a -> (i, a)) attrs in
-  let finalize_record rname fields =
+  let parse_record attr =
+    Sql.Meta.find_opt attr.Sql.meta "record" |> Option.map (fun s ->
+      match String.split_on_char '.' s with
+      | [record_name; field_name] -> (record_name, field_name)
+      | _ -> failwith ("invalid record annotation, expected record=name.field: " ^ s))
+  in
+  let finalize rname fields =
     let fields = List.rev fields in
     validate_record_fields rname fields;
     GRecord (rname, fields)
   in
-  let rec loop acc current_record = function
-    | [] ->
-      let acc = match current_record with
-        | Some (rname, fields) -> finalize_record rname fields :: acc
-        | None -> acc
-      in
-      List.rev acc
+  let flush acc = function
+    | None -> acc
+    | Some (rname, fields) -> finalize rname fields :: acc
+  in
+  let rec loop acc current = function
+    | [] -> List.rev (flush acc current)
     | (i, attr) :: rest ->
-      match Sql.Meta.get_record attr.meta with
-      | Some (rname, fname) ->
-        begin match current_record with
-        | Some (cur_rname, fields) when cur_rname = rname ->
-          loop acc (Some (rname, (fname, i, attr) :: fields)) rest
-        | Some (cur_rname, fields) ->
-          loop (finalize_record cur_rname fields :: acc) (Some (rname, [(fname, i, attr)])) rest
-        | None ->
-          loop acc (Some (rname, [(fname, i, attr)])) rest
-        end
-      | None ->
-        let acc = match current_record with
-          | Some (rname, fields) -> finalize_record rname fields :: acc
-          | None -> acc
-        in
-        loop (GSingle (i, attr) :: acc) None rest
+      match parse_record attr, current with
+      | Some (rname, fname), Some (cur_rname, fields) when rname = cur_rname ->
+        loop acc (Some (rname, (fname, i, attr) :: fields)) rest
+      | Some (rname, fname), _ ->
+        loop (flush acc current) (Some (rname, [(fname, i, attr)])) rest
+      | None, _ ->
+        loop (GSingle (i, attr) :: flush acc current) None rest
   in
   loop [] None indexed
 
 let format_labeled_param name value = sprintf "~%s:%s" name value
-
-let ocaml_base_type_of_attr attr =
-  match Sql.Meta.find_opt attr.Sql.meta "module" with
-  | Some m -> sprintf "%s.t" m
-  | None ->
-    match attr.domain with
-    | { t = Union { ctors; _ }; _ } -> sprintf "%s.t" (get_enum_name ctors)
-    | _ -> sprintf "T.Types.%s.t" (L.as_lang_type attr.domain)
-
-let ocaml_type_of_attr attr =
-  let base_type = ocaml_base_type_of_attr attr in
-  if is_attr_nullable attr then sprintf "%s option" base_type else base_type
 
 let record_is_join_nullable canonical_fields current_fields =
   let all_current_nullable = List.for_all (fun (_, _, attr) -> is_attr_nullable attr) current_fields in
@@ -283,7 +267,9 @@ let record_is_join_nullable canonical_fields current_fields =
   ) canonical_fields in
   all_current_nullable && has_non_nullable_in_canonical
 
-let canonical_record_defs : (string * (string * string) list) list ref = ref []
+type record_def = { rname : string; fields : (string * string) list }
+
+let canonical_record_defs : record_def list ref = ref []
 
 let collect_record_types stmts =
   let seen = ref [] in
@@ -293,19 +279,29 @@ let collect_record_types stmts =
     grouped |> List.iter (function
       | GSingle _ -> ()
       | GRecord (rname, fields) ->
-        let base_fields = List.map (fun (fname, _, attr) -> (fname, ocaml_base_type_of_attr attr)) fields in
+        let type_of_attr attr =
+          let base = match Sql.Meta.find_opt attr.Sql.meta "module" with
+            | Some m -> sprintf "%s.t" m
+            | None ->
+              match attr.Sql.domain with
+              | { t = Union { ctors; _ }; _ } -> sprintf "%s.t" (get_enum_name ctors)
+              | _ -> sprintf "T.Types.%s.t" (L.as_lang_type attr.Sql.domain)
+          in
+          base, if is_attr_nullable attr then sprintf "%s option" base else base
+        in
+        let base_fields = List.map (fun (fname, _, attr) -> let (base, _) = type_of_attr attr in (fname, base)) fields in
         match List.assoc_opt rname !seen with
         | None ->
-          let canonical = List.map (fun (fname, _, attr) -> (fname, ocaml_type_of_attr attr)) fields in
+          let canonical = List.map (fun (fname, _, attr) -> let (_, full) = type_of_attr attr in (fname, full)) fields in
           seen := !seen @ [(rname, (canonical, base_fields))]
         | Some (_, existing_base) ->
           if existing_base <> base_fields then
             failwith (sprintf "record '%s' defined with inconsistent fields across queries" rname)
     )
   );
-  let result = List.map (fun (rname, (canonical, _)) -> (rname, canonical)) !seen in
+  let result = List.map (fun (rname, (canonical, _)) -> { rname; fields = canonical }) !seen in
   canonical_record_defs := result;
-  result
+  List.map (fun def -> (def.rname, def.fields)) result
 
 let capitalize_first s =
   if String.length s = 0 then s
@@ -327,9 +323,9 @@ let generate_record_modules stmts =
   end
 
 let restore_canonical_nullability rname fname attr =
-  let canonically_nullable = match List.assoc_opt rname !canonical_record_defs with
-    | Some fields ->
-      (match List.assoc_opt fname fields with
+  let canonically_nullable = match List.find_opt (fun def -> def.rname = rname) !canonical_record_defs with
+    | Some def ->
+      (match List.assoc_opt fname def.fields with
        | Some typ -> ExtString.String.ends_with ~suffix:" option" typ
        | None -> false)
     | None -> false
@@ -337,24 +333,24 @@ let restore_canonical_nullability rname fname attr =
   if canonically_nullable then attr
   else { attr with Sql.domain = Sql.Type.make_strict attr.Sql.domain }
 
-let gen_record_expr rname fields =
+let gen_record_expr ~get_col rname fields =
   let mod_name = capitalize_first rname in
-  let canonical = List.assoc_opt rname !canonical_record_defs in
+  let canonical = List.find_opt (fun def -> def.rname = rname) !canonical_record_defs in
   let is_join_nullable = match canonical with
-    | Some cf -> record_is_join_nullable cf fields
+    | Some def -> record_is_join_nullable def.fields fields
     | None -> false
   in
   if is_join_nullable then begin
-    let witness_idx, witness_attr = match fields with (_, i, a) :: _ -> (i, a) | [] -> assert false in
-    let witness_get = get_column witness_idx witness_attr in
+    let witness_i, witness_attr = match fields with (_, i, a) :: _ -> (i, a) | [] -> assert false in
+    let witness_get = get_col witness_i witness_attr in
     let record_fields = fields |> List.map (fun (fname, i, attr) ->
       let restored_attr = restore_canonical_nullability rname fname attr in
-      sprintf "%s.%s = %s" mod_name fname (get_column i restored_attr)
+      sprintf "%s.%s = %s" mod_name fname (get_col i restored_attr)
     ) |> String.concat "; " in
     sprintf "(match %s with None -> None | Some _ -> Some { %s })" witness_get record_fields
   end else begin
     let record_fields = fields |> List.map (fun (fname, i, attr) ->
-      sprintf "%s.%s = %s" mod_name fname (get_column i attr)
+      sprintf "%s.%s = %s" mod_name fname (get_col i attr)
     ) |> String.concat "; " in
     sprintf "{ %s }" record_fields
   end
@@ -378,7 +374,7 @@ let output_schema_binder_labeled _ schema =
           let value = get_column i attr in
           output "%s" (format_labeled_param arg value)
         | GRecord (rname, fields) ->
-          output "%s" (format_labeled_param arg (gen_record_expr rname fields))
+          output "%s" (format_labeled_param arg (gen_record_expr ~get_col:get_column rname fields))
       ) args grouped));
   output "in";
   name
@@ -391,7 +387,7 @@ let output_select1_cb _ schema =
   indented (fun () ->
     let parts = grouped |> List.map (function
       | GSingle (i, attr) -> get_column i attr
-      | GRecord (rname, fields) -> gen_record_expr rname fields
+      | GRecord (rname, fields) -> gen_record_expr ~get_col:get_column rname fields
     ) in
     indent_endline (String.concat ", " parts));
   output "in";
@@ -982,28 +978,11 @@ let emit_dynamic_select_body ~module_kind ~dynamic_infos stmt =
           let read = if labeled then format_labeled_param (name_of attr st.attr_n) value else value in
           ({ st with reads = read :: st.reads; attr_n = st.attr_n + 1 }, base_i + 1)
         | GRecord (rname, fields) ->
-          let mod_name = capitalize_first rname in
-          let canonical = List.assoc_opt rname !canonical_record_defs in
-          let is_jn = match canonical with Some cf -> record_is_join_nullable cf fields | None -> false in
-          let value =
-            if is_jn then begin
-              let witness_i, witness_attr = match fields with (_, i, a) :: _ -> (i, a) | [] -> assert false in
-              let witness_col_idx = col_idx_at ~base:st.idx_expr ~offset:(st.static_idx + witness_i) in
-              let witness_get = sprintf "(%s)" (format_get_column ~row:"row" ~idx:witness_col_idx witness_attr) in
-              let record_fields = fields |> List.map (fun (fname, i, attr) ->
-                let col_idx = col_idx_at ~base:st.idx_expr ~offset:(st.static_idx + i) in
-                let restored_attr = restore_canonical_nullability rname fname attr in
-                sprintf "%s.%s = (%s)" mod_name fname (format_get_column ~row:"row" ~idx:col_idx restored_attr)
-              ) |> String.concat "; " in
-              sprintf "(match %s with None -> None | Some _ -> Some { %s })" witness_get record_fields
-            end else begin
-              let record_fields = fields |> List.map (fun (fname, i, attr) ->
-                let col_idx = col_idx_at ~base:st.idx_expr ~offset:(st.static_idx + i) in
-                sprintf "%s.%s = (%s)" mod_name fname (format_get_column ~row:"row" ~idx:col_idx attr)
-              ) |> String.concat "; " in
-              sprintf "{ %s }" record_fields
-            end
+          let get_col i attr =
+            let col_idx = col_idx_at ~base:st.idx_expr ~offset:(st.static_idx + i) in
+            sprintf "(%s)" (format_get_column ~row:"row" ~idx:col_idx attr)
           in
+          let value = gen_record_expr ~get_col rname fields in
           let read = if labeled then format_labeled_param rname value else value in
           ({ st with reads = read :: st.reads; attr_n = st.attr_n + 1 }, base_i + List.length fields)
       ) (st, 0) grouped in
