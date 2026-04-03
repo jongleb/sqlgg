@@ -322,7 +322,13 @@ module Meta = struct
       | None, None -> None
     ) t1 t2
 
-  let get_is_non_nullifiable meta = Option.default "false" (find_opt meta "non_nullifiable") = "true" 
+  let get_is_non_nullifiable meta = Option.default "false" (find_opt meta "non_nullifiable") = "true"
+
+  let get_record meta =
+    find_opt meta "record" |> Option.map (fun s ->
+      match String.split_on_char '.' s with
+      | [record_name; field_name] -> (record_name, field_name)
+      | _ -> failwith ("invalid record annotation, expected record=name.field: " ^ s))
 end
 
 type attr = {name : string; domain : Type.t; extra : Constraints.t; meta: Meta.t; }
