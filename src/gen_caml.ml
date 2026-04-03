@@ -217,17 +217,6 @@ type grouped_column =
   | GSingle of int * Sql.attr
   | GRecord of string * (string * int * Sql.attr) list
 
-let validate_record_fields rname fields =
-  let fnames = List.map (fun (fname, _, _) -> fname) fields in
-  let rec check_dups = function
-    | [] -> ()
-    | x :: rest ->
-      if List.mem x rest then
-        failwith (sprintf "duplicate field '%s' in record '%s'" x rname);
-      check_dups rest
-  in
-  check_dups fnames
-
 let group_attrs_into_records (attrs : Sql.attr list) : grouped_column list =
   let indexed = List.mapi (fun i a -> (i, a)) attrs in
   let parse_record attr =
@@ -236,14 +225,20 @@ let group_attrs_into_records (attrs : Sql.attr list) : grouped_column list =
       | [record_name; field_name] -> (record_name, field_name)
       | _ -> failwith ("invalid record annotation, expected record=name.field: " ^ s))
   in
-  let finalize rname fields =
-    let fields = List.rev fields in
-    validate_record_fields rname fields;
-    GRecord (rname, fields)
-  in
   let flush acc = function
     | None -> acc
-    | Some (rname, fields) -> finalize rname fields :: acc
+    | Some (rname, fields) ->
+      let fields = List.rev fields in
+      let fnames = List.map (fun (fname, _, _) -> fname) fields in
+      let rec check_dups = function
+        | [] -> ()
+        | x :: rest ->
+          if List.mem x rest then
+            failwith (sprintf "duplicate field '%s' in record '%s'" x rname);
+          check_dups rest
+      in
+      check_dups fnames;
+      GRecord (rname, fields) :: acc
   in
   let rec loop acc current = function
     | [] -> List.rev (flush acc current)
@@ -271,7 +266,11 @@ type record_def = { rname : string; fields : (string * string) list }
 
 let canonical_record_defs : record_def list ref = ref []
 
-let collect_record_types stmts =
+let capitalize_first s =
+  if String.length s = 0 then s
+  else String.uppercase_ascii (String.sub s 0 1) ^ String.sub s 1 (String.length s - 1)
+
+let generate_record_modules stmts =
   let seen = ref [] in
   stmts |> List.iter (fun stmt ->
     let attrs = schema_to_attrs stmt.Gen.schema in
@@ -299,39 +298,20 @@ let collect_record_types stmts =
             failwith (sprintf "record '%s' defined with inconsistent fields across queries" rname)
     )
   );
-  let result = List.map (fun (rname, (canonical, _)) -> { rname; fields = canonical }) !seen in
-  canonical_record_defs := result;
-  List.map (fun def -> (def.rname, def.fields)) result
-
-let capitalize_first s =
-  if String.length s = 0 then s
-  else String.uppercase_ascii (String.sub s 0 1) ^ String.sub s 1 (String.length s - 1)
-
-let generate_record_modules stmts =
-  let records = collect_record_types stmts in
+  let records = List.map (fun (rname, (canonical, _)) -> { rname; fields = canonical }) !seen in
+  canonical_record_defs := records;
   if records <> [] then begin
     empty_line ();
-    records |> List.iter (fun (rname, fields) ->
-      let fields_str = fields |> List.map (fun (fname, ftype) ->
+    records |> List.iter (fun def ->
+      let fields_str = def.fields |> List.map (fun (fname, ftype) ->
         sprintf "%s : %s" fname ftype
       ) |> String.concat "; " in
-      output "module %s = struct" (capitalize_first rname);
+      output "module %s = struct" (capitalize_first def.rname);
       indented (fun () ->
         output "type t = { %s }" fields_str);
       output "end";
     );
   end
-
-let restore_canonical_nullability rname fname attr =
-  let canonically_nullable = match List.find_opt (fun def -> def.rname = rname) !canonical_record_defs with
-    | Some def ->
-      (match List.assoc_opt fname def.fields with
-       | Some typ -> ExtString.String.ends_with ~suffix:" option" typ
-       | None -> false)
-    | None -> false
-  in
-  if canonically_nullable then attr
-  else { attr with Sql.domain = Sql.Type.make_strict attr.Sql.domain }
 
 let gen_record_expr ~get_col rname fields =
   let mod_name = capitalize_first rname in
@@ -344,7 +324,17 @@ let gen_record_expr ~get_col rname fields =
     let witness_i, witness_attr = match fields with (_, i, a) :: _ -> (i, a) | [] -> assert false in
     let witness_get = get_col witness_i witness_attr in
     let record_fields = fields |> List.map (fun (fname, i, attr) ->
-      let restored_attr = restore_canonical_nullability rname fname attr in
+      let canonically_nullable = match canonical with
+        | Some def ->
+          (match List.assoc_opt fname def.fields with
+           | Some typ -> ExtString.String.ends_with ~suffix:" option" typ
+           | None -> false)
+        | None -> false
+      in
+      let restored_attr =
+        if canonically_nullable then attr
+        else { attr with Sql.domain = Sql.Type.make_strict attr.Sql.domain }
+      in
       sprintf "%s.%s = %s" mod_name fname (get_col i restored_attr)
     ) |> String.concat "; " in
     sprintf "(match %s with None -> None | Some _ -> Some { %s })" witness_get record_fields
