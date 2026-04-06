@@ -1100,6 +1100,18 @@ let generate_dynamic_select_modules stmts =
       output "let map = Dynamic_select.map";
       output "let (let+) = Dynamic_select.(let+)";
       output "let (and+) = Dynamic_select.(and+)";
+      let all_field_names =
+        fields
+        |> List.map (fun (field_name, _param_name, _all_param_names, _simple_params, _args_list, _attr, _ctor) ->
+          let field_name_lower =
+            let name = String.lowercase_ascii field_name in
+            if List.mem name Name.reserved then name ^ "_" else name
+          in
+          field_name_lower)
+        |> List.unique ~cmp:String.equal
+      in
+      output "type 'row all = 'row constraint 'row = < %s; .. >"
+        (all_field_names |> List.mapi (fun i n -> sprintf "%s : 'a%d" n i) |> String.concat "; ");
       empty_line ();
 
       List.iter2 (fun (field_name, _param_name, all_param_names, _simple_params, args_list, attr, ctor) (_, sql) ->
@@ -1107,8 +1119,7 @@ let generate_dynamic_select_modules stmts =
           let name = String.lowercase_ascii field_name in
           if List.mem name Name.reserved then name ^ "_" else name
         in
-        let field_tag = sanitize_to_variant_name field_name in
-        let field_sig = sprintf "([> `%s ], _) t" field_tag in
+        let field_sig = sprintf "(< %s : _; .. >, _) t" field_name_lower in
         let read_body = sprintf "(fun row idx -> (%s, idx + 1))" (format_get_column ~row:"row" ~idx:"idx" attr) in
 
         let column_body = match ctor with 

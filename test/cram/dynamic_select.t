@@ -500,6 +500,7 @@ Test DynamicSelect edge: single column:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; .. >
   
       let id =
         ({
@@ -508,7 +509,7 @@ Test DynamicSelect edge: single column:
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
     end
   
   
@@ -611,6 +612,7 @@ DynamicSelect: SELECT * remains static select:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; .. >
   
       let id =
         ({
@@ -619,7 +621,7 @@ DynamicSelect: SELECT * remains static select:
           column = "t.id";
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let name =
         ({
           set = (fun _p -> ());
@@ -627,7 +629,7 @@ DynamicSelect: SELECT * remains static select:
           column = "t.name";
           count = 0;
           phantom = None;
-        } : ([> `Name ], _) t)
+        } : (< name : _; .. >, _) t)
     end
   
   
@@ -730,6 +732,7 @@ DynamicSelect: SELECT * with expression in same list:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; id_plus : 'a2; .. >
   
       let id =
         ({
@@ -738,7 +741,7 @@ DynamicSelect: SELECT * with expression in same list:
           column = "t.id";
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let name =
         ({
           set = (fun _p -> ());
@@ -746,7 +749,7 @@ DynamicSelect: SELECT * with expression in same list:
           column = "t.name";
           count = 0;
           phantom = None;
-        } : ([> `Name ], _) t)
+        } : (< name : _; .. >, _) t)
       let id_plus =
         ({
           set = (fun _p -> ());
@@ -754,7 +757,7 @@ DynamicSelect: SELECT * with expression in same list:
           column = ("id + 2");
           count = 0;
           phantom = None;
-        } : ([> `Id_plus ], _) t)
+        } : (< id_plus : _; .. >, _) t)
     end
   
   
@@ -857,6 +860,7 @@ DynamicSelect: auto names for expressions without alias:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < col1 : 'a0; col2 : 'a1; name : 'a2; .. >
   
       let col1 =
         ({
@@ -865,7 +869,7 @@ DynamicSelect: auto names for expressions without alias:
           column = ("id + 1");
           count = 0;
           phantom = None;
-        } : ([> `Col1 ], _) t)
+        } : (< col1 : _; .. >, _) t)
       let col2 =
         ({
           set = (fun _p -> ());
@@ -873,7 +877,7 @@ DynamicSelect: auto names for expressions without alias:
           column = ("id * 2");
           count = 0;
           phantom = None;
-        } : ([> `Col2 ], _) t)
+        } : (< col2 : _; .. >, _) t)
       let name =
         ({
           set = (fun _p -> ());
@@ -881,7 +885,7 @@ DynamicSelect: auto names for expressions without alias:
           column = ("name");
           count = 0;
           phantom = None;
-        } : ([> `Name ], _) t)
+        } : (< name : _; .. >, _) t)
     end
   
   
@@ -984,6 +988,7 @@ Test DynamicSelect edge: expression at first position:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id_plus : 'a0; .. >
   
       let id_plus =
         ({
@@ -992,7 +997,7 @@ Test DynamicSelect edge: expression at first position:
           column = ("id + 1");
           count = 0;
           phantom = None;
-        } : ([> `Id_plus ], _) t)
+        } : (< id_plus : _; .. >, _) t)
     end
   
   
@@ -1095,6 +1100,7 @@ Test DynamicSelect edge: literal only:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < greeting : 'a0; answer : 'a1; .. >
   
       let greeting =
         ({
@@ -1103,7 +1109,7 @@ Test DynamicSelect edge: literal only:
           column = ("'hello'");
           count = 0;
           phantom = None;
-        } : ([> `Greeting ], _) t)
+        } : (< greeting : _; .. >, _) t)
       let answer =
         ({
           set = (fun _p -> ());
@@ -1111,7 +1117,7 @@ Test DynamicSelect edge: literal only:
           column = ("42");
           count = 0;
           phantom = None;
-        } : ([> `Answer ], _) t)
+        } : (< answer : _; .. >, _) t)
     end
   
   
@@ -1214,6 +1220,7 @@ Test DynamicSelect edge: many columns:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < a : 'a0; b : 'a1; c : 'a2; d : 'a3; e : 'a4; .. >
   
       let a =
         ({
@@ -1222,7 +1229,7 @@ Test DynamicSelect edge: many columns:
           column = ("a");
           count = 0;
           phantom = None;
-        } : ([> `A ], _) t)
+        } : (< a : _; .. >, _) t)
       let b =
         ({
           set = (fun _p -> ());
@@ -1230,7 +1237,7 @@ Test DynamicSelect edge: many columns:
           column = ("b");
           count = 0;
           phantom = None;
-        } : ([> `B ], _) t)
+        } : (< b : _; .. >, _) t)
       let c =
         ({
           set = (fun _p -> ());
@@ -1238,7 +1245,7 @@ Test DynamicSelect edge: many columns:
           column = ("c");
           count = 0;
           phantom = None;
-        } : ([> `C ], _) t)
+        } : (< c : _; .. >, _) t)
       let d =
         ({
           set = (fun _p -> ());
@@ -1246,7 +1253,7 @@ Test DynamicSelect edge: many columns:
           column = ("d");
           count = 0;
           phantom = None;
-        } : ([> `D ], _) t)
+        } : (< d : _; .. >, _) t)
       let e =
         ({
           set = (fun _p -> ());
@@ -1254,7 +1261,7 @@ Test DynamicSelect edge: many columns:
           column = ("e");
           count = 0;
           phantom = None;
-        } : ([> `E ], _) t)
+        } : (< e : _; .. >, _) t)
     end
   
   
@@ -1357,6 +1364,7 @@ Test DynamicSelect edge: no space after commas:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; price : 'a2; .. >
   
       let id =
         ({
@@ -1365,7 +1373,7 @@ Test DynamicSelect edge: no space after commas:
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let name =
         ({
           set = (fun _p -> ());
@@ -1373,7 +1381,7 @@ Test DynamicSelect edge: no space after commas:
           column = ("name");
           count = 0;
           phantom = None;
-        } : ([> `Name ], _) t)
+        } : (< name : _; .. >, _) t)
       let price =
         ({
           set = (fun _p -> ());
@@ -1381,7 +1389,7 @@ Test DynamicSelect edge: no space after commas:
           column = ("price");
           count = 0;
           phantom = None;
-        } : ([> `Price ], _) t)
+        } : (< price : _; .. >, _) t)
     end
   
   
@@ -1484,6 +1492,7 @@ Test DynamicSelect edge: minimal spacing:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < a : 'a0; b : 'a1; .. >
   
       let a =
         ({
@@ -1492,7 +1501,7 @@ Test DynamicSelect edge: minimal spacing:
           column = ("a");
           count = 0;
           phantom = None;
-        } : ([> `A ], _) t)
+        } : (< a : _; .. >, _) t)
       let b =
         ({
           set = (fun _p -> ());
@@ -1500,7 +1509,7 @@ Test DynamicSelect edge: minimal spacing:
           column = ("b");
           count = 0;
           phantom = None;
-        } : ([> `B ], _) t)
+        } : (< b : _; .. >, _) t)
     end
   
   
@@ -1603,6 +1612,7 @@ Test DynamicSelect edge: column without alias gets auto name:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < col1 : 'a0; .. >
   
       let col1 =
         ({
@@ -1611,7 +1621,7 @@ Test DynamicSelect edge: column without alias gets auto name:
           column = ("id + 1");
           count = 0;
           phantom = None;
-        } : ([> `Col1 ], _) t)
+        } : (< col1 : _; .. >, _) t)
     end
   
   
@@ -1714,6 +1724,7 @@ Test DynamicSelect with dynamic_select flag:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; balance : 'a1; t_plus_one : 'a2; sub_result : 'a3; .. >
   
       let id =
         ({
@@ -1722,7 +1733,7 @@ Test DynamicSelect with dynamic_select flag:
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let balance =
         ({
           set = (fun _p -> ());
@@ -1730,7 +1741,7 @@ Test DynamicSelect with dynamic_select flag:
           column = ("balance");
           count = 0;
           phantom = None;
-        } : ([> `Balance ], _) t)
+        } : (< balance : _; .. >, _) t)
       let t_plus_one t =
         let _set_t_plus_one p =
           T.set_param_Int p t;
@@ -1742,7 +1753,7 @@ Test DynamicSelect with dynamic_select flag:
           column = ("" ^ "?" ^ " + 1");
           count = 1;
           phantom = None;
-        } : ([> `T_plus_one ], _) t)
+        } : (< t_plus_one : _; .. >, _) t)
       let sub_result seven =
         let _set_sub_result p =
           T.set_param_Int p seven;
@@ -1754,7 +1765,7 @@ Test DynamicSelect with dynamic_select flag:
           column = ("(SELECT 6 + " ^ "?" ^ " LIMIT 1)");
           count = 1;
           phantom = None;
-        } : ([> `Sub_result ], _) t)
+        } : (< sub_result : _; .. >, _) t)
     end
   
   
@@ -1860,6 +1871,7 @@ Test DynamicSelect with two dynamic columns:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; price : 'a2; doubled_price : 'a3; .. >
   
       let id =
         ({
@@ -1868,7 +1880,7 @@ Test DynamicSelect with two dynamic columns:
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let name =
         ({
           set = (fun _p -> ());
@@ -1876,7 +1888,7 @@ Test DynamicSelect with two dynamic columns:
           column = ("name");
           count = 0;
           phantom = None;
-        } : ([> `Name ], _) t)
+        } : (< name : _; .. >, _) t)
       let price =
         ({
           set = (fun _p -> ());
@@ -1884,7 +1896,7 @@ Test DynamicSelect with two dynamic columns:
           column = ("price");
           count = 0;
           phantom = None;
-        } : ([> `Price ], _) t)
+        } : (< price : _; .. >, _) t)
       let doubled_price =
         ({
           set = (fun _p -> ());
@@ -1892,7 +1904,7 @@ Test DynamicSelect with two dynamic columns:
           column = ("price * 2");
           count = 0;
           phantom = None;
-        } : ([> `Doubled_price ], _) t)
+        } : (< doubled_price : _; .. >, _) t)
     end
   
   
@@ -1995,6 +2007,7 @@ Test DynamicSelect with Verbatim branches:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; status : 'a1; literal_status : 'a2; .. >
   
       let id =
         ({
@@ -2003,7 +2016,7 @@ Test DynamicSelect with Verbatim branches:
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let status =
         ({
           set = (fun _p -> ());
@@ -2011,7 +2024,7 @@ Test DynamicSelect with Verbatim branches:
           column = ("status");
           count = 0;
           phantom = None;
-        } : ([> `Status ], _) t)
+        } : (< status : _; .. >, _) t)
       let literal_status =
         ({
           set = (fun _p -> ());
@@ -2019,7 +2032,7 @@ Test DynamicSelect with Verbatim branches:
           column = ("'active'");
           count = 0;
           phantom = None;
-        } : ([> `Literal_status ], _) t)
+        } : (< literal_status : _; .. >, _) t)
     end
   
   
@@ -2122,6 +2135,7 @@ Test DynamicSelect at beginning of SELECT:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < a : 'a0; b : 'a1; .. >
   
       let a =
         ({
@@ -2130,7 +2144,7 @@ Test DynamicSelect at beginning of SELECT:
           column = ("a");
           count = 0;
           phantom = None;
-        } : ([> `A ], _) t)
+        } : (< a : _; .. >, _) t)
       let b =
         ({
           set = (fun _p -> ());
@@ -2138,7 +2152,7 @@ Test DynamicSelect at beginning of SELECT:
           column = ("b");
           count = 0;
           phantom = None;
-        } : ([> `B ], _) t)
+        } : (< b : _; .. >, _) t)
     end
   
   
@@ -2241,6 +2255,7 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; sub : 'a1; .. >
   
       let id =
         ({
@@ -2249,7 +2264,7 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let sub x =
         ({
           set = (fun _p -> ());
@@ -2257,7 +2272,7 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
           column = ("(SELECT " ^ (match x with `A -> " 1 " | `B -> " 2 ") ^ " LIMIT 1)");
           count = 0 + (match x with `A -> 0 | `B -> 0);
           phantom = None;
-        } : ([> `Sub ], _) t)
+        } : (< sub : _; .. >, _) t)
     end
   
   
@@ -2365,6 +2380,7 @@ Test DynamicSelect with module annotation:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; price : 'a2; .. >
   
       let id =
         ({
@@ -2373,7 +2389,7 @@ Test DynamicSelect with module annotation:
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let name =
         ({
           set = (fun _p -> ());
@@ -2381,7 +2397,7 @@ Test DynamicSelect with module annotation:
           column = ("name");
           count = 0;
           phantom = None;
-        } : ([> `Name ], _) t)
+        } : (< name : _; .. >, _) t)
       let price =
         ({
           set = (fun _p -> ());
@@ -2389,7 +2405,7 @@ Test DynamicSelect with module annotation:
           column = ("price");
           count = 0;
           phantom = None;
-        } : ([> `Price ], _) t)
+        } : (< price : _; .. >, _) t)
     end
   
   
@@ -2478,6 +2494,7 @@ Test DynamicSelect with LIMIT 1 (select_one):
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < name : 'a0; price : 'a1; .. >
   
       let name =
         ({
@@ -2486,7 +2503,7 @@ Test DynamicSelect with LIMIT 1 (select_one):
           column = ("name");
           count = 0;
           phantom = None;
-        } : ([> `Name ], _) t)
+        } : (< name : _; .. >, _) t)
       let price =
         ({
           set = (fun _p -> ());
@@ -2494,7 +2511,7 @@ Test DynamicSelect with LIMIT 1 (select_one):
           column = ("price");
           count = 0;
           phantom = None;
-        } : ([> `Price ], _) t)
+        } : (< price : _; .. >, _) t)
     end
   
   
@@ -2590,6 +2607,7 @@ Test DynamicSelect comprehensive list:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; category : 'a2; stock : 'a3; price_with_tax : 'a4; .. >
   
       let id =
         ({
@@ -2598,7 +2616,7 @@ Test DynamicSelect comprehensive list:
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let name =
         ({
           set = (fun _p -> ());
@@ -2606,7 +2624,7 @@ Test DynamicSelect comprehensive list:
           column = ("name");
           count = 0;
           phantom = None;
-        } : ([> `Name ], _) t)
+        } : (< name : _; .. >, _) t)
       let category =
         ({
           set = (fun _p -> ());
@@ -2614,7 +2632,7 @@ Test DynamicSelect comprehensive list:
           column = ("category");
           count = 0;
           phantom = None;
-        } : ([> `Category ], _) t)
+        } : (< category : _; .. >, _) t)
       let stock =
         ({
           set = (fun _p -> ());
@@ -2622,7 +2640,7 @@ Test DynamicSelect comprehensive list:
           column = ("stock");
           count = 0;
           phantom = None;
-        } : ([> `Stock ], _) t)
+        } : (< stock : _; .. >, _) t)
       let price_with_tax tax_rate =
         let _set_price_with_tax p =
           T.set_param_Int p tax_rate;
@@ -2634,7 +2652,7 @@ Test DynamicSelect comprehensive list:
           column = ("price * (1 + " ^ "?" ^ ")");
           count = 1;
           phantom = None;
-        } : ([> `Price_with_tax ], _) t)
+        } : (< price_with_tax : _; .. >, _) t)
     end
   
   
@@ -2749,6 +2767,7 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; custom : 'a1; .. >
   
       let id =
         ({
@@ -2757,7 +2776,7 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let custom custom_val =
         let _set_custom p =
           T.set_param_Text p custom_val;
@@ -2769,7 +2788,7 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
           column = ("" ^ "?");
           count = 1;
           phantom = None;
-        } : ([> `Custom ], _) t)
+        } : (< custom : _; .. >, _) t)
     end
   
   
@@ -2875,6 +2894,7 @@ Virtual select: consecutive params as columns:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < col_a : 'a0; col_b : 'a1; .. >
   
       let col_a a =
         let _set_col_a p =
@@ -2887,7 +2907,7 @@ Virtual select: consecutive params as columns:
           column = ("" ^ "?");
           count = 1;
           phantom = None;
-        } : ([> `Col_a ], _) t)
+        } : (< col_a : _; .. >, _) t)
       let col_b b =
         let _set_col_b p =
           T.set_param_Text p b;
@@ -2899,7 +2919,7 @@ Virtual select: consecutive params as columns:
           column = ("" ^ "?");
           count = 1;
           phantom = None;
-        } : ([> `Col_b ], _) t)
+        } : (< col_b : _; .. >, _) t)
     end
   
   
@@ -3002,6 +3022,7 @@ Virtual select: mixed columns and params without spaces after commas:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; price : 'a2; bonus : 'a3; .. >
   
       let id =
         ({
@@ -3010,7 +3031,7 @@ Virtual select: mixed columns and params without spaces after commas:
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let name =
         ({
           set = (fun _p -> ());
@@ -3018,7 +3039,7 @@ Virtual select: mixed columns and params without spaces after commas:
           column = ("name");
           count = 0;
           phantom = None;
-        } : ([> `Name ], _) t)
+        } : (< name : _; .. >, _) t)
       let price =
         ({
           set = (fun _p -> ());
@@ -3026,7 +3047,7 @@ Virtual select: mixed columns and params without spaces after commas:
           column = ("price");
           count = 0;
           phantom = None;
-        } : ([> `Price ], _) t)
+        } : (< price : _; .. >, _) t)
       let bonus extra =
         let _set_bonus p =
           T.set_param_Int p extra;
@@ -3038,7 +3059,7 @@ Virtual select: mixed columns and params without spaces after commas:
           column = ("" ^ "?");
           count = 1;
           phantom = None;
-        } : ([> `Bonus ], _) t)
+        } : (< bonus : _; .. >, _) t)
     end
   
   
@@ -3144,6 +3165,7 @@ Virtual select: subquery expression as dynamic column:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; rank : 'a1; .. >
   
       let id =
         ({
@@ -3152,7 +3174,7 @@ Virtual select: subquery expression as dynamic column:
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let rank =
         ({
           set = (fun _p -> ());
@@ -3160,7 +3182,7 @@ Virtual select: subquery expression as dynamic column:
           column = ("(SELECT COUNT(*) FROM t t2 WHERE t2.id <= t.id)");
           count = 0;
           phantom = None;
-        } : ([> `Rank ], _) t)
+        } : (< rank : _; .. >, _) t)
     end
   
   
@@ -3269,6 +3291,7 @@ Virtual select: CASE WHEN as dynamic column:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; label : 'a1; .. >
   
       let id =
         ({
@@ -3277,7 +3300,7 @@ Virtual select: CASE WHEN as dynamic column:
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let label =
         ({
           set = (fun _p -> ());
@@ -3285,7 +3308,7 @@ Virtual select: CASE WHEN as dynamic column:
           column = ("CASE WHEN status = 1 THEN 'active' ELSE 'inactive' END");
           count = 0;
           phantom = None;
-        } : ([> `Label ], _) t)
+        } : (< label : _; .. >, _) t)
     end
   
   
@@ -3388,6 +3411,7 @@ Virtual select: function call with multiple args as column:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; full_name : 'a1; .. >
   
       let id =
         ({
@@ -3396,7 +3420,7 @@ Virtual select: function call with multiple args as column:
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let full_name =
         ({
           set = (fun _p -> ());
@@ -3404,7 +3428,7 @@ Virtual select: function call with multiple args as column:
           column = ("CONCAT(first_name, ' ', last_name)");
           count = 0;
           phantom = None;
-        } : ([> `Full_name ], _) t)
+        } : (< full_name : _; .. >, _) t)
     end
   
   
@@ -3507,6 +3531,7 @@ Virtual select: arithmetic with param at expression start:
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < id : 'a0; scaled : 'a1; .. >
   
       let id =
         ({
@@ -3515,7 +3540,7 @@ Virtual select: arithmetic with param at expression start:
           column = ("id");
           count = 0;
           phantom = None;
-        } : ([> `Id ], _) t)
+        } : (< id : _; .. >, _) t)
       let scaled multiplier =
         let _set_scaled p =
           begin match multiplier with None -> T.set_param_null p | Some v -> T.set_param_Decimal p v end;
@@ -3527,7 +3552,7 @@ Virtual select: arithmetic with param at expression start:
           column = ("" ^ "?" ^ " * price");
           count = 1;
           phantom = None;
-        } : ([> `Scaled ], _) t)
+        } : (< scaled : _; .. >, _) t)
     end
   
   
@@ -3640,6 +3665,7 @@ Virtual select: tab-separated columns (non-space whitespace):
       let map = Dynamic_select.map
       let (let+) = Dynamic_select.(let+)
       let (and+) = Dynamic_select.(and+)
+      type 'row all = 'row constraint 'row = < a : 'a0; b : 'a1; .. >
   
       let a =
         ({
@@ -3648,7 +3674,7 @@ Virtual select: tab-separated columns (non-space whitespace):
           column = ("a");
           count = 0;
           phantom = None;
-        } : ([> `A ], _) t)
+        } : (< a : _; .. >, _) t)
       let b =
         ({
           set = (fun _p -> ());
@@ -3656,7 +3682,7 @@ Virtual select: tab-separated columns (non-space whitespace):
           column = ("b");
           count = 0;
           phantom = None;
-        } : ([> `B ], _) t)
+        } : (< b : _; .. >, _) t)
     end
   
   
