@@ -830,6 +830,38 @@ module M (T: Sqlgg_traits.M with
     let run connection =
       multiline_select_list connection
   end
+
+  (* === Test 23: Cross-query column reuse === *)
+  module Test23 = struct
+    let reuse_name_column_between_queries connection =
+      printf "[TEST 23.1] Reuse one col across three queries\n";
+      let shared_name_col = Sql.Select_product_col.name in
+
+      Print_ocaml_impl.clear_mock_responses ();
+      Print_ocaml_impl.setup_select_one_response (Some (
+        Print_ocaml_impl.make_mock_row [Print_ocaml_impl.mock_text "Widget-1"]
+      ));
+      let _ = Sql.select_product connection ~col:shared_name_col ~id:1L in
+
+      Print_ocaml_impl.clear_mock_responses ();
+      Print_ocaml_impl.setup_select_response [
+        Print_ocaml_impl.make_mock_row [Print_ocaml_impl.mock_text "Widget-2"];
+      ];
+      Sql.list_products connection ~col:shared_name_col ~min_stock:1L (fun ~col ->
+        ignore col
+      );
+
+      Print_ocaml_impl.clear_mock_responses ();
+      Print_ocaml_impl.setup_select_one_response (Some (
+        Print_ocaml_impl.make_mock_row [Print_ocaml_impl.mock_text "Widget-3"]
+      ));
+      let _ = Sql.first_position connection ~col:shared_name_col ~id:2L in
+
+      printf "[TEST 23.1] Completed\n\n"
+
+    let run connection =
+      reuse_name_column_between_queries connection
+  end
  
 
   let run_all_tests connection =
@@ -901,6 +933,9 @@ module M (T: Sqlgg_traits.M with
 
       printf "--- Test Group 22: multiline select-list ---\n";
       Test22.run connection;
+
+      printf "--- Test Group 23: cross-query column reuse ---\n";
+      Test23.run connection;
       
       printf "=== All Dynamic Select Tests Passed ===\n"
     with

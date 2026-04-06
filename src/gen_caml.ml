@@ -265,11 +265,12 @@ let should_generate_for_style style stmt =
 let gen_func_signature ~single_needs_callback ?(dynamic_infos=[]) style stmt index =
   let name = choose_name stmt.props stmt.kind index |> String.uncapitalize_ascii in
   let subst = Props.get_all stmt.props "subst" in
-  let dynamic_map = List.map (fun di -> (di.param_name, di.module_name)) dynamic_infos in
+  let dynamic_params = List.map (fun di -> di.param_name) dynamic_infos in
   let format_input v =
-    match List.assoc_opt v dynamic_map with
-    | Some module_name -> sprintf "~(%s : _ %s.t)" v module_name
-    | None -> sprintf "~%s" v
+    if List.mem v dynamic_params then
+      sprintf "~(%s : (_, _) Dynamic_select.t)" v
+    else
+      sprintf "~%s" v
   in
   let inputs = (subst @ names_of_vars stmt.vars) |> List.map format_input |> inline_values in
   let needs_callback_param = match style with 
@@ -1008,7 +1009,54 @@ let generate_enum_modules stmts =
     ()
   )
   
-let generate_dynamic_select_preamble _stmts = ()
+let generate_dynamic_select_preamble _stmts =
+  output "module Dynamic_select = struct";
+  inc_indent ();
+  output "type ('row, 'a) t = {";
+  inc_indent ();
+  output "set: T.params -> unit;";
+  output "read: T.row -> int -> 'a * int;";
+  output "column: string;";
+  output "count: int;";
+  output "phantom: 'row option;";
+  dec_indent ();
+  output "}";
+  empty_line ();
+  output "let pure x = {";
+  inc_indent ();
+  output "set = (fun _p -> ());";
+  output "read = (fun _row idx -> (x, idx));";
+  output "column = \"\";";
+  output "count = 0;";
+  output "phantom = None;";
+  dec_indent ();
+  output "}";
+  empty_line ();
+  output "let apply f a = {";
+  inc_indent ();
+  output "set = (fun p -> f.set p; a.set p);";
+  output "read = (fun row idx ->";
+  inc_indent ();
+  output "let (vf, i1) = f.read row idx in";
+  output "let (va, i2) = a.read row i1 in";
+  output "(vf va, i2));";
+  dec_indent ();
+  output "column = (match f.column, a.column with";
+  inc_indent ();
+  output "| \"\", c | c, \"\" -> c";
+  output "| c1, c2 -> c1 ^ \", \" ^ c2);";
+  dec_indent ();
+  output "count = f.count + a.count;";
+  output "phantom = None;";
+  dec_indent ();
+  output "}";
+  empty_line ();
+  output "let map f a = apply (pure f) a";
+  output "let (let+) t f = map f t";
+  output "let (and+) a b = apply (map (fun a b -> (a, b)) a) b";
+  dec_indent ();
+  output "end";
+  empty_line ()
 
 let get_all_dynamic_select_infos index stmt =
   let query_name = Gen.choose_name stmt.Gen.props stmt.Gen.kind index in
@@ -1046,47 +1094,21 @@ let generate_dynamic_select_modules stmts =
       
       output "module %s = struct" module_name;
       inc_indent ();
-
-      let ind = make_indent () in
-      String.split_on_char '\n' {|type 'a t = {
-  set: T.params -> unit;
-  read: T.row -> int -> 'a * int;
-  column: string;
-  count: int;
-}
-
-let pure x = {
-  set = (fun _p -> ());
-  read = (fun _row idx -> (x, idx));
-  column = "";
-  count = 0;
-}
-
-let apply f a = {
-  set = (fun p -> f.set p; a.set p);
-  read = (fun row idx ->
-    let (vf, i1) = f.read row idx in
-    let (va, i2) = a.read row i1 in
-    (vf va, i2));
-  column = (match f.column, a.column with
-    | "", c | c, "" -> c
-    | c1, c2 -> c1 ^ ", " ^ c2);
-  count = f.count + a.count;
-}
-
-let map f a = apply (pure f) a
-
-let (let+) t f = map f t
-let (and+) a b = apply (map (fun a b -> (a, b)) a) b|}
-      |> List.iter (fun line ->
-        if line = "" then print_newline ()
-        else Printf.printf "%s%s\n" ind line);
+      output "type ('row, 'a) t = ('row, 'a) Dynamic_select.t";
+      output "let pure = Dynamic_select.pure";
+      output "let apply = Dynamic_select.apply";
+      output "let map = Dynamic_select.map";
+      output "let (let+) = Dynamic_select.(let+)";
+      output "let (and+) = Dynamic_select.(and+)";
+      empty_line ();
 
       List.iter2 (fun (field_name, _param_name, all_param_names, _simple_params, args_list, attr, ctor) (_, sql) ->
         let field_name_lower = 
           let name = String.lowercase_ascii field_name in
           if List.mem name Name.reserved then name ^ "_" else name
         in
+        let field_tag = sanitize_to_variant_name field_name in
+        let field_sig = sprintf "([> `%s ], _) t" field_tag in
         let read_body = sprintf "(fun row idx -> (%s, idx + 1))" (format_get_column ~row:"row" ~idx:"idx" attr) in
 
         let column_body = match ctor with 
@@ -1117,14 +1139,15 @@ let (and+) a b = apply (map (fun a b -> (a, b)) a) b|}
             "(fun _p -> ())"
         in
         
-        output "{";
+        output "({";
         inc_indent ();
         output "set = %s;" set_ref;
         output "read = %s;" read_body;
         output "column = %s;" column_body;
         output "count = %s;" count_expr;
+        output "phantom = None;";
         dec_indent ();
-        output "}";
+        output "} : %s)" field_sig;
         dec_indent ()
       ) fields field_sqls;
       
@@ -1133,6 +1156,10 @@ let (and+) a b = apply (map (fun a b -> (a, b)) a) b|}
       empty_line ()
     )
   ) stmts
+
+let has_dynamic_select_stmt stmt =
+  List.exists (function Sql.DynamicSelect _ -> true | _ -> false) stmt.Gen.vars
+  || List.exists (function Sql.Dynamic _ -> true | _ -> false) stmt.Gen.schema
 
 let generate_stmt_wrapper style index stmt =
   let dynamic_infos = get_all_dynamic_select_infos index stmt in
@@ -1156,8 +1183,10 @@ let generate ~gen_io ~migration_names name stmts =
   inc_indent ();
   output "module IO = %s" io;
   generate_enum_modules stmts;
-  generate_dynamic_select_preamble stmts;
-  generate_dynamic_select_modules stmts;
+  if List.exists has_dynamic_select_stmt stmts then begin
+    generate_dynamic_select_preamble stmts;
+    generate_dynamic_select_modules stmts;
+  end;
   empty_line ();
   List.iteri (generate_stmt_wrapper `Direct) stmts;
   let has_fold = List.exists is_callback stmts in
