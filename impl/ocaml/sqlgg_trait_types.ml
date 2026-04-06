@@ -12,10 +12,10 @@ type json = [
 type json_path = Sqlgg_json_path.Ast.t
 type one_or_all = [ `One | `All ]
 
-module Dynamic_select = struct
-  type ('params, 'row, 'shape, 'a) t = {
-    set: 'params -> unit;
-    read: 'row -> int -> 'a * int;
+module Make_dynamic_select (X : sig type params type row end) = struct
+  type ('shape, 'a) t = {
+    set: X.params -> unit;
+    read: X.row -> int -> 'a * int;
     column: string;
     count: int;
     phantom: 'shape option;

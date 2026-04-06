@@ -1010,18 +1010,12 @@ let generate_enum_modules stmts =
   )
   
 let generate_dynamic_select_preamble _stmts =
-  output "module Dynamic_select = struct";
+  output "module Dynamic_select = Sqlgg_trait_types.Make_dynamic_select(struct";
   inc_indent ();
-  output "type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t";
-  output "include (Sqlgg_trait_types.Dynamic_select :";
-  inc_indent ();
-  output "module type of Sqlgg_trait_types.Dynamic_select";
-  output "with type ('params, 'row, 'shape, 'a) t :=";
-  output "  (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t";
+  output "type params = T.params";
+  output "type row = T.row";
   dec_indent ();
-  output ")";
-  dec_indent ();
-  output "end";
+  output "end)";
   empty_line ()
 
 let get_all_dynamic_select_infos index stmt =
