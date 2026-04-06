@@ -1012,48 +1012,12 @@ let generate_enum_modules stmts =
 let generate_dynamic_select_preamble _stmts =
   output "module Dynamic_select = struct";
   inc_indent ();
-  output "type ('row, 'a) t = {";
-  inc_indent ();
-  output "set: T.params -> unit;";
-  output "read: T.row -> int -> 'a * int;";
-  output "column: string;";
-  output "count: int;";
-  output "phantom: 'row option;";
-  dec_indent ();
-  output "}";
-  empty_line ();
-  output "let pure x = {";
-  inc_indent ();
-  output "set = (fun _p -> ());";
-  output "read = (fun _row idx -> (x, idx));";
-  output "column = \"\";";
-  output "count = 0;";
-  output "phantom = None;";
-  dec_indent ();
-  output "}";
-  empty_line ();
-  output "let apply f a = {";
-  inc_indent ();
-  output "set = (fun p -> f.set p; a.set p);";
-  output "read = (fun row idx ->";
-  inc_indent ();
-  output "let (vf, i1) = f.read row idx in";
-  output "let (va, i2) = a.read row i1 in";
-  output "(vf va, i2));";
-  dec_indent ();
-  output "column = (match f.column, a.column with";
-  inc_indent ();
-  output "| \"\", c | c, \"\" -> c";
-  output "| c1, c2 -> c1 ^ \", \" ^ c2);";
-  dec_indent ();
-  output "count = f.count + a.count;";
-  output "phantom = None;";
-  dec_indent ();
-  output "}";
-  empty_line ();
-  output "let map f a = apply (pure f) a";
-  output "let (let+) t f = map f t";
-  output "let (and+) a b = apply (map (fun a b -> (a, b)) a) b";
+  output "type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t";
+  output "let pure = Sqlgg_trait_types.Dynamic_select.pure";
+  output "let apply = Sqlgg_trait_types.Dynamic_select.apply";
+  output "let map = Sqlgg_trait_types.Dynamic_select.map";
+  output "let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)";
+  output "let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)";
   dec_indent ();
   output "end";
   empty_line ()
@@ -1094,12 +1058,7 @@ let generate_dynamic_select_modules stmts =
       
       output "module %s = struct" module_name;
       inc_indent ();
-      output "type ('row, 'a) t = ('row, 'a) Dynamic_select.t";
-      output "let pure = Dynamic_select.pure";
-      output "let apply = Dynamic_select.apply";
-      output "let map = Dynamic_select.map";
-      output "let (let+) = Dynamic_select.(let+)";
-      output "let (and+) = Dynamic_select.(and+)";
+      output "include Dynamic_select";
       let all_field_names =
         fields
         |> List.map (fun (field_name, _param_name, _all_param_names, _simple_params, _args_list, _attr, _ctor) ->
