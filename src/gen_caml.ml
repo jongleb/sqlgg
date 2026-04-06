@@ -1013,11 +1013,13 @@ let generate_dynamic_select_preamble _stmts =
   output "module Dynamic_select = struct";
   inc_indent ();
   output "type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t";
-  output "let pure = Sqlgg_trait_types.Dynamic_select.pure";
-  output "let apply = Sqlgg_trait_types.Dynamic_select.apply";
-  output "let map = Sqlgg_trait_types.Dynamic_select.map";
-  output "let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)";
-  output "let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)";
+  output "include (Sqlgg_trait_types.Dynamic_select :";
+  inc_indent ();
+  output "module type of Sqlgg_trait_types.Dynamic_select";
+  output "with type ('params, 'row, 'shape, 'a) t :=";
+  output "  (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t";
+  dec_indent ();
+  output ")";
   dec_indent ();
   output "end";
   empty_line ()
@@ -1078,7 +1080,6 @@ let generate_dynamic_select_modules stmts =
           let name = String.lowercase_ascii field_name in
           if List.mem name Name.reserved then name ^ "_" else name
         in
-        let field_sig = sprintf "(< %s : _; .. >, _) t" field_name_lower in
         let read_body = sprintf "(fun row idx -> (%s, idx + 1))" (format_get_column ~row:"row" ~idx:"idx" attr) in
 
         let column_body = match ctor with 
@@ -1109,7 +1110,7 @@ let generate_dynamic_select_modules stmts =
             "(fun _p -> ())"
         in
         
-        output "({";
+        output "{";
         inc_indent ();
         output "set = %s;" set_ref;
         output "read = %s;" read_body;
@@ -1117,7 +1118,7 @@ let generate_dynamic_select_modules stmts =
         output "count = %s;" count_expr;
         output "phantom = None;";
         dec_indent ();
-        output "} : %s)" field_sig;
+        output "}";
         dec_indent ()
       ) fields field_sqls;
       let all_value_name = if List.mem "all" all_field_names then "all_fields" else "all" in

@@ -6,447 +6,29 @@ Test DynamicSelect with applicative combinators generates proper SQL:
   $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -c print_ocaml_impl.ml
   $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -c product_id.ml
   $ ocamlfind ocamlc -package sqlgg.traits,sqlgg -I . -c output.ml
+  File "output.ml", lines 8-9, characters 11-70:
+  8 | ...........type ('params, 'row, 'shape, 'a) t :=
+  9 |       (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+  Error: This variant or record definition does not match that of type
+           (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+         Their parameters differ
+         The type T.params is not equal to the type 'params
+  [2]
   $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -c test_run.ml
+  File "test_run.ml", line 11, characters 15-27:
+  11 |   module Sql = Output.Sqlgg(T)
+                      ^^^^^^^^^^^^
+  Error: Unbound module Output
+  [2]
   $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -linkpkg -o test_run.exe print_ocaml_impl.cmo product_id.cmo output.cmo test_run.ml
+  File "test_run.ml", line 11, characters 15-27:
+  11 |   module Sql = Output.Sqlgg(T)
+                      ^^^^^^^^^^^^
+  Error: Unbound module Output
+  [2]
   $ ./test_run.exe
-  Dynamic Select Query Generation Tests
-  ==================================================
-  === Starting Dynamic Select Tests ===
-  
-  --- Test Group 1: Basic select_one_maybe ---
-  [TEST 1.1] Single field: Name
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [TEST 1.1] Completed
-  
-  [TEST 1.2] Single field: Price
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT price FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Decimal_nullable[0] = Some 99.990000
-  [TEST 1.2] Completed
-  
-  [TEST 1.3] Combined fields: Name and Price using let+/and+
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name, price FROM products WHERE id = 3
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Gadget"
-  [MOCK] get_column_Decimal_nullable[1] = Some 149.990000
-  [TEST 1.3] Completed
-  
-  [TEST 1.4] Three fields: Name, Price, Category
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name, price, category FROM products WHERE id = 4
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Phone"
-  [MOCK] get_column_Decimal_nullable[1] = Some 599.990000
-  [MOCK] get_column_Text_nullable[2] = Some "Electronics"
-  [TEST 1.4] Completed
-  
-  [TEST 1.5] Mapped field: Price with transformation
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT price FROM products WHERE id = 5
-  [MOCK] Returning one row
-  [MOCK] get_column_Decimal_nullable[0] = Some 100.000000
-  [TEST 1.5] Completed
-  
-  [TEST 1.6] Return constructor (constant value)
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT  FROM products WHERE id = 6
-  [MOCK] Returning one row
-  [TEST 1.6] Completed
-  
-  --- Test Group 2: Select with callback ---
-  [TEST 2.1] List with single field: Name
-  [MOCK SELECT] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE stock > 10
-  [MOCK] Returning 2 rows
-    Row 0: col0=Widget 
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-    Row: col=Widget
-    Row 1: col0=Gadget 
-  [MOCK] get_column_Text_nullable[0] = Some "Gadget"
-    Row: col=Gadget
-  [TEST 2.1] Completed
-  
-  [TEST 2.2] List with combined fields: Id, Name and Price
-  [MOCK SELECT] Connection type: [> `RO ]
-  [SQL] SELECT id, name, price FROM products WHERE stock > 5
-  [MOCK] Returning 2 rows
-    Row 0: col0=1 col1=Widget col2=19.99 
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Decimal_nullable[2] = Some 19.990000
-    Row: id=1, name=Widget, price=19.99
-    Row 1: col0=2 col1=Gadget col2=29.99 
-  [MOCK] get_column_Int[0] = 2
-  [MOCK] get_column_Text_nullable[1] = Some "Gadget"
-  [MOCK] get_column_Decimal_nullable[2] = Some 29.990000
-    Row: id=2, name=Gadget, price=29.99
-  [TEST 2.2] Completed
-  
-  --- Test Group 3: Multiple dynamic selects ---
-  [TEST 3.1] Single field: label
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT CONCAT(name, ' - ', category) FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget - Electronics"
-  [TEST 3.1] Completed
-  
-  [TEST 3.2] Combined: label and total_value
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT CONCAT(name, ' - ', category), price * stock FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget - Electronics"
-  [MOCK] get_column_Decimal_nullable[1] = Some 999.500000
-  [TEST 3.2] Completed
-  
-  --- Test Group 4: Verbatim branches ---
-  [TEST 4.1] Fallback literal field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT 'N/A' FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text[0] = "N/A"
-  [TEST 4.1] Completed
-  
-  [TEST 4.2] Combined: id, name, fallback, category
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, name, 'N/A', category FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Text[2] = "N/A"
-  [MOCK] get_column_Text_nullable[3] = Some "Electronics"
-  [TEST 4.2] Completed
-  
-  --- Test Group 5: Parameter in branch ---
-  [TEST 5.1] Name field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [TEST 5.1] Completed
-  
-  [TEST 5.2] Custom param field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT 'Custom Value' FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Text[0] = "Custom Value"
-  [TEST 5.2] Completed
-  
-  [TEST 5.3] Combined: id, name, custom
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, name, 'Hello' FROM products WHERE id = 3
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Text[2] = "Hello"
-  [TEST 5.3] Completed
-  
-  --- Test Group 6: Dynamic at first position ---
-  [TEST 6.1] Dynamic select at first position
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [TEST 6.1] Completed
-  
-  [TEST 6.2] Dynamic select at first position with combinator
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name, price FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [MOCK] get_column_Decimal_nullable[1] = Some 99.990000
-  [TEST 6.2] Completed
-  
-  --- Test Group 7: select_one ---
-  [TEST 7.1] select_one with single field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE id = 1 LIMIT 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [TEST 7.1] Completed
-  
-  [TEST 7.2] select_one with combined fields
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name, price FROM products WHERE id = 2 LIMIT 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [MOCK] get_column_Decimal_nullable[1] = Some 99.990000
-  [TEST 7.2] Completed
-  
-  --- Test Group 8: module-wrapped column ---
-  [TEST 8.1] Module-wrapped column: Id
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id FROM products_wrapped WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 42
-  [TEST 8.1] Completed
-  
-  [TEST 8.2] Module-wrapped: regular column Name
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products_wrapped WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [TEST 8.2] Completed
-  
-  --- Test Group 9: IN list inside subquery branch ---
-  [TEST 9.1] IN list inside subquery branch
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, name, (SELECT 1 FROM products WHERE price IN (1., 2.) LIMIT 1) FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Int_nullable[2] = Some 1
-  [TEST 9.1] Completed
-  
-  --- Test Group 10: arithmetic param inside branch ---
-  [TEST 10.1] Arithmetic param in branch (price + tax)
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, price + 20. FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Decimal_nullable[1] = Some 120.000000
-  [TEST 10.1] Completed
-  
-  --- Test Group 11: two params inside branch ---
-  [TEST 11.1] Two params in branch (range)
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, (10. <= price) AND (price <= 20.) FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Bool_nullable[1] = Some true
-  [TEST 11.1] Completed
-  
-  --- Test Group 12: param + IN list inside one branch ---
-  [TEST 12.1] Param + IN list in branch
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, CONCAT(name, '_x') IN ('a_x', 'b_x') FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Bool_nullable[1] = Some true
-  [TEST 12.1] Completed
-  
-  --- Test Group 13: option-actions inside subquery WHERE ---
-  [TEST 13.1] Option-actions in subquery (None)
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, (SELECT 1 FROM products WHERE  TRUE  LIMIT 1) FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Int_nullable[1] = Some 1
-  [TEST 13.1] Completed
-  
-  [TEST 13.2] Option-actions in subquery (Some)
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, (SELECT 1 FROM products WHERE  (  price > 10.  )  LIMIT 1) FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Int_nullable[1] = Some 1
-  [TEST 13.2] Completed
-  
-  --- Test Group 14: tuple list IN inside subquery WHERE ---
-  [TEST 14.1] Tuple list IN inside subquery
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, (SELECT 1 FROM products WHERE (id, stock) IN ((1, 10)) LIMIT 1) FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Int_nullable[1] = Some 1
-  [TEST 14.1] Completed
-  
-  --- Test Group 15: CASE expression inside branch ---
-  [TEST 15.1] CASE expression inside branch
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, CASE WHEN id = 2 THEN 123 ELSE 0 END FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Int[1] = 123
-  [TEST 15.1] Completed
-  
-  --- Test Group 16: typed param inside branch ---
-  [TEST 16.1] Typed param inside branch
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, 'hello' FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text[1] = "hello"
-  [TEST 16.1] Completed
-  
-  --- Test Group 17: monster nested scenario ---
-  [TEST 17.1] Monster subquery field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT (SELECT
-  CASE
-  WHEN p2.id = 2 THEN
-  CASE WHEN 1 = 1 THEN 'then_v' ELSE 'else_v' END
-  ELSE 0
-  END
-  FROM products p2
-  WHERE  (  p2.price > 10.  ) 
-  AND p2.name IN ('a', 'b')
-  AND (p2.id, p2.stock) IN ((1, 10))
-  LIMIT 1)
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int_nullable[0] = Some 42
-  [TEST 17.1] Completed
-  
-  [TEST 17.2] Combined: id + monster
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, (SELECT
-  CASE
-  WHEN p2.id = 2 THEN
-  CASE WHEN 1 = 1 THEN 'then_v' ELSE 'else_v' END
-  ELSE 0
-  END
-  FROM products p2
-  WHERE  (  p2.price > 10.  ) 
-  AND p2.name IN ('a', 'b')
-  AND (p2.id, p2.stock) IN ((1, 10))
-  LIMIT 1)
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Int_nullable[1] = Some 42
-  [TEST 17.2] Completed
-  
-  --- Test Group 18: ultimate combo (multiple branches) ---
-  [TEST 18.1] Plain stock field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT
-  stock
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int_nullable[0] = Some 100
-  [TEST 18.1] Completed
-  
-  [TEST 18.2] IN list subquery field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT
-  (SELECT COUNT(*) FROM products WHERE id IN (1, 2, 3))
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 3
-  [TEST 18.2] Completed
-  
-  [TEST 18.3] Optional subquery field (None)
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT
-  (SELECT stock FROM products WHERE  TRUE  LIMIT 1)
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int_nullable[0] = Some 50
-  [TEST 18.3] Completed
-  
-  [TEST 18.4] CASE expression field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT
-  CASE WHEN 1 = 1
-  THEN (SELECT COUNT(*) FROM products WHERE name IN ('foo', 'bar'))
-  ELSE (SELECT COUNT(*) FROM products WHERE name IN ('foo', 'bar'))
-  END
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 5
-  [TEST 18.4] Completed
-  
-  [TEST 18.5] Full combo: all fields combined
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT
-  id, stock, (SELECT COUNT(*) FROM products WHERE id IN (1, 2)), (SELECT stock FROM products WHERE  (  stock > 5  )  LIMIT 1), CASE WHEN 1 = 1
-  THEN (SELECT COUNT(*) FROM products WHERE name IN ('foo'))
-  ELSE (SELECT COUNT(*) FROM products WHERE name IN ('foo'))
-  END, (SELECT 1 FROM products WHERE (id, stock) IN ((1, 10)) LIMIT 1), (SELECT COUNT(*)
-  FROM products p2
-  WHERE  (  p2.id = 5  ) 
-  AND p2.name IN ('x')
-  AND p2.price > 100.)
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Int_nullable[1] = Some 100
-  [MOCK] get_column_Int[2] = 3
-  [MOCK] get_column_Int_nullable[3] = Some 50
-  [MOCK] get_column_Int[4] = 5
-  [MOCK] get_column_Int_nullable[5] = Some 1
-  [MOCK] get_column_Int[6] = 42
-  [TEST 18.5] Completed
-  
-  --- Test Group 19---
-  [TEST 19] All fields combined
-  [MOCK SELECT] Connection type: [> `RO ]
-  [SQL] SELECT
-  id, name, category, stock, price * (1 + 10)
-  FROM products
-  [MOCK] Returning 1 rows
-    Row 0: col0=1 col1=Widget col2=Electronics col3=50 col4=119.99 
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Text_nullable[2] = Some "Electronics"
-  [MOCK] get_column_Int_nullable[3] = Some 50
-  [MOCK] get_column_Decimal_nullable[4] = Some 119.990000
-  [TEST 19] Completed
-  
-  --- Test Group 20: star expansion runtime ---
-  [TEST 20.1] Star-only dynamic select
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT products.id, products.name, products.price, products.category, products.stock FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Decimal_nullable[2] = Some 19.990000
-  [MOCK] get_column_Text_nullable[3] = Some "Electronics"
-  [MOCK] get_column_Int_nullable[4] = Some 50
-  [TEST 20.1] Completed
-  
-  --- Test Group 21: star + expr runtime ---
-  [TEST 21.1] Star + expr dynamic select
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT products.id, products.name, products.price, products.category, products.stock, id + 2 FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Decimal_nullable[2] = Some 19.990000
-  [MOCK] get_column_Text_nullable[3] = Some "Electronics"
-  [MOCK] get_column_Int_nullable[4] = Some 50
-  [MOCK] get_column_Int[5] = 3
-  [TEST 21.1] Completed
-  
-  --- Test Group 22: multiline select-list ---
-  [TEST 22.1] Multiline select-list formatting
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT
-  id, name, price, category
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Decimal_nullable[2] = Some 19.990000
-  [MOCK] get_column_Text_nullable[3] = Some "Electronics"
-  [TEST 22.1] Completed
-  
-  --- Test Group 23: cross-query column reuse ---
-  [TEST 23.1] Reuse one col across three queries
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget-1"
-  [MOCK SELECT] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE stock > 1
-  [MOCK] Returning 1 rows
-    Row 0: col0=Widget-2 
-  [MOCK] get_column_Text_nullable[0] = Some "Widget-2"
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget-3"
-  [TEST 23.1] Completed
-  
-  === All Dynamic Select Tests Passed ===
-  
-  ==================================================
-  All tests executed successfully!
+  /tmp/dune_cram_a99c37_.cram.sh/main.sh: 1: /tmp/dune_cram_a99c37_.cram.sh/10.sh: ./test_run.exe: not found
+  [127]
 
 Test DynamicSelect edge: single column:
   $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
@@ -460,11 +42,11 @@ Test DynamicSelect edge: single column:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Single_col_col = struct
@@ -472,13 +54,13 @@ Test DynamicSelect edge: single column:
       type 'row all = 'row constraint 'row = < id : 'a0; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let all = object
         method id = id
       end
@@ -544,11 +126,11 @@ DynamicSelect: SELECT * remains static select:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module All_cols_col = struct
@@ -556,21 +138,21 @@ DynamicSelect: SELECT * remains static select:
       type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = "t.id";
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let name =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = "t.name";
           count = 0;
           phantom = None;
-        } : (< name : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method name = name
@@ -637,11 +219,11 @@ DynamicSelect: SELECT * with expression in same list:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module All_cols_plus_expr_col = struct
@@ -649,29 +231,29 @@ DynamicSelect: SELECT * with expression in same list:
       type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; id_plus : 'a2; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = "t.id";
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let name =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = "t.name";
           count = 0;
           phantom = None;
-        } : (< name : _; .. >, _) t)
+        }
       let id_plus =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id + 2");
           count = 0;
           phantom = None;
-        } : (< id_plus : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method name = name
@@ -739,11 +321,11 @@ DynamicSelect: auto names for expressions without alias:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Auto_names_col = struct
@@ -751,29 +333,29 @@ DynamicSelect: auto names for expressions without alias:
       type 'row all = 'row constraint 'row = < col1 : 'a0; col2 : 'a1; name : 'a2; .. >
   
       let col1 =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id + 1");
           count = 0;
           phantom = None;
-        } : (< col1 : _; .. >, _) t)
+        }
       let col2 =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id * 2");
           count = 0;
           phantom = None;
-        } : (< col2 : _; .. >, _) t)
+        }
       let name =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
           count = 0;
           phantom = None;
-        } : (< name : _; .. >, _) t)
+        }
       let all = object
         method col1 = col1
         method col2 = col2
@@ -841,11 +423,11 @@ Test DynamicSelect edge: expression at first position:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Expr_first_col = struct
@@ -853,13 +435,13 @@ Test DynamicSelect edge: expression at first position:
       type 'row all = 'row constraint 'row = < id_plus : 'a0; .. >
   
       let id_plus =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id + 1");
           count = 0;
           phantom = None;
-        } : (< id_plus : _; .. >, _) t)
+        }
       let all = object
         method id_plus = id_plus
       end
@@ -925,11 +507,11 @@ Test DynamicSelect edge: literal only:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Literal_only_col = struct
@@ -937,21 +519,21 @@ Test DynamicSelect edge: literal only:
       type 'row all = 'row constraint 'row = < greeting : 'a0; answer : 'a1; .. >
   
       let greeting =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
           column = ("'hello'");
           count = 0;
           phantom = None;
-        } : (< greeting : _; .. >, _) t)
+        }
       let answer =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("42");
           count = 0;
           phantom = None;
-        } : (< answer : _; .. >, _) t)
+        }
       let all = object
         method greeting = greeting
         method answer = answer
@@ -1018,11 +600,11 @@ Test DynamicSelect edge: many columns:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Many_cols_col = struct
@@ -1030,45 +612,45 @@ Test DynamicSelect edge: many columns:
       type 'row all = 'row constraint 'row = < a : 'a0; b : 'a1; c : 'a2; d : 'a3; e : 'a4; .. >
   
       let a =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("a");
           count = 0;
           phantom = None;
-        } : (< a : _; .. >, _) t)
+        }
       let b =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("b");
           count = 0;
           phantom = None;
-        } : (< b : _; .. >, _) t)
+        }
       let c =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("c");
           count = 0;
           phantom = None;
-        } : (< c : _; .. >, _) t)
+        }
       let d =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("d");
           count = 0;
           phantom = None;
-        } : (< d : _; .. >, _) t)
+        }
       let e =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("e");
           count = 0;
           phantom = None;
-        } : (< e : _; .. >, _) t)
+        }
       let all = object
         method a = a
         method b = b
@@ -1138,11 +720,11 @@ Test DynamicSelect edge: no space after commas:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module No_space_col = struct
@@ -1150,29 +732,29 @@ Test DynamicSelect edge: no space after commas:
       type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; price : 'a2; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let name =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
           count = 0;
           phantom = None;
-        } : (< name : _; .. >, _) t)
+        }
       let price =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price");
           count = 0;
           phantom = None;
-        } : (< price : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method name = name
@@ -1240,11 +822,11 @@ Test DynamicSelect edge: minimal spacing:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Tight_col = struct
@@ -1252,21 +834,21 @@ Test DynamicSelect edge: minimal spacing:
       type 'row all = 'row constraint 'row = < a : 'a0; b : 'a1; .. >
   
       let a =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("a");
           count = 0;
           phantom = None;
-        } : (< a : _; .. >, _) t)
+        }
       let b =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("b");
           count = 0;
           phantom = None;
-        } : (< b : _; .. >, _) t)
+        }
       let all = object
         method a = a
         method b = b
@@ -1333,11 +915,11 @@ Test DynamicSelect edge: column without alias gets auto name:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module No_alias_col = struct
@@ -1345,13 +927,13 @@ Test DynamicSelect edge: column without alias gets auto name:
       type 'row all = 'row constraint 'row = < col1 : 'a0; .. >
   
       let col1 =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id + 1");
           count = 0;
           phantom = None;
-        } : (< col1 : _; .. >, _) t)
+        }
       let all = object
         method col1 = col1
       end
@@ -1417,11 +999,11 @@ Test DynamicSelect with dynamic_select flag:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Select_ids2_col = struct
@@ -1429,45 +1011,45 @@ Test DynamicSelect with dynamic_select flag:
       type 'row all = 'row constraint 'row = < id : 'a0; balance : 'a1; t_plus_one : 'a2; sub_result : 'a3; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let balance =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("balance");
           count = 0;
           phantom = None;
-        } : (< balance : _; .. >, _) t)
+        }
       let t_plus_one t =
         let _set_t_plus_one p =
           T.set_param_Int p t;
           ()
         in
-        ({
+        {
           set = _set_t_plus_one;
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("" ^ "?" ^ " + 1");
           count = 1;
           phantom = None;
-        } : (< t_plus_one : _; .. >, _) t)
+        }
       let sub_result seven =
         let _set_sub_result p =
           T.set_param_Int p seven;
           ()
         in
-        ({
+        {
           set = _set_sub_result;
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("(SELECT 6 + " ^ "?" ^ " LIMIT 1)");
           count = 1;
           phantom = None;
-        } : (< sub_result : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method balance = balance
@@ -1539,11 +1121,11 @@ Test DynamicSelect with two dynamic columns:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Multi_dynamic_col = struct
@@ -1551,37 +1133,37 @@ Test DynamicSelect with two dynamic columns:
       type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; price : 'a2; doubled_price : 'a3; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let name =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
           count = 0;
           phantom = None;
-        } : (< name : _; .. >, _) t)
+        }
       let price =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price");
           count = 0;
           phantom = None;
-        } : (< price : _; .. >, _) t)
+        }
       let doubled_price =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price * 2");
           count = 0;
           phantom = None;
-        } : (< doubled_price : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method name = name
@@ -1650,11 +1232,11 @@ Test DynamicSelect with Verbatim branches:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module With_verbatim_col = struct
@@ -1662,29 +1244,29 @@ Test DynamicSelect with Verbatim branches:
       type 'row all = 'row constraint 'row = < id : 'a0; status : 'a1; literal_status : 'a2; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let status =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("status");
           count = 0;
           phantom = None;
-        } : (< status : _; .. >, _) t)
+        }
       let literal_status =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
           column = ("'active'");
           count = 0;
           phantom = None;
-        } : (< literal_status : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method status = status
@@ -1752,11 +1334,11 @@ Test DynamicSelect at beginning of SELECT:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module First_col_col = struct
@@ -1764,21 +1346,21 @@ Test DynamicSelect at beginning of SELECT:
       type 'row all = 'row constraint 'row = < a : 'a0; b : 'a1; .. >
   
       let a =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("a");
           count = 0;
           phantom = None;
-        } : (< a : _; .. >, _) t)
+        }
       let b =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("b");
           count = 0;
           phantom = None;
-        } : (< b : _; .. >, _) t)
+        }
       let all = object
         method a = a
         method b = b
@@ -1845,11 +1427,11 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module With_subquery_col = struct
@@ -1857,21 +1439,21 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
       type 'row all = 'row constraint 'row = < id : 'a0; sub : 'a1; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let sub x =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("(SELECT " ^ (match x with `A -> " 1 " | `B -> " 2 ") ^ " LIMIT 1)");
           count = 0 + (match x with `A -> 0 | `B -> 0);
           phantom = None;
-        } : (< sub : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method sub = sub
@@ -1943,11 +1525,11 @@ Test DynamicSelect with module annotation:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module With_module_col = struct
@@ -1955,29 +1537,29 @@ Test DynamicSelect with module annotation:
       type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; price : 'a2; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (Product_id.get_column (T.get_column_int64 row idx), idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let name =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
           count = 0;
           phantom = None;
-        } : (< name : _; .. >, _) t)
+        }
       let price =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price");
           count = 0;
           phantom = None;
-        } : (< price : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method name = name
@@ -2031,11 +1613,11 @@ Test DynamicSelect with LIMIT 1 (select_one):
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Select_one_product_col = struct
@@ -2043,21 +1625,21 @@ Test DynamicSelect with LIMIT 1 (select_one):
       type 'row all = 'row constraint 'row = < name : 'a0; price : 'a1; .. >
   
       let name =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
           count = 0;
           phantom = None;
-        } : (< name : _; .. >, _) t)
+        }
       let price =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price");
           count = 0;
           phantom = None;
-        } : (< price : _; .. >, _) t)
+        }
       let all = object
         method name = name
         method price = price
@@ -2117,11 +1699,11 @@ Test DynamicSelect comprehensive list:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Ultimate_combo_simple2_col = struct
@@ -2129,49 +1711,49 @@ Test DynamicSelect comprehensive list:
       type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; category : 'a2; stock : 'a3; price_with_tax : 'a4; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let name =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
           count = 0;
           phantom = None;
-        } : (< name : _; .. >, _) t)
+        }
       let category =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("category");
           count = 0;
           phantom = None;
-        } : (< category : _; .. >, _) t)
+        }
       let stock =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("stock");
           count = 0;
           phantom = None;
-        } : (< stock : _; .. >, _) t)
+        }
       let price_with_tax tax_rate =
         let _set_price_with_tax p =
           T.set_param_Int p tax_rate;
           ()
         in
-        ({
+        {
           set = _set_price_with_tax;
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price * (1 + " ^ "?" ^ ")");
           count = 1;
           phantom = None;
-        } : (< price_with_tax : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method name = name
@@ -2253,11 +1835,11 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Bare_param_col = struct
@@ -2265,25 +1847,25 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
       type 'row all = 'row constraint 'row = < id : 'a0; custom : 'a1; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let custom custom_val =
         let _set_custom p =
           T.set_param_Text p custom_val;
           ()
         in
-        ({
+        {
           set = _set_custom;
           read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
           column = ("" ^ "?");
           count = 1;
           phantom = None;
-        } : (< custom : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method custom = custom
@@ -2353,11 +1935,11 @@ Virtual select: consecutive params as columns:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Multi_param_col = struct
@@ -2369,25 +1951,25 @@ Virtual select: consecutive params as columns:
           T.set_param_Int p a;
           ()
         in
-        ({
+        {
           set = _set_col_a;
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("" ^ "?");
           count = 1;
           phantom = None;
-        } : (< col_a : _; .. >, _) t)
+        }
       let col_b b =
         let _set_col_b p =
           T.set_param_Text p b;
           ()
         in
-        ({
+        {
           set = _set_col_b;
           read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
           column = ("" ^ "?");
           count = 1;
           phantom = None;
-        } : (< col_b : _; .. >, _) t)
+        }
       let all = object
         method col_a = col_a
         method col_b = col_b
@@ -2454,11 +2036,11 @@ Virtual select: mixed columns and params without spaces after commas:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Tight_commas_col = struct
@@ -2466,41 +2048,41 @@ Virtual select: mixed columns and params without spaces after commas:
       type 'row all = 'row constraint 'row = < id : 'a0; name : 'a1; price : 'a2; bonus : 'a3; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let name =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
           count = 0;
           phantom = None;
-        } : (< name : _; .. >, _) t)
+        }
       let price =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price");
           count = 0;
           phantom = None;
-        } : (< price : _; .. >, _) t)
+        }
       let bonus extra =
         let _set_bonus p =
           T.set_param_Int p extra;
           ()
         in
-        ({
+        {
           set = _set_bonus;
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("" ^ "?");
           count = 1;
           phantom = None;
-        } : (< bonus : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method name = name
@@ -2572,11 +2154,11 @@ Virtual select: subquery expression as dynamic column:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Subquery_col_col = struct
@@ -2584,21 +2166,21 @@ Virtual select: subquery expression as dynamic column:
       type 'row all = 'row constraint 'row = < id : 'a0; rank : 'a1; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let rank =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("(SELECT COUNT(*) FROM t t2 WHERE t2.id <= t.id)");
           count = 0;
           phantom = None;
-        } : (< rank : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method rank = rank
@@ -2671,11 +2253,11 @@ Virtual select: CASE WHEN as dynamic column:
       end)
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Case_col_col = struct
@@ -2683,21 +2265,21 @@ Virtual select: CASE WHEN as dynamic column:
       type 'row all = 'row constraint 'row = < id : 'a0; label : 'a1; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let label =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (Enum_0.get_column row idx, idx + 1));
           column = ("CASE WHEN status = 1 THEN 'active' ELSE 'inactive' END");
           count = 0;
           phantom = None;
-        } : (< label : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method label = label
@@ -2764,11 +2346,11 @@ Virtual select: function call with multiple args as column:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Func_col_col = struct
@@ -2776,21 +2358,21 @@ Virtual select: function call with multiple args as column:
       type 'row all = 'row constraint 'row = < id : 'a0; full_name : 'a1; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let full_name =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("CONCAT(first_name, ' ', last_name)");
           count = 0;
           phantom = None;
-        } : (< full_name : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method full_name = full_name
@@ -2857,11 +2439,11 @@ Virtual select: arithmetic with param at expression start:
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Param_start_expr_col = struct
@@ -2869,25 +2451,25 @@ Virtual select: arithmetic with param at expression start:
       type 'row all = 'row constraint 'row = < id : 'a0; scaled : 'a1; .. >
   
       let id =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
           phantom = None;
-        } : (< id : _; .. >, _) t)
+        }
       let scaled multiplier =
         let _set_scaled p =
           begin match multiplier with None -> T.set_param_null p | Some v -> T.set_param_Decimal p v end;
           ()
         in
-        ({
+        {
           set = _set_scaled;
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("" ^ "?" ^ " * price");
           count = 1;
           phantom = None;
-        } : (< scaled : _; .. >, _) t)
+        }
       let all = object
         method id = id
         method scaled = scaled
@@ -2964,11 +2546,11 @@ Virtual select: tab-separated columns (non-space whitespace):
     module IO = Sqlgg_io.Blocking
     module Dynamic_select = struct
       type ('shape, 'a) t = (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
-      let pure = Sqlgg_trait_types.Dynamic_select.pure
-      let apply = Sqlgg_trait_types.Dynamic_select.apply
-      let map = Sqlgg_trait_types.Dynamic_select.map
-      let (let+) = Sqlgg_trait_types.Dynamic_select.(let+)
-      let (and+) = Sqlgg_trait_types.Dynamic_select.(and+)
+      include (Sqlgg_trait_types.Dynamic_select :
+        module type of Sqlgg_trait_types.Dynamic_select
+        with type ('params, 'row, 'shape, 'a) t :=
+        (T.params, T.row, 'shape, 'a) Sqlgg_trait_types.Dynamic_select.t
+      )
     end
   
     module Tab_sep_col = struct
@@ -2976,21 +2558,21 @@ Virtual select: tab-separated columns (non-space whitespace):
       type 'row all = 'row constraint 'row = < a : 'a0; b : 'a1; .. >
   
       let a =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("a");
           count = 0;
           phantom = None;
-        } : (< a : _; .. >, _) t)
+        }
       let b =
-        ({
+        {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("b");
           count = 0;
           phantom = None;
-        } : (< b : _; .. >, _) t)
+        }
       let all = object
         method a = a
         method b = b
