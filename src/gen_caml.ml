@@ -268,7 +268,7 @@ let gen_func_signature ~single_needs_callback ?(dynamic_infos=[]) style stmt ind
   let dynamic_params = List.map (fun di -> di.param_name) dynamic_infos in
   let format_input v =
     if List.mem v dynamic_params then
-      sprintf "~(%s : (_, _) Dynamic_select.t)" v
+      sprintf "~%s" v
     else
       sprintf "~%s" v
   in
@@ -742,6 +742,10 @@ let generate_stmt_with_dynamic style index stmt dynamic_infos =
   if not (should_generate_for_style style stmt) then () else
   let _subst = gen_func_signature ~single_needs_callback:(is_callback stmt) ~dynamic_infos style stmt index in
   
+  List.iter (fun di ->
+    output "let %s = %s %s.all in" di.param_name di.param_name di.module_name
+  ) dynamic_infos;
+  
   let sql_pieces = get_sql stmt in
   
   let other_vars = List.filter (function Sql.DynamicSelect _ -> false | _ -> true) stmt.vars in
@@ -1009,7 +1013,8 @@ let generate_enum_modules stmts =
     ()
   )
   
-let generate_dynamic_select_preamble _stmts =
+
+let generate_dynamic_select_preamble () =
   output "module Dynamic_select = Sqlgg_trait_types.Make_dynamic_select(struct";
   inc_indent ();
   output "type params = T.params";
@@ -1155,7 +1160,7 @@ let generate ~gen_io ~migration_names name stmts =
   output "module IO = %s" io;
   generate_enum_modules stmts;
   if List.exists has_dynamic_select_stmt stmts then begin
-    generate_dynamic_select_preamble stmts;
+    generate_dynamic_select_preamble ();
     generate_dynamic_select_modules stmts;
   end;
   empty_line ();

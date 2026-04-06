@@ -6,447 +6,26 @@ Test DynamicSelect with applicative combinators generates proper SQL:
   $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -c print_ocaml_impl.ml
   $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -c product_id.ml
   $ ocamlfind ocamlc -package sqlgg.traits,sqlgg -I . -c output.ml
+  File "output.ml", line 930, characters 43-48:
+  930 |       let p = T.start_params stmt (1 + col.count) in
+                                                   ^^^^^
+  Error: Unbound record field count
+  [2]
   $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -c test_run.ml
+  File "test_run.ml", line 11, characters 15-27:
+  11 |   module Sql = Output.Sqlgg(T)
+                      ^^^^^^^^^^^^
+  Error: Unbound module Output
+  [2]
   $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -linkpkg -o test_run.exe print_ocaml_impl.cmo product_id.cmo output.cmo test_run.ml
+  File "test_run.ml", line 11, characters 15-27:
+  11 |   module Sql = Output.Sqlgg(T)
+                      ^^^^^^^^^^^^
+  Error: Unbound module Output
+  [2]
   $ ./test_run.exe
-  Dynamic Select Query Generation Tests
-  ==================================================
-  === Starting Dynamic Select Tests ===
-  
-  --- Test Group 1: Basic select_one_maybe ---
-  [TEST 1.1] Single field: Name
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [TEST 1.1] Completed
-  
-  [TEST 1.2] Single field: Price
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT price FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Decimal_nullable[0] = Some 99.990000
-  [TEST 1.2] Completed
-  
-  [TEST 1.3] Combined fields: Name and Price using let+/and+
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name, price FROM products WHERE id = 3
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Gadget"
-  [MOCK] get_column_Decimal_nullable[1] = Some 149.990000
-  [TEST 1.3] Completed
-  
-  [TEST 1.4] Three fields: Name, Price, Category
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name, price, category FROM products WHERE id = 4
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Phone"
-  [MOCK] get_column_Decimal_nullable[1] = Some 599.990000
-  [MOCK] get_column_Text_nullable[2] = Some "Electronics"
-  [TEST 1.4] Completed
-  
-  [TEST 1.5] Mapped field: Price with transformation
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT price FROM products WHERE id = 5
-  [MOCK] Returning one row
-  [MOCK] get_column_Decimal_nullable[0] = Some 100.000000
-  [TEST 1.5] Completed
-  
-  [TEST 1.6] Return constructor (constant value)
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT  FROM products WHERE id = 6
-  [MOCK] Returning one row
-  [TEST 1.6] Completed
-  
-  --- Test Group 2: Select with callback ---
-  [TEST 2.1] List with single field: Name
-  [MOCK SELECT] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE stock > 10
-  [MOCK] Returning 2 rows
-    Row 0: col0=Widget 
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-    Row: col=Widget
-    Row 1: col0=Gadget 
-  [MOCK] get_column_Text_nullable[0] = Some "Gadget"
-    Row: col=Gadget
-  [TEST 2.1] Completed
-  
-  [TEST 2.2] List with combined fields: Id, Name and Price
-  [MOCK SELECT] Connection type: [> `RO ]
-  [SQL] SELECT id, name, price FROM products WHERE stock > 5
-  [MOCK] Returning 2 rows
-    Row 0: col0=1 col1=Widget col2=19.99 
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Decimal_nullable[2] = Some 19.990000
-    Row: id=1, name=Widget, price=19.99
-    Row 1: col0=2 col1=Gadget col2=29.99 
-  [MOCK] get_column_Int[0] = 2
-  [MOCK] get_column_Text_nullable[1] = Some "Gadget"
-  [MOCK] get_column_Decimal_nullable[2] = Some 29.990000
-    Row: id=2, name=Gadget, price=29.99
-  [TEST 2.2] Completed
-  
-  --- Test Group 3: Multiple dynamic selects ---
-  [TEST 3.1] Single field: label
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT CONCAT(name, ' - ', category) FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget - Electronics"
-  [TEST 3.1] Completed
-  
-  [TEST 3.2] Combined: label and total_value
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT CONCAT(name, ' - ', category), price * stock FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget - Electronics"
-  [MOCK] get_column_Decimal_nullable[1] = Some 999.500000
-  [TEST 3.2] Completed
-  
-  --- Test Group 4: Verbatim branches ---
-  [TEST 4.1] Fallback literal field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT 'N/A' FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text[0] = "N/A"
-  [TEST 4.1] Completed
-  
-  [TEST 4.2] Combined: id, name, fallback, category
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, name, 'N/A', category FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Text[2] = "N/A"
-  [MOCK] get_column_Text_nullable[3] = Some "Electronics"
-  [TEST 4.2] Completed
-  
-  --- Test Group 5: Parameter in branch ---
-  [TEST 5.1] Name field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [TEST 5.1] Completed
-  
-  [TEST 5.2] Custom param field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT 'Custom Value' FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Text[0] = "Custom Value"
-  [TEST 5.2] Completed
-  
-  [TEST 5.3] Combined: id, name, custom
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, name, 'Hello' FROM products WHERE id = 3
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Text[2] = "Hello"
-  [TEST 5.3] Completed
-  
-  --- Test Group 6: Dynamic at first position ---
-  [TEST 6.1] Dynamic select at first position
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [TEST 6.1] Completed
-  
-  [TEST 6.2] Dynamic select at first position with combinator
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name, price FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [MOCK] get_column_Decimal_nullable[1] = Some 99.990000
-  [TEST 6.2] Completed
-  
-  --- Test Group 7: select_one ---
-  [TEST 7.1] select_one with single field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE id = 1 LIMIT 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [TEST 7.1] Completed
-  
-  [TEST 7.2] select_one with combined fields
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name, price FROM products WHERE id = 2 LIMIT 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [MOCK] get_column_Decimal_nullable[1] = Some 99.990000
-  [TEST 7.2] Completed
-  
-  --- Test Group 8: module-wrapped column ---
-  [TEST 8.1] Module-wrapped column: Id
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id FROM products_wrapped WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 42
-  [TEST 8.1] Completed
-  
-  [TEST 8.2] Module-wrapped: regular column Name
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products_wrapped WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget"
-  [TEST 8.2] Completed
-  
-  --- Test Group 9: IN list inside subquery branch ---
-  [TEST 9.1] IN list inside subquery branch
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, name, (SELECT 1 FROM products WHERE price IN (1., 2.) LIMIT 1) FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Int_nullable[2] = Some 1
-  [TEST 9.1] Completed
-  
-  --- Test Group 10: arithmetic param inside branch ---
-  [TEST 10.1] Arithmetic param in branch (price + tax)
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, price + 20. FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Decimal_nullable[1] = Some 120.000000
-  [TEST 10.1] Completed
-  
-  --- Test Group 11: two params inside branch ---
-  [TEST 11.1] Two params in branch (range)
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, (10. <= price) AND (price <= 20.) FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Bool_nullable[1] = Some true
-  [TEST 11.1] Completed
-  
-  --- Test Group 12: param + IN list inside one branch ---
-  [TEST 12.1] Param + IN list in branch
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, CONCAT(name, '_x') IN ('a_x', 'b_x') FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Bool_nullable[1] = Some true
-  [TEST 12.1] Completed
-  
-  --- Test Group 13: option-actions inside subquery WHERE ---
-  [TEST 13.1] Option-actions in subquery (None)
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, (SELECT 1 FROM products WHERE  TRUE  LIMIT 1) FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Int_nullable[1] = Some 1
-  [TEST 13.1] Completed
-  
-  [TEST 13.2] Option-actions in subquery (Some)
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, (SELECT 1 FROM products WHERE  (  price > 10.  )  LIMIT 1) FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Int_nullable[1] = Some 1
-  [TEST 13.2] Completed
-  
-  --- Test Group 14: tuple list IN inside subquery WHERE ---
-  [TEST 14.1] Tuple list IN inside subquery
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, (SELECT 1 FROM products WHERE (id, stock) IN ((1, 10)) LIMIT 1) FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Int_nullable[1] = Some 1
-  [TEST 14.1] Completed
-  
-  --- Test Group 15: CASE expression inside branch ---
-  [TEST 15.1] CASE expression inside branch
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, CASE WHEN id = 2 THEN 123 ELSE 0 END FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Int[1] = 123
-  [TEST 15.1] Completed
-  
-  --- Test Group 16: typed param inside branch ---
-  [TEST 16.1] Typed param inside branch
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, 'hello' FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text[1] = "hello"
-  [TEST 16.1] Completed
-  
-  --- Test Group 17: monster nested scenario ---
-  [TEST 17.1] Monster subquery field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT (SELECT
-  CASE
-  WHEN p2.id = 2 THEN
-  CASE WHEN 1 = 1 THEN 'then_v' ELSE 'else_v' END
-  ELSE 0
-  END
-  FROM products p2
-  WHERE  (  p2.price > 10.  ) 
-  AND p2.name IN ('a', 'b')
-  AND (p2.id, p2.stock) IN ((1, 10))
-  LIMIT 1)
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int_nullable[0] = Some 42
-  [TEST 17.1] Completed
-  
-  [TEST 17.2] Combined: id + monster
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT id, (SELECT
-  CASE
-  WHEN p2.id = 2 THEN
-  CASE WHEN 1 = 1 THEN 'then_v' ELSE 'else_v' END
-  ELSE 0
-  END
-  FROM products p2
-  WHERE  (  p2.price > 10.  ) 
-  AND p2.name IN ('a', 'b')
-  AND (p2.id, p2.stock) IN ((1, 10))
-  LIMIT 1)
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Int_nullable[1] = Some 42
-  [TEST 17.2] Completed
-  
-  --- Test Group 18: ultimate combo (multiple branches) ---
-  [TEST 18.1] Plain stock field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT
-  stock
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int_nullable[0] = Some 100
-  [TEST 18.1] Completed
-  
-  [TEST 18.2] IN list subquery field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT
-  (SELECT COUNT(*) FROM products WHERE id IN (1, 2, 3))
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 3
-  [TEST 18.2] Completed
-  
-  [TEST 18.3] Optional subquery field (None)
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT
-  (SELECT stock FROM products WHERE  TRUE  LIMIT 1)
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int_nullable[0] = Some 50
-  [TEST 18.3] Completed
-  
-  [TEST 18.4] CASE expression field
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT
-  CASE WHEN 1 = 1
-  THEN (SELECT COUNT(*) FROM products WHERE name IN ('foo', 'bar'))
-  ELSE (SELECT COUNT(*) FROM products WHERE name IN ('foo', 'bar'))
-  END
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 5
-  [TEST 18.4] Completed
-  
-  [TEST 18.5] Full combo: all fields combined
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT
-  id, stock, (SELECT COUNT(*) FROM products WHERE id IN (1, 2)), (SELECT stock FROM products WHERE  (  stock > 5  )  LIMIT 1), CASE WHEN 1 = 1
-  THEN (SELECT COUNT(*) FROM products WHERE name IN ('foo'))
-  ELSE (SELECT COUNT(*) FROM products WHERE name IN ('foo'))
-  END, (SELECT 1 FROM products WHERE (id, stock) IN ((1, 10)) LIMIT 1), (SELECT COUNT(*)
-  FROM products p2
-  WHERE  (  p2.id = 5  ) 
-  AND p2.name IN ('x')
-  AND p2.price > 100.)
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Int_nullable[1] = Some 100
-  [MOCK] get_column_Int[2] = 3
-  [MOCK] get_column_Int_nullable[3] = Some 50
-  [MOCK] get_column_Int[4] = 5
-  [MOCK] get_column_Int_nullable[5] = Some 1
-  [MOCK] get_column_Int[6] = 42
-  [TEST 18.5] Completed
-  
-  --- Test Group 19---
-  [TEST 19] All fields combined
-  [MOCK SELECT] Connection type: [> `RO ]
-  [SQL] SELECT
-  id, name, category, stock, price * (1 + 10)
-  FROM products
-  [MOCK] Returning 1 rows
-    Row 0: col0=1 col1=Widget col2=Electronics col3=50 col4=119.99 
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Text_nullable[2] = Some "Electronics"
-  [MOCK] get_column_Int_nullable[3] = Some 50
-  [MOCK] get_column_Decimal_nullable[4] = Some 119.990000
-  [TEST 19] Completed
-  
-  --- Test Group 20: star expansion runtime ---
-  [TEST 20.1] Star-only dynamic select
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT products.id, products.name, products.price, products.category, products.stock FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Decimal_nullable[2] = Some 19.990000
-  [MOCK] get_column_Text_nullable[3] = Some "Electronics"
-  [MOCK] get_column_Int_nullable[4] = Some 50
-  [TEST 20.1] Completed
-  
-  --- Test Group 21: star + expr runtime ---
-  [TEST 21.1] Star + expr dynamic select
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT products.id, products.name, products.price, products.category, products.stock, id + 2 FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Decimal_nullable[2] = Some 19.990000
-  [MOCK] get_column_Text_nullable[3] = Some "Electronics"
-  [MOCK] get_column_Int_nullable[4] = Some 50
-  [MOCK] get_column_Int[5] = 3
-  [TEST 21.1] Completed
-  
-  --- Test Group 22: multiline select-list ---
-  [TEST 22.1] Multiline select-list formatting
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT
-  id, name, price, category
-  FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Int[0] = 1
-  [MOCK] get_column_Text_nullable[1] = Some "Widget"
-  [MOCK] get_column_Decimal_nullable[2] = Some 19.990000
-  [MOCK] get_column_Text_nullable[3] = Some "Electronics"
-  [TEST 22.1] Completed
-  
-  --- Test Group 23: cross-query column reuse ---
-  [TEST 23.1] Reuse one col across three queries
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE id = 1
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget-1"
-  [MOCK SELECT] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE stock > 1
-  [MOCK] Returning 1 rows
-    Row 0: col0=Widget-2 
-  [MOCK] get_column_Text_nullable[0] = Some "Widget-2"
-  [MOCK SELECT_ONE_MAYBE] Connection type: [> `RO ]
-  [SQL] SELECT name FROM products WHERE id = 2
-  [MOCK] Returning one row
-  [MOCK] get_column_Text_nullable[0] = Some "Widget-3"
-  [TEST 23.1] Completed
-  
-  === All Dynamic Select Tests Passed ===
-  
-  ==================================================
-  All tests executed successfully!
+  /tmp/dune_cram_99ea24_.cram.sh/main.sh: 1: /tmp/dune_cram_99ea24_.cram.sh/10.sh: ./test_run.exe: not found
+  [127]
 
 Test DynamicSelect edge: single column:
   $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
@@ -484,7 +63,8 @@ Test DynamicSelect edge: single column:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT, name TEXT)") T.no_params
   
-    let single_col db ~(col : (_, _) Dynamic_select.t) callback =
+    let single_col db ~col callback =
+      let col = col Single_col_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -496,7 +76,8 @@ Test DynamicSelect edge: single column:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let single_col db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let single_col db ~col callback acc =
+        let col = col Single_col_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -512,7 +93,8 @@ Test DynamicSelect edge: single column:
     end (* module Fold *)
     
     module List = struct
-      let single_col db ~(col : (_, _) Dynamic_select.t) callback =
+      let single_col db ~col callback =
+        let col = col Single_col_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -573,7 +155,8 @@ DynamicSelect: SELECT * remains static select:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT, name TEXT)") T.no_params
   
-    let all_cols db ~(col : (_, _) Dynamic_select.t) callback =
+    let all_cols db ~col callback =
+      let col = col All_cols_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -585,7 +168,8 @@ DynamicSelect: SELECT * remains static select:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let all_cols db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let all_cols db ~col callback acc =
+        let col = col All_cols_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -601,7 +185,8 @@ DynamicSelect: SELECT * remains static select:
     end (* module Fold *)
     
     module List = struct
-      let all_cols db ~(col : (_, _) Dynamic_select.t) callback =
+      let all_cols db ~col callback =
+        let col = col All_cols_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -671,7 +256,8 @@ DynamicSelect: SELECT * with expression in same list:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT, name TEXT)") T.no_params
   
-    let all_cols_plus_expr db ~(col : (_, _) Dynamic_select.t) callback =
+    let all_cols_plus_expr db ~col callback =
+      let col = col All_cols_plus_expr_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -683,7 +269,8 @@ DynamicSelect: SELECT * with expression in same list:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let all_cols_plus_expr db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let all_cols_plus_expr db ~col callback acc =
+        let col = col All_cols_plus_expr_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -699,7 +286,8 @@ DynamicSelect: SELECT * with expression in same list:
     end (* module Fold *)
     
     module List = struct
-      let all_cols_plus_expr db ~(col : (_, _) Dynamic_select.t) callback =
+      let all_cols_plus_expr db ~col callback =
+        let col = col All_cols_plus_expr_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -769,7 +357,8 @@ DynamicSelect: auto names for expressions without alias:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT, name TEXT)") T.no_params
   
-    let auto_names db ~(col : (_, _) Dynamic_select.t) callback =
+    let auto_names db ~col callback =
+      let col = col Auto_names_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -781,7 +370,8 @@ DynamicSelect: auto names for expressions without alias:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let auto_names db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let auto_names db ~col callback acc =
+        let col = col Auto_names_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -797,7 +387,8 @@ DynamicSelect: auto names for expressions without alias:
     end (* module Fold *)
     
     module List = struct
-      let auto_names db ~(col : (_, _) Dynamic_select.t) callback =
+      let auto_names db ~col callback =
+        let col = col Auto_names_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -849,7 +440,8 @@ Test DynamicSelect edge: expression at first position:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT, name TEXT)") T.no_params
   
-    let expr_first db ~(col : (_, _) Dynamic_select.t) callback =
+    let expr_first db ~col callback =
+      let col = col Expr_first_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -861,7 +453,8 @@ Test DynamicSelect edge: expression at first position:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let expr_first db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let expr_first db ~col callback acc =
+        let col = col Expr_first_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -877,7 +470,8 @@ Test DynamicSelect edge: expression at first position:
     end (* module Fold *)
     
     module List = struct
-      let expr_first db ~(col : (_, _) Dynamic_select.t) callback =
+      let expr_first db ~col callback =
+        let col = col Expr_first_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -938,7 +532,8 @@ Test DynamicSelect edge: literal only:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT)") T.no_params
   
-    let literal_only db ~(col : (_, _) Dynamic_select.t) callback =
+    let literal_only db ~col callback =
+      let col = col Literal_only_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -950,7 +545,8 @@ Test DynamicSelect edge: literal only:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let literal_only db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let literal_only db ~col callback acc =
+        let col = col Literal_only_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -966,7 +562,8 @@ Test DynamicSelect edge: literal only:
     end (* module Fold *)
     
     module List = struct
-      let literal_only db ~(col : (_, _) Dynamic_select.t) callback =
+      let literal_only db ~col callback =
+        let col = col Literal_only_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1054,7 +651,8 @@ Test DynamicSelect edge: many columns:
     let create_t db  =
       T.execute db ("CREATE TABLE t (a INT, b TEXT, c DECIMAL(10,2), d INT, e TEXT)") T.no_params
   
-    let many_cols db ~(col : (_, _) Dynamic_select.t) callback =
+    let many_cols db ~col callback =
+      let col = col Many_cols_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -1066,7 +664,8 @@ Test DynamicSelect edge: many columns:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let many_cols db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let many_cols db ~col callback acc =
+        let col = col Many_cols_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1082,7 +681,8 @@ Test DynamicSelect edge: many columns:
     end (* module Fold *)
     
     module List = struct
-      let many_cols db ~(col : (_, _) Dynamic_select.t) callback =
+      let many_cols db ~col callback =
+        let col = col Many_cols_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1152,7 +752,8 @@ Test DynamicSelect edge: no space after commas:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT, name TEXT, price DECIMAL(10,2))") T.no_params
   
-    let no_space db ~(col : (_, _) Dynamic_select.t) callback =
+    let no_space db ~col callback =
+      let col = col No_space_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -1164,7 +765,8 @@ Test DynamicSelect edge: no space after commas:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let no_space db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let no_space db ~col callback acc =
+        let col = col No_space_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1180,7 +782,8 @@ Test DynamicSelect edge: no space after commas:
     end (* module Fold *)
     
     module List = struct
-      let no_space db ~(col : (_, _) Dynamic_select.t) callback =
+      let no_space db ~col callback =
+        let col = col No_space_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1241,7 +844,8 @@ Test DynamicSelect edge: minimal spacing:
     let create_t db  =
       T.execute db ("CREATE TABLE t (a INT, b INT)") T.no_params
   
-    let tight db ~(col : (_, _) Dynamic_select.t) callback =
+    let tight db ~col callback =
+      let col = col Tight_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -1253,7 +857,8 @@ Test DynamicSelect edge: minimal spacing:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let tight db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let tight db ~col callback acc =
+        let col = col Tight_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1269,7 +874,8 @@ Test DynamicSelect edge: minimal spacing:
     end (* module Fold *)
     
     module List = struct
-      let tight db ~(col : (_, _) Dynamic_select.t) callback =
+      let tight db ~col callback =
+        let col = col Tight_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1321,7 +927,8 @@ Test DynamicSelect edge: column without alias gets auto name:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT)") T.no_params
   
-    let no_alias db ~(col : (_, _) Dynamic_select.t) callback =
+    let no_alias db ~col callback =
+      let col = col No_alias_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -1333,7 +940,8 @@ Test DynamicSelect edge: column without alias gets auto name:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let no_alias db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let no_alias db ~col callback acc =
+        let col = col No_alias_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1349,7 +957,8 @@ Test DynamicSelect edge: column without alias gets auto name:
     end (* module Fold *)
     
     module List = struct
-      let no_alias db ~(col : (_, _) Dynamic_select.t) callback =
+      let no_alias db ~col callback =
+        let col = col No_alias_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1436,7 +1045,8 @@ Test DynamicSelect with dynamic_select flag:
     let create_accounts db  =
       T.execute db ("CREATE TABLE accounts (id INT PRIMARY KEY, balance DECIMAL(10,2))") T.no_params
   
-    let select_ids2 db ~(col : (_, _) Dynamic_select.t) ~t callback =
+    let select_ids2 db ~col ~t callback =
+      let col = col Select_ids2_col.all in
       let set_params stmt =
         let p = T.start_params stmt (1 + col.count) in
         col.set p;
@@ -1449,7 +1059,8 @@ Test DynamicSelect with dynamic_select flag:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let select_ids2 db ~(col : (_, _) Dynamic_select.t) ~t callback acc =
+      let select_ids2 db ~col ~t callback acc =
+        let col = col Select_ids2_col.all in
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -1466,7 +1077,8 @@ Test DynamicSelect with dynamic_select flag:
     end (* module Fold *)
     
     module List = struct
-      let select_ids2 db ~(col : (_, _) Dynamic_select.t) ~t callback =
+      let select_ids2 db ~col ~t callback =
+        let col = col Select_ids2_col.all in
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -1546,7 +1158,8 @@ Test DynamicSelect with two dynamic columns:
     let create_items db  =
       T.execute db ("CREATE TABLE items (id INT, name TEXT, price DECIMAL(10,2))") T.no_params
   
-    let multi_dynamic db ~(col : (_, _) Dynamic_select.t) callback =
+    let multi_dynamic db ~col callback =
+      let col = col Multi_dynamic_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -1558,7 +1171,8 @@ Test DynamicSelect with two dynamic columns:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let multi_dynamic db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let multi_dynamic db ~col callback acc =
+        let col = col Multi_dynamic_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1574,7 +1188,8 @@ Test DynamicSelect with two dynamic columns:
     end (* module Fold *)
     
     module List = struct
-      let multi_dynamic db ~(col : (_, _) Dynamic_select.t) callback =
+      let multi_dynamic db ~col callback =
+        let col = col Multi_dynamic_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1644,7 +1259,8 @@ Test DynamicSelect with Verbatim branches:
     let create_users db  =
       T.execute db ("CREATE TABLE users (id INT, status TEXT)") T.no_params
   
-    let with_verbatim db ~(col : (_, _) Dynamic_select.t) callback =
+    let with_verbatim db ~col callback =
+      let col = col With_verbatim_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -1656,7 +1272,8 @@ Test DynamicSelect with Verbatim branches:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let with_verbatim db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let with_verbatim db ~col callback acc =
+        let col = col With_verbatim_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1672,7 +1289,8 @@ Test DynamicSelect with Verbatim branches:
     end (* module Fold *)
     
     module List = struct
-      let with_verbatim db ~(col : (_, _) Dynamic_select.t) callback =
+      let with_verbatim db ~col callback =
+        let col = col With_verbatim_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1733,7 +1351,8 @@ Test DynamicSelect at beginning of SELECT:
     let create_data db  =
       T.execute db ("CREATE TABLE data (a INT, b TEXT)") T.no_params
   
-    let first_col db ~(col : (_, _) Dynamic_select.t) callback =
+    let first_col db ~col callback =
+      let col = col First_col_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -1745,7 +1364,8 @@ Test DynamicSelect at beginning of SELECT:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let first_col db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let first_col db ~col callback acc =
+        let col = col First_col_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1761,7 +1381,8 @@ Test DynamicSelect at beginning of SELECT:
     end (* module Fold *)
     
     module List = struct
-      let first_col db ~(col : (_, _) Dynamic_select.t) callback =
+      let first_col db ~col callback =
+        let col = col First_col_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1822,7 +1443,8 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
     let create_t1 db  =
       T.execute db ("CREATE TABLE t1 (id INT)") T.no_params
   
-    let with_subquery db ~(col : (_, _) Dynamic_select.t) callback =
+    let with_subquery db ~col callback =
+      let col = col With_subquery_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -1834,7 +1456,8 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let with_subquery db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let with_subquery db ~col callback acc =
+        let col = col With_subquery_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1850,7 +1473,8 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
     end (* module Fold *)
     
     module List = struct
-      let with_subquery db ~(col : (_, _) Dynamic_select.t) callback =
+      let with_subquery db ~col callback =
+        let col = col With_subquery_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1929,7 +1553,8 @@ Test DynamicSelect with module annotation:
       price DECIMAL(10,2)\n\
   )") T.no_params
   
-    let with_module db ~(col : (_, _) Dynamic_select.t) ~id =
+    let with_module db ~col ~id =
+      let col = col With_module_col.all in
       let set_params stmt =
         let p = T.start_params stmt (1 + col.count) in
         col.set p;
@@ -1941,7 +1566,8 @@ Test DynamicSelect with module annotation:
       set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in (__sqlgg_r_col))
   
     module Single = struct
-      let with_module db ~(col : (_, _) Dynamic_select.t) ~id =
+      let with_module db ~col ~id =
+        let col = col With_module_col.all in
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -2000,7 +1626,8 @@ Test DynamicSelect with LIMIT 1 (select_one):
     let create_products db  =
       T.execute db ("CREATE TABLE products (id INT PRIMARY KEY, name TEXT, price DECIMAL(10,2))") T.no_params
   
-    let select_one_product db ~(col : (_, _) Dynamic_select.t) ~id =
+    let select_one_product db ~col ~id =
+      let col = col Select_one_product_col.all in
       let set_params stmt =
         let p = T.start_params stmt (1 + col.count) in
         col.set p;
@@ -2012,7 +1639,8 @@ Test DynamicSelect with LIMIT 1 (select_one):
       set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in (__sqlgg_r_col))
   
     module Single = struct
-      let select_one_product db ~(col : (_, _) Dynamic_select.t) ~id =
+      let select_one_product db ~col ~id =
+        let col = col Select_one_product_col.all in
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -2119,7 +1747,8 @@ Test DynamicSelect comprehensive list:
    stock INT\n\
   )") T.no_params
   
-    let ultimate_combo_simple2 db ~(col : (_, _) Dynamic_select.t) callback =
+    let ultimate_combo_simple2 db ~col callback =
+      let col = col Ultimate_combo_simple2_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -2133,7 +1762,8 @@ Test DynamicSelect comprehensive list:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let ultimate_combo_simple2 db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let ultimate_combo_simple2 db ~col callback acc =
+        let col = col Ultimate_combo_simple2_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2151,7 +1781,8 @@ Test DynamicSelect comprehensive list:
     end (* module Fold *)
     
     module List = struct
-      let ultimate_combo_simple2 db ~(col : (_, _) Dynamic_select.t) callback =
+      let ultimate_combo_simple2 db ~col callback =
+        let col = col Ultimate_combo_simple2_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2218,7 +1849,8 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT, val TEXT)") T.no_params
   
-    let bare_param db ~(col : (_, _) Dynamic_select.t) ~id callback =
+    let bare_param db ~col ~id callback =
+      let col = col Bare_param_col.all in
       let set_params stmt =
         let p = T.start_params stmt (1 + col.count) in
         col.set p;
@@ -2231,7 +1863,8 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let bare_param db ~(col : (_, _) Dynamic_select.t) ~id callback acc =
+      let bare_param db ~col ~id callback acc =
+        let col = col Bare_param_col.all in
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -2248,7 +1881,8 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
     end (* module Fold *)
     
     module List = struct
-      let bare_param db ~(col : (_, _) Dynamic_select.t) ~id callback =
+      let bare_param db ~col ~id callback =
+        let col = col Bare_param_col.all in
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -2318,7 +1952,8 @@ Virtual select: consecutive params as columns:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT)") T.no_params
   
-    let multi_param db ~(col : (_, _) Dynamic_select.t) callback =
+    let multi_param db ~col callback =
+      let col = col Multi_param_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -2330,7 +1965,8 @@ Virtual select: consecutive params as columns:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let multi_param db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let multi_param db ~col callback acc =
+        let col = col Multi_param_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2346,7 +1982,8 @@ Virtual select: consecutive params as columns:
     end (* module Fold *)
     
     module List = struct
-      let multi_param db ~(col : (_, _) Dynamic_select.t) callback =
+      let multi_param db ~col callback =
+        let col = col Multi_param_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2429,7 +2066,8 @@ Virtual select: mixed columns and params without spaces after commas:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT, name TEXT, price DECIMAL(10,2))") T.no_params
   
-    let tight_commas db ~(col : (_, _) Dynamic_select.t) ~id callback =
+    let tight_commas db ~col ~id callback =
+      let col = col Tight_commas_col.all in
       let set_params stmt =
         let p = T.start_params stmt (1 + col.count) in
         col.set p;
@@ -2442,7 +2080,8 @@ Virtual select: mixed columns and params without spaces after commas:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let tight_commas db ~(col : (_, _) Dynamic_select.t) ~id callback acc =
+      let tight_commas db ~col ~id callback acc =
+        let col = col Tight_commas_col.all in
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -2459,7 +2098,8 @@ Virtual select: mixed columns and params without spaces after commas:
     end (* module Fold *)
     
     module List = struct
-      let tight_commas db ~(col : (_, _) Dynamic_select.t) ~id callback =
+      let tight_commas db ~col ~id callback =
+        let col = col Tight_commas_col.all in
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -2521,7 +2161,8 @@ Virtual select: subquery expression as dynamic column:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT, name TEXT)") T.no_params
   
-    let subquery_col db ~(col : (_, _) Dynamic_select.t) callback =
+    let subquery_col db ~col callback =
+      let col = col Subquery_col_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -2533,7 +2174,8 @@ Virtual select: subquery expression as dynamic column:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let subquery_col db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let subquery_col db ~col callback acc =
+        let col = col Subquery_col_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2549,7 +2191,8 @@ Virtual select: subquery expression as dynamic column:
     end (* module Fold *)
     
     module List = struct
-      let subquery_col db ~(col : (_, _) Dynamic_select.t) callback =
+      let subquery_col db ~col callback =
+        let col = col Subquery_col_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2616,7 +2259,8 @@ Virtual select: CASE WHEN as dynamic column:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT, status INT)") T.no_params
   
-    let case_col db ~(col : (_, _) Dynamic_select.t) callback =
+    let case_col db ~col callback =
+      let col = col Case_col_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -2628,7 +2272,8 @@ Virtual select: CASE WHEN as dynamic column:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let case_col db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let case_col db ~col callback acc =
+        let col = col Case_col_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2644,7 +2289,8 @@ Virtual select: CASE WHEN as dynamic column:
     end (* module Fold *)
     
     module List = struct
-      let case_col db ~(col : (_, _) Dynamic_select.t) callback =
+      let case_col db ~col callback =
+        let col = col Case_col_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2705,7 +2351,8 @@ Virtual select: function call with multiple args as column:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT, first_name TEXT, last_name TEXT)") T.no_params
   
-    let func_col db ~(col : (_, _) Dynamic_select.t) callback =
+    let func_col db ~col callback =
+      let col = col Func_col_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -2717,7 +2364,8 @@ Virtual select: function call with multiple args as column:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let func_col db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let func_col db ~col callback acc =
+        let col = col Func_col_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2733,7 +2381,8 @@ Virtual select: function call with multiple args as column:
     end (* module Fold *)
     
     module List = struct
-      let func_col db ~(col : (_, _) Dynamic_select.t) callback =
+      let func_col db ~col callback =
+        let col = col Func_col_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2798,7 +2447,8 @@ Virtual select: arithmetic with param at expression start:
     let create_t db  =
       T.execute db ("CREATE TABLE t (id INT, price DECIMAL(10,2))") T.no_params
   
-    let param_start_expr db ~(col : (_, _) Dynamic_select.t) ~id callback =
+    let param_start_expr db ~col ~id callback =
+      let col = col Param_start_expr_col.all in
       let set_params stmt =
         let p = T.start_params stmt (1 + col.count) in
         col.set p;
@@ -2811,7 +2461,8 @@ Virtual select: arithmetic with param at expression start:
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let param_start_expr db ~(col : (_, _) Dynamic_select.t) ~id callback acc =
+      let param_start_expr db ~col ~id callback acc =
+        let col = col Param_start_expr_col.all in
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -2828,7 +2479,8 @@ Virtual select: arithmetic with param at expression start:
     end (* module Fold *)
     
     module List = struct
-      let param_start_expr db ~(col : (_, _) Dynamic_select.t) ~id callback =
+      let param_start_expr db ~col ~id callback =
+        let col = col Param_start_expr_col.all in
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -2897,7 +2549,8 @@ Virtual select: tab-separated columns (non-space whitespace):
     let create_t db  =
       T.execute db ("CREATE TABLE t (a INT, b TEXT)") T.no_params
   
-    let tab_sep db ~(col : (_, _) Dynamic_select.t) callback =
+    let tab_sep db ~col callback =
+      let col = col Tab_sep_col.all in
       let set_params stmt =
         let p = T.start_params stmt (0 + col.count) in
         col.set p;
@@ -2909,7 +2562,8 @@ Virtual select: tab-separated columns (non-space whitespace):
             ~col:__sqlgg_r_col)
   
     module Fold = struct
-      let tab_sep db ~(col : (_, _) Dynamic_select.t) callback acc =
+      let tab_sep db ~col callback acc =
+        let col = col Tab_sep_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2925,7 +2579,8 @@ Virtual select: tab-separated columns (non-space whitespace):
     end (* module Fold *)
     
     module List = struct
-      let tab_sep db ~(col : (_, _) Dynamic_select.t) callback =
+      let tab_sep db ~col callback =
+        let col = col Tab_sep_col.all in
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
