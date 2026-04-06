@@ -510,6 +510,9 @@ Test DynamicSelect edge: single column:
           count = 0;
           phantom = None;
         } : (< id : _; .. >, _) t)
+      let all = object
+        method id = id
+      end
     end
   
   
@@ -630,6 +633,10 @@ DynamicSelect: SELECT * remains static select:
           count = 0;
           phantom = None;
         } : (< name : _; .. >, _) t)
+      let all = object
+        method id = id
+        method name = name
+      end
     end
   
   
@@ -758,6 +765,11 @@ DynamicSelect: SELECT * with expression in same list:
           count = 0;
           phantom = None;
         } : (< id_plus : _; .. >, _) t)
+      let all = object
+        method id = id
+        method name = name
+        method id_plus = id_plus
+      end
     end
   
   
@@ -886,6 +898,11 @@ DynamicSelect: auto names for expressions without alias:
           count = 0;
           phantom = None;
         } : (< name : _; .. >, _) t)
+      let all = object
+        method col1 = col1
+        method col2 = col2
+        method name = name
+      end
     end
   
   
@@ -998,6 +1015,9 @@ Test DynamicSelect edge: expression at first position:
           count = 0;
           phantom = None;
         } : (< id_plus : _; .. >, _) t)
+      let all = object
+        method id_plus = id_plus
+      end
     end
   
   
@@ -1118,6 +1138,10 @@ Test DynamicSelect edge: literal only:
           count = 0;
           phantom = None;
         } : (< answer : _; .. >, _) t)
+      let all = object
+        method greeting = greeting
+        method answer = answer
+      end
     end
   
   
@@ -1262,6 +1286,13 @@ Test DynamicSelect edge: many columns:
           count = 0;
           phantom = None;
         } : (< e : _; .. >, _) t)
+      let all = object
+        method a = a
+        method b = b
+        method c = c
+        method d = d
+        method e = e
+      end
     end
   
   
@@ -1390,6 +1421,11 @@ Test DynamicSelect edge: no space after commas:
           count = 0;
           phantom = None;
         } : (< price : _; .. >, _) t)
+      let all = object
+        method id = id
+        method name = name
+        method price = price
+      end
     end
   
   
@@ -1510,6 +1546,10 @@ Test DynamicSelect edge: minimal spacing:
           count = 0;
           phantom = None;
         } : (< b : _; .. >, _) t)
+      let all = object
+        method a = a
+        method b = b
+      end
     end
   
   
@@ -1622,6 +1662,9 @@ Test DynamicSelect edge: column without alias gets auto name:
           count = 0;
           phantom = None;
         } : (< col1 : _; .. >, _) t)
+      let all = object
+        method col1 = col1
+      end
     end
   
   
@@ -1766,6 +1809,12 @@ Test DynamicSelect with dynamic_select flag:
           count = 1;
           phantom = None;
         } : (< sub_result : _; .. >, _) t)
+      let all = object
+        method id = id
+        method balance = balance
+        method t_plus_one = t_plus_one
+        method sub_result = sub_result
+      end
     end
   
   
@@ -1905,6 +1954,12 @@ Test DynamicSelect with two dynamic columns:
           count = 0;
           phantom = None;
         } : (< doubled_price : _; .. >, _) t)
+      let all = object
+        method id = id
+        method name = name
+        method price = price
+        method doubled_price = doubled_price
+      end
     end
   
   
@@ -2033,6 +2088,11 @@ Test DynamicSelect with Verbatim branches:
           count = 0;
           phantom = None;
         } : (< literal_status : _; .. >, _) t)
+      let all = object
+        method id = id
+        method status = status
+        method literal_status = literal_status
+      end
     end
   
   
@@ -2153,6 +2213,10 @@ Test DynamicSelect at beginning of SELECT:
           count = 0;
           phantom = None;
         } : (< b : _; .. >, _) t)
+      let all = object
+        method a = a
+        method b = b
+      end
     end
   
   
@@ -2273,6 +2337,10 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
           count = 0 + (match x with `A -> 0 | `B -> 0);
           phantom = None;
         } : (< sub : _; .. >, _) t)
+      let all = object
+        method id = id
+        method sub = sub
+      end
     end
   
   
@@ -2406,6 +2474,11 @@ Test DynamicSelect with module annotation:
           count = 0;
           phantom = None;
         } : (< price : _; .. >, _) t)
+      let all = object
+        method id = id
+        method name = name
+        method price = price
+      end
     end
   
   
@@ -2512,6 +2585,10 @@ Test DynamicSelect with LIMIT 1 (select_one):
           count = 0;
           phantom = None;
         } : (< price : _; .. >, _) t)
+      let all = object
+        method name = name
+        method price = price
+      end
     end
   
   
@@ -2653,6 +2730,13 @@ Test DynamicSelect comprehensive list:
           count = 1;
           phantom = None;
         } : (< price_with_tax : _; .. >, _) t)
+      let all = object
+        method id = id
+        method name = name
+        method category = category
+        method stock = stock
+        method price_with_tax = price_with_tax
+      end
     end
   
   
@@ -2789,6 +2873,10 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
           count = 1;
           phantom = None;
         } : (< custom : _; .. >, _) t)
+      let all = object
+        method id = id
+        method custom = custom
+      end
     end
   
   
@@ -2920,6 +3008,10 @@ Virtual select: consecutive params as columns:
           count = 1;
           phantom = None;
         } : (< col_b : _; .. >, _) t)
+      let all = object
+        method col_a = col_a
+        method col_b = col_b
+      end
     end
   
   
@@ -3060,6 +3152,12 @@ Virtual select: mixed columns and params without spaces after commas:
           count = 1;
           phantom = None;
         } : (< bonus : _; .. >, _) t)
+      let all = object
+        method id = id
+        method name = name
+        method price = price
+        method bonus = bonus
+      end
     end
   
   
@@ -3183,6 +3281,10 @@ Virtual select: subquery expression as dynamic column:
           count = 0;
           phantom = None;
         } : (< rank : _; .. >, _) t)
+      let all = object
+        method id = id
+        method rank = rank
+      end
     end
   
   
@@ -3309,6 +3411,10 @@ Virtual select: CASE WHEN as dynamic column:
           count = 0;
           phantom = None;
         } : (< label : _; .. >, _) t)
+      let all = object
+        method id = id
+        method label = label
+      end
     end
   
   
@@ -3429,6 +3535,10 @@ Virtual select: function call with multiple args as column:
           count = 0;
           phantom = None;
         } : (< full_name : _; .. >, _) t)
+      let all = object
+        method id = id
+        method full_name = full_name
+      end
     end
   
   
@@ -3553,6 +3663,10 @@ Virtual select: arithmetic with param at expression start:
           count = 1;
           phantom = None;
         } : (< scaled : _; .. >, _) t)
+      let all = object
+        method id = id
+        method scaled = scaled
+      end
     end
   
   
@@ -3683,6 +3797,10 @@ Virtual select: tab-separated columns (non-space whitespace):
           count = 0;
           phantom = None;
         } : (< b : _; .. >, _) t)
+      let all = object
+        method a = a
+        method b = b
+      end
     end
   
   

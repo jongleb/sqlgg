@@ -1161,6 +1161,12 @@ let generate_dynamic_select_modules stmts =
         output "} : %s)" field_sig;
         dec_indent ()
       ) fields field_sqls;
+      let all_value_name = if List.mem "all" all_field_names then "all_fields" else "all" in
+      output "let %s = object" all_value_name;
+      inc_indent ();
+      List.iter (fun n -> output "method %s = %s" n n) all_field_names;
+      dec_indent ();
+      output "end";
       
       dec_indent ();
       output "end";
