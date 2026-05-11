@@ -224,16 +224,19 @@ let keywords =
   all T_BOOLEAN ["bool";"boolean"];
   all T_FLOAT ["float";"real";"float4";"float8";"int1";"int2";"int3";"int4";"int8"];
   all T_DOUBLE ["double"];
-  all (T_BLOB None) ["blob";"varbinary"];
-  all (T_BLOB (Some Tiny)) ["tinyblob"];
-  all (T_BLOB (Some Medium)) ["mediumblob"];
-  all (T_BLOB (Some Long)) ["longblob"];
-  all (T_TEXT None) ["text";"char";"varchar"];
-  all (T_TEXT (Some Tiny)) ["tinytext"];
-  all (T_TEXT (Some Medium)) ["mediumtext"];
-  all (T_TEXT (Some Long)) ["longtext"];
+  all (T_BLOB (None, Blob_token)) ["blob"];
+  all (T_BLOB (None, Varbinary_token)) ["varbinary"];
+  all (T_BLOB (Some Tiny, Blob_token)) ["tinyblob"];
+  all (T_BLOB (Some Medium, Blob_token)) ["mediumblob"];
+  all (T_BLOB (Some Long, Blob_token)) ["longblob"];
+  all (T_TEXT (None, Text_token)) ["text"];
+  all (T_TEXT (None, Char_token)) ["char"];
+  all (T_TEXT (None, Varchar_token)) ["varchar"];
+  all (T_TEXT (Some Tiny, Text_token)) ["tinytext"];
+  all (T_TEXT (Some Medium, Text_token)) ["mediumtext"];
+  all (T_TEXT (Some Long, Text_token)) ["longtext"];
   all T_JSON ["json"];
-  all (T_TEXT None) ["varchar2"]; (* oracle *)
+  all (T_TEXT (None, Varchar2_token)) ["varchar2"]; (* oracle *)
   all T_DATETIME ["datetime"];
   all T_UUID ["uuid"]; (* http://www.postgresql.org/docs/9.4/static/datatype-uuid.html *)
   !k

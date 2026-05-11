@@ -531,6 +531,12 @@ type int_size = Tiny | Small | Medium | Big
 type lob_size = Tiny | Medium | Long
   [@@deriving show {with_path=false}, eq]
 
+type text_type_token = Text_token | Char_token | Varchar_token | Varchar2_token
+  [@@deriving show {with_path=false}, eq]
+
+type blob_type_token = Blob_token | Varbinary_token
+  [@@deriving show {with_path=false}, eq]
+
 type signedness = Signed | Unsigned
   [@@deriving show {with_path=false}, eq]
 
@@ -538,10 +544,23 @@ type float_precision = Single | Double
   [@@deriving show {with_path=false}, eq]
 
 module Source_type = struct
+  type text_flavor =
+    | PlainText
+    | Char
+    | Varchar
+    | Varchar2
+    [@@deriving show, eq]
+
+  type blob_flavor =
+    | PlainBlob
+    | Varbinary
+    [@@deriving show, eq]
+
   type kind = Infer of Type.kind
     | Int of int_size option * signedness
     | Float of float_precision
-    | Blob of lob_size option | Text of lob_size option
+    | Blob of blob_flavor * lob_size option * int option
+    | Text of text_flavor * lob_size option * int option
     [@@deriving show, eq]
 
   type t = { t : kind; nullability : Type.nullability; } [@@deriving eq, show{with_path=false}, make]

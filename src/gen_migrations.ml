@@ -8,6 +8,10 @@ let quote_id name =
 let quote_table_name (name : Sql.table_name) =
   Option.map_default (fun db -> sprintf "`%s`.`%s`" db name.tn) (quote_id name.tn) name.db
 
+let with_len base = function
+  | Some n -> sprintf "%s(%d)" base n
+  | None -> base
+
 let type_kind_to_sql = function
   | Sql.Type.Int -> "INT"
   | UInt64 -> "BIGINT UNSIGNED"
@@ -17,7 +21,7 @@ let type_kind_to_sql = function
   | Bool -> "BOOLEAN"
   | Datetime -> "DATETIME"
   | Decimal { precision = Some p; scale = Some s } -> sprintf "DECIMAL(%d,%d)" p s
-  | Decimal { precision = Some p; scale = None } -> sprintf "DECIMAL(%d)" p
+  | Decimal { precision; scale = None } -> with_len "DECIMAL" precision
   | Decimal _ -> "DECIMAL"
   | Json -> "JSON"
   | Union { ctors; _ } ->
@@ -28,20 +32,35 @@ let type_kind_to_sql = function
 
 let source_type_kind_to_sql = function
   | Sql.Source_type.Infer k -> type_kind_to_sql k
-  | Int (None, Sql.Signed) -> "INT"
-  | Int (Some Tiny, Signed) -> "TINYINT" | Int (Some Small, Signed) -> "SMALLINT"
-  | Int (Some Medium, Signed) -> "MEDIUMINT" | Int (Some Big, Signed) -> "BIGINT"
-  | Int (None, Unsigned) -> "INT UNSIGNED"
-  | Int (Some Tiny, Unsigned) -> "TINYINT UNSIGNED" | Int (Some Small, Unsigned) -> "SMALLINT UNSIGNED"
-  | Int (Some Medium, Unsigned) -> "MEDIUMINT UNSIGNED" | Int (Some Big, Unsigned) -> "BIGINT UNSIGNED"
+  | Int (size, sign) ->
+    let base = match size with
+      | None -> "INT"
+      | Some Tiny -> "TINYINT" | Some Small -> "SMALLINT"
+      | Some Medium -> "MEDIUMINT" | Some Big -> "BIGINT"
+    in
+    base ^ (match sign with Sql.Signed -> "" | Unsigned -> " UNSIGNED")
   | Float Sql.Single -> "FLOAT"
   | Float Double -> "DOUBLE"
-  | Blob None -> "BLOB"
-  | Blob (Some Tiny) -> "TINYBLOB" | Blob (Some Medium) -> "MEDIUMBLOB"
-  | Blob (Some Long) -> "LONGBLOB"
-  | Text None -> "TEXT"
-  | Text (Some Tiny) -> "TINYTEXT" | Text (Some Medium) -> "MEDIUMTEXT"
-  | Text (Some Long) -> "LONGTEXT"
+  | Blob (PlainBlob, size, len) ->
+    let base = match size with
+      | None -> "BLOB"
+      | Some Tiny -> "TINYBLOB"
+      | Some Medium -> "MEDIUMBLOB"
+      | Some Long -> "LONGBLOB"
+    in
+    with_len base len
+  | Blob (Varbinary, _, len) -> with_len "VARBINARY" len
+  | Text (PlainText, size, len) ->
+    let base = match size with
+      | None -> "TEXT"
+      | Some Tiny -> "TINYTEXT"
+      | Some Medium -> "MEDIUMTEXT"
+      | Some Long -> "LONGTEXT"
+    in
+    with_len base len
+  | Text (Char, _, len) -> with_len "CHAR" len
+  | Text (Varchar, _, len) -> with_len "VARCHAR" len
+  | Text (Varchar2, _, len) -> with_len "VARCHAR2" len
 
 let constraint_to_sql = function
   | Sql.Constraint.PrimaryKey -> Some "PRIMARY KEY"

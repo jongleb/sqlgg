@@ -19,6 +19,18 @@
     List.filter_map param l, List.mem (`Limit,`Const 1) l
 
   let poly name ret parameters = Fun { fn_name = name; kind = (F (Typ ret, List.map (fun _ -> Var 0) parameters)); parameters; is_over_clause = false }
+
+  let source_text_of_token ((size, token) : Sql.lob_size option * Sql.text_type_token) len_opt =
+    match token with
+    | Sql.Text_token -> Source_type.Text (Source_type.PlainText, size, None)
+    | Sql.Char_token -> Source_type.Text (Source_type.Char, None, len_opt)
+    | Sql.Varchar_token -> Source_type.Text (Source_type.Varchar, None, len_opt)
+    | Sql.Varchar2_token -> Source_type.Text (Source_type.Varchar2, None, len_opt)
+
+  let source_blob_of_token ((size, token) : Sql.lob_size option * Sql.blob_type_token) len_opt =
+    match token with
+    | Sql.Blob_token -> Source_type.Blob (Source_type.PlainBlob, size, None)
+    | Sql.Varbinary_token -> Source_type.Blob (Source_type.Varbinary, None, len_opt)
 %}
 
 %token <int> INTEGER
@@ -54,8 +66,8 @@
 %token NUM_DIV_OP NUM_EQ_OP NUM_CMP_OP PLUS MINUS NOT_DISTINCT_OP NUM_BIT_SHIFT NUM_BIT_OR NUM_BIT_AND
 %token JSON_EXTRACT_OP JSON_UNQUOTE_EXTRACT_OP
 %token <Sql.int_size option> T_INTEGER
-%token <Sql.lob_size option> T_BLOB
-%token <Sql.lob_size option> T_TEXT
+%token <Sql.lob_size option * Sql.blob_type_token> T_BLOB
+%token <Sql.lob_size option * Sql.text_type_token> T_TEXT
 %token T_FLOAT T_DOUBLE T_BOOLEAN T_DATETIME T_UUID T_DECIMAL T_JSON
 
 (*
@@ -398,7 +410,7 @@ column_def1: c=column_def { `Attr c }
            | FULLTEXT index_or_key? table_index { `Index (make_located ~value:Fulltext ~pos:($startofs, $endofs)) }
            | SPATIAL index_or_key? table_index { `Index (make_located ~value:Spatial ~pos:($startofs, $endofs)) }
 
-int_arg: delimited(LPAREN,INTEGER,RPAREN) {}
+int_arg: LPAREN n=INTEGER RPAREN { n }
 
 key_part: n=IDENT int_arg? either(ASC,DESC)? { n }
 
@@ -633,7 +645,7 @@ interval_unit: INTERVAL_UNIT
              | YEAR_MONTH { Value (make_collated ~collated:(strict Datetime) ()) }
 
 int_type:
-  | s=T_INTEGER int_arg? u=UNSIGNED? {
+  | s=T_INTEGER _n=int_arg? u=UNSIGNED? {
       Sql.Source_type.Int (s, Option.map_default (Fun.const Sql.Unsigned) Sql.Signed u)
     }
 
@@ -656,8 +668,8 @@ sql_type_flavor:
   | t=int_type ZEROFILL? { t }
   | T_FLOAT { Source_type.Float Single }
   | T_DOUBLE PRECISION? { Source_type.Float Double }
-  | s=T_BLOB { Source_type.Blob s }
-  | NATIONAL? s=T_TEXT int_arg? VARYING? charset? { Source_type.Text s }
+  | s=T_BLOB n=int_arg? { source_blob_of_token s n }
+  | NATIONAL? s=T_TEXT n=int_arg? VARYING? charset? { source_text_of_token s n }
   | t=expr_sql_type_flavor { Source_type.Infer t }
   | ENUM ctors=sequence(TEXT) charset? { Source_type.Infer (make_enum_kind ctors) }
 
@@ -707,17 +719,17 @@ compound_op:
 
 (* manual_type returns Source_type.t for parameter type annotations *)
 manual_type:
-    | s=T_TEXT               { { Source_type.t = Text s; nullability = Type.Strict } }
+    | s=T_TEXT n=int_arg?    { { Source_type.t = source_text_of_token s n; nullability = Type.Strict } }
     | T_JSON                 { Source_type.strict Json }
-    | s=T_BLOB               { { Source_type.t = Blob s; nullability = Type.Strict } }
+    | s=T_BLOB n=int_arg?    { { Source_type.t = source_blob_of_token s n; nullability = Type.Strict } }
     | t=int_type             { { Source_type.t; nullability = Type.Strict } }
     | T_FLOAT                { { Source_type.t = Float Single; nullability = Type.Strict } }
     | T_DOUBLE               { { Source_type.t = Float Double; nullability = Type.Strict } }
     | T_BOOLEAN              { Source_type.strict Bool }
     | T_DATETIME             { Source_type.strict Datetime }
-    | s=T_TEXT NULL          { { Source_type.t = Text s; nullability = Type.Nullable } }
+    | s=T_TEXT n=int_arg? NULL { { Source_type.t = source_text_of_token s n; nullability = Type.Nullable } }
     | T_JSON NULL            { Source_type.nullable Json }
-    | s=T_BLOB NULL          { { Source_type.t = Blob s; nullability = Type.Nullable } }
+    | s=T_BLOB n=int_arg? NULL { { Source_type.t = source_blob_of_token s n; nullability = Type.Nullable } }
     | t=int_type NULL        { { Source_type.t; nullability = Type.Nullable } }
     | T_FLOAT NULL           { { Source_type.t = Float Single; nullability = Type.Nullable } }
     | T_DOUBLE NULL          { { Source_type.t = Float Double; nullability = Type.Nullable } }
