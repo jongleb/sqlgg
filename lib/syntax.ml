@@ -1427,6 +1427,7 @@ let with_constraints attrs constraints : Schema.t =
     | None -> attr
   ) attrs
 
+
 let rec eval (stmt:Sql.stmt) =
   let open Stmt in
   let open Schema.Source in
@@ -1436,7 +1437,11 @@ let rec eval (stmt:Sql.stmt) =
       let attrs = List.map Alter_action_attr.to_attr schema in
       let attrs = with_constraints attrs constraints in
       let columns = List.map2 (fun (col : Alter_action_attr.t) attr ->
-        { Tables.attr; source_kind = Option.map (fun k -> k.value.collated) col.kind }
+        {
+          Tables.attr;
+          source_kind = Option.map (fun k -> k.value) col.kind;
+          default_sql = Alter_action_attr.default_sql col;
+        }
       ) schema attrs in
       Tables.add_columns (name, columns);
       ([],[],Create name)
@@ -1451,13 +1456,15 @@ let rec eval (stmt:Sql.stmt) =
   | Alter (name,actions) ->
       List.iter (function
       | `Add (col,pos) ->
-        let source_kind = Option.map (fun k -> k.value.collated) col.Alter_action_attr.kind in
-        Tables.alter_add name ~col:{ attr = Alter_action_attr.to_attr col; source_kind } ~pos
+        let source_kind = Option.map (fun k -> k.value) col.Alter_action_attr.kind in
+        let default_sql = Alter_action_attr.default_sql col in
+        Tables.alter_add name ~col:{ attr = Alter_action_attr.to_attr col; source_kind; default_sql } ~pos
       | `Drop col ->
         Tables.alter_drop name ~col
       | `Change (oldcol,col,pos) ->
-        let source_kind = Option.map (fun k -> k.value.collated) col.Alter_action_attr.kind in
-        Tables.alter_change name ~oldcol ~col:{ attr = Alter_action_attr.to_attr col; source_kind } ~pos
+        let source_kind = Option.map (fun k -> k.value) col.Alter_action_attr.kind in
+        let default_sql = Alter_action_attr.default_sql col in
+        Tables.alter_change name ~oldcol ~col:{ attr = Alter_action_attr.to_attr col; source_kind; default_sql } ~pos
       | `RenameColumn (oldcol,newcol) ->
         Tables.rename_column name ~old_name:oldcol ~new_name:newcol
       | `RenameTable new_name ->

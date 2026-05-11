@@ -8,6 +8,10 @@ let quote_id name =
 let quote_table_name (name : Sql.table_name) =
   Option.map_default (fun db -> sprintf "`%s`.`%s`" db name.tn) (quote_id name.tn) name.db
 
+let with_len base = function
+  | Some n -> sprintf "%s(%d)" base n
+  | None -> base
+
 let type_kind_to_sql = function
   | Sql.Type.Int -> "INT"
   | UInt64 -> "BIGINT UNSIGNED"
@@ -17,7 +21,7 @@ let type_kind_to_sql = function
   | Bool -> "BOOLEAN"
   | Datetime -> "DATETIME"
   | Decimal { precision = Some p; scale = Some s } -> sprintf "DECIMAL(%d,%d)" p s
-  | Decimal { precision = Some p; scale = None } -> sprintf "DECIMAL(%d)" p
+  | Decimal { precision; scale = None } -> with_len "DECIMAL" precision
   | Decimal _ -> "DECIMAL"
   | Json -> "JSON"
   | Union { ctors; _ } ->
@@ -28,20 +32,35 @@ let type_kind_to_sql = function
 
 let source_type_kind_to_sql = function
   | Sql.Source_type.Infer k -> type_kind_to_sql k
-  | Int (None, Sql.Signed) -> "INT"
-  | Int (Some Tiny, Signed) -> "TINYINT" | Int (Some Small, Signed) -> "SMALLINT"
-  | Int (Some Medium, Signed) -> "MEDIUMINT" | Int (Some Big, Signed) -> "BIGINT"
-  | Int (None, Unsigned) -> "INT UNSIGNED"
-  | Int (Some Tiny, Unsigned) -> "TINYINT UNSIGNED" | Int (Some Small, Unsigned) -> "SMALLINT UNSIGNED"
-  | Int (Some Medium, Unsigned) -> "MEDIUMINT UNSIGNED" | Int (Some Big, Unsigned) -> "BIGINT UNSIGNED"
+  | Int (size, sign) ->
+    let base = match size with
+      | None -> "INT"
+      | Some Tiny -> "TINYINT" | Some Small -> "SMALLINT"
+      | Some Medium -> "MEDIUMINT" | Some Big -> "BIGINT"
+    in
+    base ^ (match sign with Sql.Signed -> "" | Unsigned -> " UNSIGNED")
   | Float Sql.Single -> "FLOAT"
   | Float Double -> "DOUBLE"
-  | Blob None -> "BLOB"
-  | Blob (Some Tiny) -> "TINYBLOB" | Blob (Some Medium) -> "MEDIUMBLOB"
-  | Blob (Some Long) -> "LONGBLOB"
-  | Text None -> "TEXT"
-  | Text (Some Tiny) -> "TINYTEXT" | Text (Some Medium) -> "MEDIUMTEXT"
-  | Text (Some Long) -> "LONGTEXT"
+  | Blob (PlainBlob, size, len) ->
+    let base = match size with
+      | None -> "BLOB"
+      | Some Tiny -> "TINYBLOB"
+      | Some Medium -> "MEDIUMBLOB"
+      | Some Long -> "LONGBLOB"
+    in
+    with_len base len
+  | Blob (Varbinary, _, len) -> with_len "VARBINARY" len
+  | Text (PlainText, size, len) ->
+    let base = match size with
+      | None -> "TEXT"
+      | Some Tiny -> "TINYTEXT"
+      | Some Medium -> "MEDIUMTEXT"
+      | Some Long -> "LONGTEXT"
+    in
+    with_len base len
+  | Text (Char, _, len) -> with_len "CHAR" len
+  | Text (Varchar, _, len) -> with_len "VARCHAR" len
+  | Text (Varchar2, _, len) -> with_len "VARCHAR2" len
 
 let constraint_to_sql = function
   | Sql.Constraint.PrimaryKey -> Some "PRIMARY KEY"
@@ -53,20 +72,24 @@ let constraint_to_sql = function
   | OnConflict _ -> None
   | Composite _ -> None
 
-let alter_action_attr_to_sql (col : Sql.Alter_action_attr.t) =
+type default_sql_lookup = string -> string option
+
+let no_defaults : default_sql_lookup = fun _ -> None
+
+let alter_action_attr_to_sql ?(default_sql_lookup=no_defaults) (col : Sql.Alter_action_attr.t) =
   let name = quote_id col.name in
-  let kind = Option.map_default (fun (k : _ Sql.collated Sql.located) -> " " ^ source_type_kind_to_sql k.value.collated) "" col.kind in
+  let kind = Option.map_default (fun (k : _ Sql.collated Sql.located) ->
+    let type_sql = " " ^ source_type_kind_to_sql k.value.collated in
+    let collation_sql = Option.map_default (fun (c : string Sql.located) ->
+      " COLLATE " ^ c.value) "" k.value.collation in
+    type_sql ^ collation_sql) "" col.kind in
   let extras = col.extra |> List.filter_map (fun (c : Sql.Alter_action_attr.constraint_ Sql.located) ->
     match c.value with
     | Syntax_constraint cst -> constraint_to_sql cst
-    | Default _ -> None
+    | Default _ -> Option.map (fun s -> "DEFAULT " ^ s) (default_sql_lookup col.name)
   ) in
   let extras = match extras with [] -> "" | l -> " " ^ String.concat " " l in
   sprintf "%s%s%s" name kind extras
-
-let attr_to_column_sql (attr : Sql.attr) =
-  let col = Sql.Alter_action_attr.from_attr attr in
-  alter_action_attr_to_sql col
 
 let alter_pos_to_sql = function
   | `Default -> ""
@@ -75,8 +98,7 @@ let alter_pos_to_sql = function
 
 let enrich_with_source_kind source_kind (col : Sql.Alter_action_attr.t) =
   Option.map_default (fun sk ->
-    { col with kind = Some (Sql.make_located ~pos:(0,0)
-      ~value:(Sql.make_collated ~collated:sk ())) }) col source_kind
+    { col with kind = Some (Sql.make_located ~pos:(0,0) ~value:sk) }) col source_kind
 
 let find_column columns col_name =
   List.find (fun (c : Tables.column) -> c.attr.Sql.name = col_name) columns
@@ -110,20 +132,22 @@ let inverse_action table_name (columns : Tables.column list) (action : Sql.alter
       | Some old -> old.charset, Option.map (fun v -> Sql.make_located ~pos:(0,0) ~value:v) old.collation
       | None -> None, None
     in
-    `Default_or_convert_to (cs, collation)
+    (match cs, collation with
+     | None, None -> `None
+     | _ -> `Default_or_convert_to (cs, collation))
   | `TtlOptions (_, _) -> `RemoveTtl (0, 0)
   | `RemoveTtl _ -> `None
   | `None -> `None
 
-let action_to_sql_fragment (action : Sql.alter_action) =
+let action_to_sql_fragment ?default_sql_lookup (action : Sql.alter_action) =
   match action with
   | `Add (col, pos) ->
-    sprintf "ADD COLUMN %s%s" (alter_action_attr_to_sql col) (alter_pos_to_sql pos)
+    sprintf "ADD COLUMN %s%s" (alter_action_attr_to_sql ?default_sql_lookup col) (alter_pos_to_sql pos)
   | `Drop col_name ->
     sprintf "DROP COLUMN %s" (quote_id col_name)
   | `Change (old_name, new_col, pos) ->
     sprintf "CHANGE COLUMN %s %s%s" (quote_id old_name)
-      (alter_action_attr_to_sql new_col) (alter_pos_to_sql pos)
+      (alter_action_attr_to_sql ?default_sql_lookup new_col) (alter_pos_to_sql pos)
   | `RenameTable new_name ->
     sprintf "RENAME TO %s" (quote_table_name new_name)
   | `RenameColumn (old_name, new_name) ->
@@ -150,14 +174,13 @@ let action_to_sql_fragment (action : Sql.alter_action) =
       | Ascii -> "ascii"
       | Unicode -> "unicode"
     in
-    let parts = List.filter_map Fun.id [
-      Option.map (fun c -> sprintf "CONVERT TO CHARACTER SET %s" (charset_to_sql c)) cs;
-      Option.map (fun c -> sprintf "COLLATE %s" c.Sql.value) collation;
-    ] in
-    begin match parts with
-    | [] -> "(* unsupported: unknown previous charset *)"
-    | _ -> String.concat " " parts
-    end
+    let convert cs = sprintf "CONVERT TO CHARACTER SET %s" (charset_to_sql cs) in
+    let collate c = sprintf "COLLATE %s" c.Sql.value in
+    (match cs, collation with
+     | Some cs, Some c -> convert cs ^ " " ^ collate c
+     | Some cs, None -> convert cs
+     | None, Some c -> collate c
+     | None, None -> "")
   | `TtlOptions (opts, _) ->
     let opt_to_sql = function
       | `TtlSet (col, n, unit) ->
@@ -168,8 +191,8 @@ let action_to_sql_fragment (action : Sql.alter_action) =
   | `RemoveTtl _ -> "REMOVE TTL"
   | `None -> "(* unsupported: index/constraint operation *)"
 
-let alter_to_sql table_name actions =
-  let fragments = List.map action_to_sql_fragment actions in
+let alter_to_sql ?default_sql_lookup table_name actions =
+  let fragments = List.map (action_to_sql_fragment ?default_sql_lookup) actions in
   sprintf "ALTER TABLE %s %s" (quote_table_name table_name) (String.concat ", " fragments)
 
 type migration = {
@@ -179,20 +202,19 @@ type migration = {
 }
 
 let inverse table_name (columns : Tables.column list) (actions : Sql.alter_action list) =
-  let non_invertible = List.filter (function
-    | `None -> true
-    | `AddIndex (None, _) | `DropIndex _ -> true
-    | `AddConstraint None | `DropConstraint _ -> true
-    | `RemoveTtl _ -> true
-    | _ -> false) actions in
-  if non_invertible <> [] then
+  let inverse_actions = List.rev_map (inverse_action table_name columns) actions in
+  if List.exists (function `None -> true | _ -> false) inverse_actions then
     None
   else
-    let inverse_actions = List.rev_map (inverse_action table_name columns) actions in
     let effective_name = List.fold_left (fun name action ->
       match action with `RenameTable new_name -> new_name | _ -> name
     ) table_name actions in
-    Some (alter_to_sql effective_name inverse_actions)
+    let default_sql_lookup name =
+      match List.find_opt (fun (c : Tables.column) -> c.attr.Sql.name = name) columns with
+      | Some c -> c.default_sql
+      | None -> None
+    in
+    Some (alter_to_sql ~default_sql_lookup effective_name inverse_actions)
 
 let drop_index_sql index_name table_name =
   sprintf "DROP INDEX %s ON %s" (quote_id index_name) (quote_table_name table_name)

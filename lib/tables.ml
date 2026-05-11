@@ -4,7 +4,11 @@ open Printf
 open ExtLib
 open Prelude
 
-type column = { attr : Sql.attr; source_kind : Sql.Source_type.kind option }
+type column = {
+  attr : Sql.attr;
+  source_kind : Sql.Source_type.kind Sql.collated option;
+  default_sql : string option;
+}
 
 type table = Sql.table
 
@@ -21,7 +25,7 @@ let by_name (name:Sql.table_name) = fun (n,_) -> n = name
 
 let columns_to_schema cols = List.map (fun c -> c.attr) cols
 
-let column_of_attr attr = { attr; source_kind = None }
+let column_of_attr attr = { attr; source_kind = None; default_sql = None }
 
 (** @raise Error when no such table *)
 let get_from tables name =

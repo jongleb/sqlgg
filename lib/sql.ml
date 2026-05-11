@@ -523,6 +523,12 @@ type int_size = Tiny | Small | Medium | Big
 type lob_size = Tiny | Medium | Long
   [@@deriving show {with_path=false}, eq]
 
+type text_type_token = Text_token | Char_token | Varchar_token | Varchar2_token
+  [@@deriving show {with_path=false}, eq]
+
+type blob_type_token = Blob_token | Varbinary_token
+  [@@deriving show {with_path=false}, eq]
+
 type signedness = Signed | Unsigned
   [@@deriving show {with_path=false}, eq]
 
@@ -530,10 +536,23 @@ type float_precision = Single | Double
   [@@deriving show {with_path=false}, eq]
 
 module Source_type = struct
+  type text_flavor =
+    | PlainText
+    | Char
+    | Varchar
+    | Varchar2
+    [@@deriving show, eq]
+
+  type blob_flavor =
+    | PlainBlob
+    | Varbinary
+    [@@deriving show, eq]
+
   type kind = Infer of Type.kind
     | Int of int_size option * signedness
     | Float of float_precision
-    | Blob of lob_size option | Text of lob_size option
+    | Blob of blob_flavor * lob_size option * int option
+    | Text of text_flavor * lob_size option * int option
     [@@deriving show, eq]
 
   type t = { t : kind; nullability : Type.nullability; } [@@deriving eq, show{with_path=false}, make]
@@ -743,7 +762,10 @@ type index_kind  =
 
 module Alter_action_attr = struct
 
-  type constraint_ = Syntax_constraint of Constraint.t | Default of expr located
+  type default = { expr : expr located; sql : string option }
+    [@@deriving show {with_path=false}]
+
+  type constraint_ = Syntax_constraint of Constraint.t | Default of default
     [@@deriving show {with_path=false}]
 
   type t = {  
@@ -757,6 +779,13 @@ module Alter_action_attr = struct
   let constraint_to_syntax_constraint = function
     | Syntax_constraint c -> c
     | Default _ -> WithDefault
+
+  let default_sql (col : t) =
+    List.find_map (fun (c : constraint_ located) ->
+      match c.value with
+      | Default { sql; _ } -> sql
+      | Syntax_constraint _ -> None
+    ) col.extra
 
   let kind_to_type_kind = function
     | Source_type.Infer k -> k
@@ -777,8 +806,10 @@ module Alter_action_attr = struct
   let from_attr (attr: attr): t =
     let extra = attr.extra |> Constraints.elements |> List.map (fun c -> 
       let c = match c with
-      | Constraint.WithDefault -> Default (make_located ~pos:(0,0) ~value:(Value 
-        (make_collated ~collated:(Type.depends Any) ()))) 
+      | Constraint.WithDefault -> Default {
+          expr = make_located ~pos:(0,0) ~value:(Value (make_collated ~collated:(Type.depends Any) ()));
+          sql = None;
+        }
       | x -> Syntax_constraint x
       in
       make_located ~pos:(0,0) ~value:c

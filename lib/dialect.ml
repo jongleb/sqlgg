@@ -376,10 +376,11 @@ and analyze_column_def_internal acc cds k = match cds with
       | None -> acc
     in
     let acc = extra
-      |> List.find_map (function
-          | { value = Alter_action_attr.Default { value = expr; pos }; _ } ->
+      |> List.find_map (fun c ->
+          match c.value with
+          | Alter_action_attr.Default { expr = { value = expr; _ }; _ } ->
               let col_kind = Option.map (fun k -> k.value.collated) kind in
-              Some (get_default_expr ~kind:col_kind ~expr pos)
+              Some (get_default_expr ~kind:col_kind ~expr c.pos)
           | _ -> None)
       |> Option.map_default (fun f -> f :: acc) acc
     in
