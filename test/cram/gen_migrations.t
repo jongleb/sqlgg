@@ -433,6 +433,15 @@ Compound ALTER with DROP INDEX (non-invertible) errors without down=explicit:
   Errors encountered, no code generated
   [1]
 
+DROP COLUMN of a non-existent column is non-invertible (no Not_found is raised):
+  $ cat <<'EOF' | sqlgg -no-header -gen caml -migrations -name mig -dialect mysql - 2>&1
+  > CREATE TABLE t (id INT NOT NULL, data TEXT);
+  > ALTER TABLE t DROP COLUMN ghost, DROP INDEX idx_id;
+  > EOF
+  migrations mode: alter_t_1 contains non-invertible actions (index/constraint ops), use -- [sqlgg] down=explicit
+  Errors encountered, no code generated
+  [1]
+
 Compound ALTER with DROP INDEX (non-invertible) works with down=explicit:
   $ cat <<'EOF' | sqlgg -no-header -gen caml -migrations -name mig -dialect mysql -
   > CREATE TABLE t (id INT NOT NULL, data TEXT);

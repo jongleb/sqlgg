@@ -20,7 +20,8 @@ let with_lexbuf lexbuf f =
   Fun.protect f ~finally:(fun () -> current_lexbuf := saved)
 
 let extract_source (start_, end_) =
-  Option.map (fun lexbuf ->
-    let offset = start_ - lexbuf.Lexing.lex_abs_pos in
-    String.trim (Bytes.sub_string lexbuf.Lexing.lex_buffer offset (end_ - start_))
-  ) !current_lexbuf
+  match !current_lexbuf with
+  | Some { Lexing.lex_buffer = buf; lex_abs_pos = base; _ }
+    when start_ >= base && end_ >= start_ && end_ - base <= Bytes.length buf ->
+    Some (String.trim (Bytes.sub_string buf (start_ - base) (end_ - start_)))
+  | _ -> None

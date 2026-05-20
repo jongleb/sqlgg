@@ -101,19 +101,23 @@ let enrich_with_source_kind source_kind (col : Sql.Alter_action_attr.t) =
     { col with kind = Some (Sql.make_located ~pos:(0,0) ~value:sk) }) col source_kind
 
 let find_column columns col_name =
-  List.find (fun (c : Tables.column) -> c.attr.Sql.name = col_name) columns
+  List.find_opt (fun (c : Tables.column) -> c.attr.Sql.name = col_name) columns
 
 let inverse_action table_name (columns : Tables.column list) (action : Sql.alter_action) : Sql.alter_action =
   match action with
   | `Add (col, _pos) -> `Drop col.Sql.Alter_action_attr.name
   | `Drop col_name ->
-    let entry = find_column columns col_name in
-    let col = Sql.Alter_action_attr.from_attr entry.attr |> enrich_with_source_kind entry.source_kind in
-    `Add (col, `Default)
+    (match find_column columns col_name with
+     | None -> `None
+     | Some entry ->
+       let col = Sql.Alter_action_attr.from_attr entry.attr |> enrich_with_source_kind entry.source_kind in
+       `Add (col, `Default))
   | `Change (old_name, _new_col, _pos) ->
-    let entry = find_column columns old_name in
-    let old_col = Sql.Alter_action_attr.from_attr entry.attr |> enrich_with_source_kind entry.source_kind in
-    `Change (_new_col.Sql.Alter_action_attr.name, old_col, `Default)
+    (match find_column columns old_name with
+     | None -> `None
+     | Some entry ->
+       let old_col = Sql.Alter_action_attr.from_attr entry.attr |> enrich_with_source_kind entry.source_kind in
+       `Change (_new_col.Sql.Alter_action_attr.name, old_col, `Default))
   | `RenameTable _new_name -> `RenameTable table_name
   | `RenameColumn (old_name, new_name) -> `RenameColumn (new_name, old_name)
   | `RenameIndex (old_name, new_name) -> `RenameIndex (new_name, old_name)
