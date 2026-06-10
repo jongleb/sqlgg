@@ -65,7 +65,7 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
         count = 0;
       }
     let url =
-      lift [Avatars; Profiles] {
+      lift [Profiles; Avatars] {
         set = (fun _p -> ());
         read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
         column = ("a.url");
@@ -184,14 +184,14 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
         count = 0;
       }
     let url =
-      lift [Avatars; Profiles] {
+      lift [Profiles; Avatars] {
         set = (fun _p -> ());
         read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
         column = ("a.url");
         count = 0;
       }
     let label =
-      lift [Badges; Avatars; Profiles] {
+      lift [Profiles; Avatars; Badges] {
         set = (fun _p -> ());
         read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
         column = ("b.label");
@@ -303,14 +303,14 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
         count = 0;
       }
     let url =
-      lift [Avatars; Profiles] {
+      lift [Profiles; Avatars] {
         set = (fun _p -> ());
         read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
         column = ("a.url");
         count = 0;
       }
     let label =
-      lift [Badges; Profiles] {
+      lift [Profiles; Badges] {
         set = (fun _p -> ());
         read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
         column = ("b.label");

@@ -282,9 +282,9 @@ let gen_func_signature ~dynamic_infos ~module_kind ~index stmt =
   let name = choose_name stmt.props stmt.kind index |> String.uncapitalize_ascii in
   let subst = Props.get_all stmt.props "subst" in
   let dynamic_map = List.map (fun di -> (di.param_name, di.module_name)) dynamic_infos in
-  let format_input v = match List.assoc_opt v dynamic_map with
-    | Some module_name -> sprintf "(%s : _ %s.t)" v module_name
-    | None -> sprintf "~%s" v
+  let format_input v =
+    List.assoc_opt v dynamic_map
+    |> Option.map_default (fun module_name -> sprintf "(%s : _ %s.t)" v module_name) (sprintf "~%s" v)
   in
   let inputs = (subst @ names_of_vars stmt.vars) |> List.map format_input |> inline_values in
   let has_callback = has_row_callback stmt || (module_kind = `Single && dynamic_infos = []) in

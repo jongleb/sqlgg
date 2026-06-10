@@ -205,6 +205,11 @@ let resolve_column ~env {cname;tname} =
   | None -> find (Option.map_default (schema_of ~env) env.schema tname) cname
   | Some result -> result
 
+let resolve_column_opt ~env col =
+  match resolve_column ~env col with
+  | attr -> Some attr
+  | exception (Schema.Error _ | Failure _) -> None
+
 let rec merge_meta_into_params ~shallow meta expr =
   match expr, shallow with
   | Param (p, m), _ -> Param (p, Meta.merge_right meta m)
@@ -423,16 +428,16 @@ module From = struct
     List.concat_map (fun src -> src.rsrc_dynamic) (Option.map_default sources [] from)
 end
 
-let belongs_to source (a : table_name Schema.Source.Attr.t) =
-  let name = Sql.join_source_name source in
-  List.exists (fun (s : table_name) -> s.tn = name.tn) a.sources
-
 let pins_unique_row ~env source expr =
+  let belongs (a : table_name Schema.Source.Attr.t) =
+    let name = Sql.join_source_name source in
+    List.exists (fun (s : table_name) -> s.tn = name.tn) a.sources
+  in
   let own_column = function
     | Sql.Column c ->
-      (match resolve_column ~env c.collated with
-       | attr when belongs_to source attr -> Some attr
-       | _ | exception (Schema.Error _ | Failure _) -> None)
+      (match resolve_column_opt ~env c.collated with
+       | Some attr when belongs attr -> Some attr
+       | Some _ | None -> None)
     | _ -> None
   in
   let rec pinned acc = function
@@ -490,9 +495,9 @@ module Dynamic_join = struct
 
     let rec of_expr ~env = function
       | Sql.Column c ->
-        (match resolve_column ~env c.collated with
-         | attr -> Only (Names.of_seq (Seq.map (fun (s : table_name) -> s.tn) (List.to_seq attr.Schema.Source.Attr.sources)))
-         | exception (Schema.Error _ | Failure _) -> Anything)
+        (match resolve_column_opt ~env c.collated with
+         | Some attr -> Only (Names.of_seq (Seq.map (fun (s : table_name) -> s.tn) (List.to_seq attr.Schema.Source.Attr.sources)))
+         | None -> Anything)
       | SelectExpr _ -> Anything
       | e -> of_exprs ~env (sub_exprs e)
 
@@ -504,6 +509,8 @@ module Dynamic_join = struct
   end
 
   module Id_set = Set.Make(Sql.Join_id)
+  module Id_map = Map.Make(Sql.Join_id)
+  module Name_map = Map.Make(String)
 
   type droppable = {
     drop_source : Sql.join_source;
@@ -526,7 +533,7 @@ module Dynamic_join = struct
 
   type on_ref = {
     on_join : Sql.Join_id.t;
-    on_refs : Table_refs.t;
+    mentions : Id_set.t;
   }
 
   let mark ~env ~from ~columns ~where ~group ~having ~order final_schema from_params =
@@ -534,6 +541,7 @@ module Dynamic_join = struct
     match List.filter_map (candidate ~env) joins with
     | [] -> final_schema, from_params
     | candidates ->
+      let ids_of l = Id_set.of_list (List.map id l) in
       let outside =
         let projection_exprs =
           List.concat_map (fun c -> match c.Sql.value with
@@ -550,66 +558,76 @@ module Dynamic_join = struct
       in
       let on_refs =
         List.filter_map (fun { From.cond; pos; _ } -> match cond with
-          | Schema.Join.On e -> Some { on_join = Sql.Join_id.of_pos pos; on_refs = Table_refs.of_expr ~env e }
+          | Schema.Join.On e ->
+            let refs = Table_refs.of_expr ~env e in
+            let mentions = ids_of (List.filter (fun c -> Table_refs.may_refer c.drop_source refs) candidates) in
+            Some { on_join = Sql.Join_id.of_pos pos; mentions }
           | Default | Natural | Using _ -> None)
           joins
       in
-      let rec refine current =
-        let current_ids = Id_set.of_seq (Seq.map id (List.to_seq current)) in
-        let pins d r =
-          not (Sql.Join_id.equal r.on_join (id d))
-          && not (Id_set.mem r.on_join current_ids)
-          && Table_refs.may_refer d.drop_source r.on_refs
-        in
-        let keep d =
-          not (Table_refs.may_refer d.drop_source outside) && not (List.exists (pins d) on_refs)
-        in
-        match List.partition keep current with
-        | kept, [] -> kept
-        | kept, _ :: _ -> refine kept
+      let mention_map =
+        List.fold_left
+          (fun m r -> Id_map.add r.on_join (Id_set.remove r.on_join r.mentions) m)
+          Id_map.empty on_refs
       in
-      match refine candidates with
+      let mentions_of j = Id_map.find_opt j mention_map |> Option.default Id_set.empty in
+      let droppable_ids =
+        let start =
+          candidates
+          |> List.filter (fun d -> not (Table_refs.may_refer d.drop_source outside))
+          |> ids_of
+        in
+        let rec sweep dropped frontier =
+          if Id_set.is_empty frontier then dropped
+          else
+            let pinned = Id_set.fold (fun j acc -> Id_set.union acc (mentions_of j)) frontier Id_set.empty in
+            let killed = Id_set.inter pinned dropped in
+            sweep (Id_set.diff dropped killed) killed
+        in
+        let roots =
+          on_refs
+          |> List.filter_map (fun r -> if Id_set.mem r.on_join start then None else Some r.on_join)
+          |> Id_set.of_list
+        in
+        sweep start roots
+      in
+      match List.filter (fun d -> Id_set.mem (id d) droppable_ids) candidates with
       | [] -> final_schema, from_params
       | (_ :: _ as droppable) ->
         let deps_ids =
           let parents =
-            let tbl = Hashtbl.create (List.length droppable) in
-            List.iter (fun d ->
-              let ps =
-                match List.find_opt (fun r -> Sql.Join_id.equal r.on_join (id d)) on_refs with
-                | None -> []
-                | Some r ->
-                  List.filter (fun p ->
-                    not (Sql.Join_id.equal (id p) (id d)) && Table_refs.may_refer p.drop_source r.on_refs)
-                    droppable
-              in
-              Hashtbl.replace tbl (id d) ps)
-              droppable;
-            fun d -> Hashtbl.find tbl (id d)
+            List.fold_left (fun m d ->
+              Id_map.add (id d) (Id_set.inter (mentions_of (id d)) droppable_ids) m)
+              Id_map.empty droppable
           in
-          let closure d =
-            let rec go seen acc = function
-              | [] -> List.rev acc
-              | x :: rest ->
-                if Id_set.mem (id x) seen then go seen acc rest
-                else go (Id_set.add (id x) seen) (id x :: acc) (parents x @ rest)
+          let closure seed =
+            let rec go acc frontier =
+              if Id_set.is_empty frontier then acc
+              else
+                let acc = Id_set.union acc frontier in
+                let next = Id_set.fold (fun i s -> Id_set.union s (Id_map.find i parents)) frontier Id_set.empty in
+                go acc (Id_set.diff next acc)
             in
-            go Id_set.empty [] [d]
+            go Id_set.empty (Id_set.singleton seed)
           in
-          let closures = Hashtbl.create (List.length droppable) in
-          List.iter (fun d -> Hashtbl.replace closures (id d) (closure d)) droppable;
-          fun d -> Hashtbl.find closures (id d)
+          let memo = List.fold_left (fun m d -> Id_map.add (id d) (closure (id d)) m) Id_map.empty droppable in
+          fun d -> Id_map.find (id d) memo
         in
-        let owner (a : table_name Schema.Source.Attr.t) =
-          List.find_opt (fun d -> belongs_to d.drop_source a) droppable
+        let owner =
+          let owner_map =
+            List.fold_left (fun m d -> Name_map.add (Sql.join_source_name d.drop_source).tn d m)
+              Name_map.empty droppable
+          in
+          fun (a : table_name Schema.Source.Attr.t) ->
+            List.find_map (fun (s : table_name) -> Name_map.find_opt s.tn owner_map) a.sources
         in
         let mark_attr reachable (cp, a) =
           match owner a with
           | None -> reachable, (cp, a)
           | Some d ->
             let ids = deps_ids d in
-            let meta = Sql.Dynamic_join_meta.set ids a.attr.meta in
-            List.fold_left (fun acc i -> Id_set.add i acc) reachable ids,
+            let meta = Sql.Dynamic_join_meta.set (Id_set.elements ids) a.attr.meta in
+            Id_set.union reachable ids,
             (cp, { a with attr = { a.attr with meta } })
         in
         let reachable, final_schema =
@@ -621,12 +639,13 @@ module Dynamic_join = struct
             Id_set.empty final_schema
         in
         let holes =
-          match List.find_map (function DynamicWithSources (p, _) -> Some p | AttrWithSources _ -> None) final_schema with
-          | None -> []
-          | Some pid ->
+          final_schema
+          |> List.find_map (function DynamicWithSources (p, _) -> Some p | AttrWithSources _ -> None)
+          |> Option.map_default (fun pid ->
             droppable
             |> List.filter (fun d -> Id_set.mem (id d) reachable)
-            |> List.map (fun d -> Sql.DynamicSelectJoin (pid, d.drop_pos, d.drop_source))
+            |> List.map (fun d -> Sql.DynamicSelectJoin (pid, d.drop_pos, d.drop_source)))
+            []
         in
         match holes with
         | [] -> final_schema, from_params
@@ -639,7 +658,8 @@ module Dynamic_join = struct
             | SharedVarsGroup (_, id) -> fst id.pos
             | DynamicSelectJoin (_, (j1, _), _) -> j1
           in
-          final_schema, List.stable_sort (fun a b -> compare (lead a) (lead b)) (from_params @ holes)
+          let by_lead a b = Int.compare (lead a) (lead b) in
+          final_schema, List.merge by_lead from_params (List.sort ~cmp:by_lead holes)
 end
 
 (** resolve each name reference (Column, Inserted, etc) into ResValue or ResFun of corresponding type *)
@@ -1060,7 +1080,7 @@ and infer_schema ~not_null_keys env columns =
     | Fun { kind = Null_handling (Coalesce _ | If_null); parameters = e :: _; _ } -> propagate_meta ~env e
     (* Or for subselect which always requests only one column, TODO: consider CTE in subselect, perhaps a rare occurrence *)
     | SelectExpr ({ select_complete = { select = ({columns = [{ value = Expr ({ value; _ }, _); _ }]; from; _}, _); _ }; _ }, _) ->
-      let (env,_,_) = eval_nested ~child_scope:Subquery env from in
+      let (env,_,_) = eval_nested { env with scope = Subquery } from in
       propagate_meta ~env value
     | Case _
     | Value _
@@ -1085,7 +1105,7 @@ and infer_schema ~not_null_keys env columns =
       let make_col e =
         let _, t = resolve_types env e in
         let sources = match e with
-          | Column c -> (try (resolve_column ~env c.collated).sources with _ -> [])
+          | Column c -> (resolve_column ~env c.collated).sources
           | _ -> []
         in
         let col = {
@@ -1127,11 +1147,7 @@ and get_params_of_columns env =
     [DynamicSelect (p, List.map (fun ((n : param_id), e) -> 
       match e with
       | Some (Column { collated = { cname; tname }; _ }) when n.pos = dummy_pos ->
-        let sql =
-          match tname with
-          | Some t -> Printf.sprintf "%s.%s" (show_table_name t) cname
-          | None -> cname
-        in
+        let sql = tname |> Option.map_default (fun t -> Printf.sprintf "%s.%s" (show_table_name t) cname) cname in
         Verbatim (Option.default cname n.value, sql)
       | _ ->
         Simple (n, Option.map (fun e -> e |> resolve_types env |> fst |> get_params_of_res_expr env) e)
@@ -1225,14 +1241,14 @@ and ensure_res_expr = function
   | SelectExpr _ -> failwith "not implemented : ensure_res_expr for SELECT"
   | OptionActions _ -> failwith  "BoolChoice is used in WHERE expr only"
 
-and eval_nested ~child_scope env nested =
+and eval_nested env nested =
   (* nested selects generate new fresh schema in scope, cannot refer to outer schema,
     but can refer to attributes of tables through `tables` *)
   let env = { env with schema = [] } in
   (* FIXME resolved table schema depends on join (nullability with left), this is resolving too early *)
   match nested with
   | Some (t,l) ->
-    let resolve = resolve_source ~child_scope env in
+    let resolve = resolve_source env in
     let from = {
       From.base = resolve t;
       joins = List.map (fun loc ->
@@ -1333,7 +1349,8 @@ and eval_select ~order env { columns; from; where; group; having; } =
     | (Top_level | From_passthrough) when is_passthrough -> From_passthrough
     | Top_level | From_passthrough | Subquery -> Subquery
   in
-  let (env,p2,resolved_from) = eval_nested ~child_scope env from in
+  let from_env, p2, resolved_from = eval_nested { env with scope = child_scope } from in
+  let env = { from_env with scope = env.scope } in
   let env = { env with query_has_grouping = List.length group > 0 } in
   (* Extract IS NOT NULL predicates from WHERE and HAVING *)
   let not_null_keys_where = extract_not_null_column_keys env where in
@@ -1384,7 +1401,7 @@ and eval_select ~order env { columns; from; where; group; having; } =
   (final_schema, p1 @ p2 @ p3 @ p4 @ p5, env, cardinality)
 
 (** @return final schema, params and tables that can be referenced by outside scope *)
-and resolve_source ~child_scope env (x, alias) =
+and resolve_source env (x, alias) =
   let resolve_schema_with_alias schema = begin match alias with 
     | Some { table_name; column_aliases = Some col_schema } -> 
       let schema = Schema.compound ((List.map (fun attr -> Schema.Source.Attr.{sources=[]; attr;})) col_schema) schema in
@@ -1396,7 +1413,7 @@ and resolve_source ~child_scope env (x, alias) =
   end in
   match x with
   | `Select select ->
-    let (s,p,_) = eval_select_full { env with scope = child_scope } select in
+    let (s,p,_) = eval_select_full env select in
     let tbl_alias = Option.map (fun { table_name; _ } -> table_name) alias in
     let add_src i = { i with Schema.Source.Attr.sources = List.concat [option_list tbl_alias; i.Schema.Source.Attr.sources] } in
     let dyn = List.filter_map (function
@@ -1410,7 +1427,7 @@ and resolve_source ~child_scope env (x, alias) =
     let s, tables = resolve_schema_with_alias s in
     { rsrc_schema = s; rsrc_params = p; rsrc_tables = tables; rsrc_dynamic = dyn; rsrc_physical_table = None }
   | `Nested from ->
-    let (env,p,resolved_from) = eval_nested ~child_scope env (Some from) in
+    let (env,p,resolved_from) = eval_nested env (Some from) in
     let s = infer_schema ~not_null_keys:[] env [dummy_loc All] in
     if alias <> None then failwith "No alias allowed on nested tables";
     let s = List.map (function 
@@ -1861,7 +1878,7 @@ let rec eval (stmt:Sql.stmt) =
     [], params @ p3 @ (List.map (fun p -> Single (p, Meta.empty())) lim), Update (Some table)
   | UpdateMulti (tables,ss,w,o,lim) ->
     let env = { empty_env with is_update = true } in
-    let sources = List.map (fun src -> resolve_source ~child_scope:Subquery env ((`Nested src), None)) tables in
+    let sources = List.map (fun src -> resolve_source { env with scope = Subquery } ((`Nested src), None)) tables in
     let tables = List.map (fun src -> src.rsrc_tables) sources |> List.flatten in
     let params = update_tables ~env sources ss w in
     let p3 = params_of_order o [] { env with schema = Schema.cross_all @@ List.map (fun src -> src.rsrc_schema) sources; tables } in
