@@ -448,21 +448,17 @@ let pins_unique_row ~env source expr =
     | _ :: tl -> pinned acc tl
   in
   let attrs = pinned [] [expr] in
-  let constraints = List.map (fun (a : table_name Schema.Source.Attr.t) -> a.attr.extra) attrs in
-  let single =
-    List.exists (fun c -> Constraints.mem PrimaryKey c || Constraints.mem Unique c) constraints
+  let constraints =
+    List.fold_left (fun acc (a : table_name Schema.Source.Attr.t) -> Constraints.union acc a.attr.extra)
+      Constraints.empty attrs
   in
-  let composite =
-    let ids = Constraint.StringSet.of_seq (Seq.map (fun a -> a.Schema.Source.Attr.attr.name) (List.to_seq attrs)) in
-    List.exists (fun c ->
-      List.exists (function
-        | Constraint.Composite (CompositePrimary s)
-        | Constraint.Composite (CompositeUnique s) -> Constraint.StringSet.subset s ids
-        | _ -> false)
-        (Constraints.elements c))
-      constraints
+  let ids = Constraint.StringSet.of_seq (Seq.map (fun a -> a.Schema.Source.Attr.attr.name) (List.to_seq attrs)) in
+  let pins = function
+    | Constraint.PrimaryKey | Unique -> true
+    | Composite (CompositePrimary s) | Composite (CompositeUnique s) -> Constraint.StringSet.subset s ids
+    | NotNull | Null | Autoincrement | OnConflict _ | WithDefault -> false
   in
-  single || composite
+  Constraints.exists pins constraints
 
 module Dynamic_join = struct
 
@@ -575,7 +571,7 @@ module Dynamic_join = struct
       match refine candidates with
       | [] -> final_schema, from_params
       | (_ :: _ as droppable) ->
-        let deps =
+        let deps_ids =
           let parents =
             let tbl = Hashtbl.create (List.length droppable) in
             List.iter (fun d ->
@@ -596,7 +592,7 @@ module Dynamic_join = struct
               | [] -> List.rev acc
               | x :: rest ->
                 if Id_set.mem (id x) seen then go seen acc rest
-                else go (Id_set.add (id x) seen) (x :: acc) (parents x @ rest)
+                else go (Id_set.add (id x) seen) (id x :: acc) (parents x @ rest)
             in
             go Id_set.empty [] [d]
           in
@@ -607,35 +603,27 @@ module Dynamic_join = struct
         let owner (a : table_name Schema.Source.Attr.t) =
           List.find_opt (fun d -> belongs_to d.drop_source a) droppable
         in
-        let mark_attr (cp, a) =
+        let mark_attr reachable (cp, a) =
           match owner a with
-          | None -> (cp, a)
+          | None -> reachable, (cp, a)
           | Some d ->
-            let meta = Sql.Dynamic_join_meta.set (List.map id (deps d)) a.attr.meta in
+            let ids = deps_ids d in
+            let meta = Sql.Dynamic_join_meta.set ids a.attr.meta in
+            List.fold_left (fun acc i -> Id_set.add i acc) reachable ids,
             (cp, { a with attr = { a.attr with meta } })
         in
-        let final_schema =
-          List.map (function
-            | DynamicWithSources (p, cols) -> DynamicWithSources (p, List.map mark_attr cols)
-            | AttrWithSources _ as x -> x)
-            final_schema
+        let reachable, final_schema =
+          List.fold_left_map (fun acc -> function
+            | DynamicWithSources (p, cols) ->
+              let acc, cols = List.fold_left_map mark_attr acc cols in
+              acc, DynamicWithSources (p, cols)
+            | AttrWithSources _ as x -> acc, x)
+            Id_set.empty final_schema
         in
         let holes =
           match List.find_map (function DynamicWithSources (p, _) -> Some p | AttrWithSources _ -> None) final_schema with
           | None -> []
           | Some pid ->
-            let reachable =
-              final_schema
-              |> List.to_seq
-              |> Seq.concat_map (function
-                | DynamicWithSources (_, cols) -> List.to_seq cols
-                | AttrWithSources _ -> Seq.empty)
-              |> Seq.concat_map (fun (_, a) ->
-                match owner a with
-                | Some d -> Seq.map id (List.to_seq (deps d))
-                | None -> Seq.empty)
-              |> Id_set.of_seq
-            in
             droppable
             |> List.filter (fun d -> Id_set.mem (id d) reachable)
             |> List.map (fun d -> Sql.DynamicSelectJoin (pid, d.drop_pos, d.drop_source))

@@ -689,10 +689,12 @@ let dynamic_join_ctors vars =
     | TupleList _ | OptionActionChoice _ | SharedVarsGroup _ -> None) vars
   in
   let table source = source.Sql.table.tn in
+  let occurrences = Hashtbl.create (List.length joins) in
+  List.iter (fun (_, s) ->
+    Hashtbl.replace occurrences (table s) (1 + Option.default 0 (Hashtbl.find_opt occurrences (table s)))) joins;
   let base source =
     let name = (Sql.join_source_name source).tn in
-    let same_table_twice = List.length (List.filter (fun (_, s) -> table s = table source) joins) > 1 in
-    if same_table_twice && name <> table source then table source ^ "_" ^ name else table source
+    if Hashtbl.find occurrences (table source) > 1 && name <> table source then table source ^ "_" ^ name else table source
   in
   let ctors = List.map String.capitalize_ascii (Name.idents ~prefix:"join" (List.map (fun (_, s) -> base s) joins)) in
   List.map2 (fun (join_id, _) ctor -> join_id, ctor) joins ctors
