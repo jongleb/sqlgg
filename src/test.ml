@@ -53,10 +53,8 @@ let assert_params_with_meta stmt meta =
           | Single (p, m) -> (p, m) 
           | SingleIn (p, m) -> (p, m) 
           | ChoiceIn { vars = [ SingleIn (p, m) ]; _ } -> (p, m)
-          | ChoiceIn _
-          | SharedVarsGroup _ | OptionActionChoice _ 
-          | Choice _   | TupleList _ -> assert false
           | DynamicSelect _ -> failwith "dynamic selects not supported for this host language"
+          | _ -> assert false
           ) 
         stmt.Gen.vars)
 
@@ -64,7 +62,7 @@ let do_test ?kind sql schema params =
   let stmt = parse sql in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string schema (schema_to_attrs stmt.schema);
   assert_equal ~msg:"params" ~cmp:cmp_params ~printer:Sql.show_params params
-  (List.map (function Single (p, _) -> p | SharedVarsGroup _ | OptionActionChoice _ | SingleIn _ | Choice _ | ChoiceIn _ | TupleList _ -> assert false | DynamicSelect _ -> failwith "dynamic selects not supported for this host language") stmt.vars);
+  (List.map (function Single (p, _) -> p | DynamicSelect _ -> failwith "dynamic selects not supported for this host language" | _ -> assert false) stmt.vars);
 
   match kind with
   | Some k -> assert_equal ~msg:"kind" ~printer:[%derive.show: Stmt.kind] k stmt.kind
