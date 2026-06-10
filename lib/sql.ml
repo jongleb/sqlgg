@@ -569,6 +569,7 @@ and var =
 | ChoiceIn of { param: param_id; kind : in_or_not_in; vars: var list }
 | Choice of param_id * ctor list
 | DynamicSelect of param_id * ctor list
+| DynamicSelectJoin of param_id * pos * string
 | TupleList of param_id * tuple_list_kind
 (* It differs from Choice that in this case we should generate sql "TRUE", it doesn't seem reusable *)
 | OptionActionChoice of param_id * var list * (pos * pos) * option_actions_kind

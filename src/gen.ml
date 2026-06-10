@@ -74,6 +74,7 @@ type sql =
   | SubstIn of Sql.Type.t Sql.param * Sql.Meta.t
   | DynamicIn of Sql.param_id * [`In | `NotIn] * sql list
   | SubstTuple of Sql.param_id * Sql.tuple_list_kind
+  | DynamicSelectJoin of Sql.param_id * string * string
 
 and sql_dynamic_ctor = { 
   ctor: Sql.param_id; 
@@ -123,6 +124,12 @@ let substitute_vars s vars subst_param =
       assert (i1 > i);
       let acc = Dynamic (name, dyn) :: Static (String.slice ~first:i ~last:i1 s) :: acc in
       loop s acc i2 parami tl
+    | DynamicSelectJoin (name, (j1,j2), ctor) :: tl ->
+      assert (j2 > j1);
+      assert (j1 > i);
+      let join_text = String.trim (String.slice ~first:j1 ~last:j2 s) in
+      let acc = DynamicSelectJoin (name, ctor, join_text) :: Static (String.slice ~first:i ~last:j1 s) :: acc in
+      loop s acc j2 parami tl
     | TupleList (id, Where_in { value = (types, in_not_in); pos = (j1, j2) }) :: tl ->
       let (i1,i2) = id.pos in
       assert (i2 > i1);
@@ -292,7 +299,8 @@ let rec find_param_ids l =
       | ChoiceIn { param; vars; _ } -> find_param_ids vars @ [param]
       | SharedVarsGroup (vars, _) -> find_param_ids vars
       | TupleList (id, _) -> [ id ]
-      | DynamicSelect (id, _) -> [ id ])
+      | DynamicSelect (id, _) -> [ id ]
+      | DynamicSelectJoin _ -> [])
     l
 
 let names_of_vars l =
@@ -311,7 +319,8 @@ let rec params_only l =
       | OptionActionChoice _
       | Choice _ -> fail "dynamic choices not supported for this host language"
       | TupleList _ -> []
-      | DynamicSelect _ -> fail "dynamic selects not supported for this host language (params_only)")
+      | DynamicSelect _ -> fail "dynamic selects not supported for this host language (params_only)"
+      | DynamicSelectJoin _ -> [])
     l
 
 let rec inparams_only l =

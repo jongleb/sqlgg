@@ -1,0 +1,9 @@
+CREATE TABLE users (id INT PRIMARY KEY, name TEXT, manager_id INT);
+-- u2.manager_id is not unique -> keep
+-- [sqlgg] dynamic_select=true
+-- @bad
+SELECT u1.id, u2.name FROM users u1 LEFT JOIN users u2 ON u2.manager_id = u1.id;
+-- u2.id is PRIMARY KEY -> droppable
+-- [sqlgg] dynamic_select=true
+-- @good
+SELECT u1.id, u2.name FROM users u1 LEFT JOIN users u2 ON u2.id = u1.manager_id;

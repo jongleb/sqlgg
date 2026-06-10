@@ -442,38 +442,56 @@ Test DynamicSelect edge: single column:
   
     module IO = Sqlgg_io.Blocking
     module Single_col_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
@@ -482,26 +500,26 @@ Test DynamicSelect edge: single column:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -510,14 +528,14 @@ Test DynamicSelect edge: single column:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -547,45 +565,63 @@ DynamicSelect: SELECT * remains static select:
   
     module IO = Sqlgg_io.Blocking
     module All_cols_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = "t.id";
           count = 0;
         }
       let name =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = "t.name";
@@ -594,26 +630,26 @@ DynamicSelect: SELECT * remains static select:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -622,14 +658,14 @@ DynamicSelect: SELECT * remains static select:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -659,52 +695,70 @@ DynamicSelect: SELECT * with expression in same list:
   
     module IO = Sqlgg_io.Blocking
     module All_cols_plus_expr_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = "t.id";
           count = 0;
         }
       let name =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = "t.name";
           count = 0;
         }
       let id_plus =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id + 2");
@@ -713,26 +767,26 @@ DynamicSelect: SELECT * with expression in same list:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -741,14 +795,14 @@ DynamicSelect: SELECT * with expression in same list:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -778,52 +832,70 @@ DynamicSelect: auto names for expressions without alias:
   
     module IO = Sqlgg_io.Blocking
     module Auto_names_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let col1 =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id + 1");
           count = 0;
         }
       let col2 =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id * 2");
           count = 0;
         }
       let name =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
@@ -832,26 +904,26 @@ DynamicSelect: auto names for expressions without alias:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -860,14 +932,14 @@ DynamicSelect: auto names for expressions without alias:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -897,38 +969,56 @@ Test DynamicSelect edge: expression at first position:
   
     module IO = Sqlgg_io.Blocking
     module Expr_first_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id_plus =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id + 1");
@@ -937,26 +1027,26 @@ Test DynamicSelect edge: expression at first position:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -965,14 +1055,14 @@ Test DynamicSelect edge: expression at first position:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -1002,45 +1092,63 @@ Test DynamicSelect edge: literal only:
   
     module IO = Sqlgg_io.Blocking
     module Literal_only_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let greeting =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
           column = ("'hello'");
           count = 0;
         }
       let answer =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("42");
@@ -1049,26 +1157,26 @@ Test DynamicSelect edge: literal only:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -1077,14 +1185,14 @@ Test DynamicSelect edge: literal only:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -1114,66 +1222,84 @@ Test DynamicSelect edge: many columns:
   
     module IO = Sqlgg_io.Blocking
     module Many_cols_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let a =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("a");
           count = 0;
         }
       let b =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("b");
           count = 0;
         }
       let c =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("c");
           count = 0;
         }
       let d =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("d");
           count = 0;
         }
       let e =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("e");
@@ -1182,26 +1308,26 @@ Test DynamicSelect edge: many columns:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -1210,14 +1336,14 @@ Test DynamicSelect edge: many columns:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -1247,52 +1373,70 @@ Test DynamicSelect edge: no space after commas:
   
     module IO = Sqlgg_io.Blocking
     module No_space_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
         }
       let name =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
           count = 0;
         }
       let price =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price");
@@ -1301,26 +1445,26 @@ Test DynamicSelect edge: no space after commas:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -1329,14 +1473,14 @@ Test DynamicSelect edge: no space after commas:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -1366,45 +1510,63 @@ Test DynamicSelect edge: minimal spacing:
   
     module IO = Sqlgg_io.Blocking
     module Tight_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let a =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("a");
           count = 0;
         }
       let b =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("b");
@@ -1413,26 +1575,26 @@ Test DynamicSelect edge: minimal spacing:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -1441,14 +1603,14 @@ Test DynamicSelect edge: minimal spacing:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -1478,38 +1640,56 @@ Test DynamicSelect edge: column without alias gets auto name:
   
     module IO = Sqlgg_io.Blocking
     module No_alias_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let col1 =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id + 1");
@@ -1518,26 +1698,26 @@ Test DynamicSelect edge: column without alias gets auto name:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -1546,14 +1726,14 @@ Test DynamicSelect edge: column without alias gets auto name:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -1583,45 +1763,63 @@ Test DynamicSelect with dynamic_select flag:
   
     module IO = Sqlgg_io.Blocking
     module Select_ids2_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("id");
           count = 0;
         }
       let balance =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("balance");
@@ -1632,7 +1830,7 @@ Test DynamicSelect with dynamic_select flag:
           T.set_param_Int p t;
           ()
         in
-        {
+        lift [] {
           set = _set_t_plus_one;
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("" ^ "?" ^ " + 1");
@@ -1643,7 +1841,7 @@ Test DynamicSelect with dynamic_select flag:
           T.set_param_Int p seven;
           ()
         in
-        {
+        lift [] {
           set = _set_sub_result;
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("(SELECT 6 + " ^ "?" ^ " LIMIT 1)");
@@ -1652,28 +1850,28 @@ Test DynamicSelect with dynamic_select flag:
   
       let select db (col : _ t) ~t callback =
         let set_params stmt =
-          let p = T.start_params stmt (1 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (1 + col.projection.count) in
+          col.projection.set p;
           T.set_param_Int p t;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM accounts WHERE id > ?")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM accounts WHERE id > ?")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) ~t callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (1 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (1 + col.projection.count) in
+            col.projection.set p;
             T.set_param_Int p t;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM accounts WHERE id > ?")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM accounts WHERE id > ?")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -1682,15 +1880,15 @@ Test DynamicSelect with dynamic_select flag:
       module List = struct
         let select db (col : _ t) ~t callback =
           let set_params stmt =
-            let p = T.start_params stmt (1 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (1 + col.projection.count) in
+            col.projection.set p;
             T.set_param_Int p t;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM accounts WHERE id > ?")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM accounts WHERE id > ?")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -1720,59 +1918,77 @@ Test DynamicSelect with two dynamic columns:
   
     module IO = Sqlgg_io.Blocking
     module Multi_dynamic_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
         }
       let name =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
           count = 0;
         }
       let price =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price");
           count = 0;
         }
       let doubled_price =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price * 2");
@@ -1781,26 +1997,26 @@ Test DynamicSelect with two dynamic columns:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM items")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM items")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM items")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM items")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -1809,14 +2025,14 @@ Test DynamicSelect with two dynamic columns:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM items")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM items")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -1846,52 +2062,70 @@ Test DynamicSelect with Verbatim branches:
   
     module IO = Sqlgg_io.Blocking
     module With_verbatim_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
         }
       let status =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("status");
           count = 0;
         }
       let literal_status =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
           column = ("'active'");
@@ -1900,26 +2134,26 @@ Test DynamicSelect with Verbatim branches:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM users")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM users")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM users")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM users")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -1928,14 +2162,14 @@ Test DynamicSelect with Verbatim branches:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM users")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM users")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -1965,45 +2199,63 @@ Test DynamicSelect at beginning of SELECT:
   
     module IO = Sqlgg_io.Blocking
     module First_col_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let a =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("a");
           count = 0;
         }
       let b =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("b");
@@ -2012,26 +2264,26 @@ Test DynamicSelect at beginning of SELECT:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM data")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM data")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM data")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM data")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -2040,14 +2292,14 @@ Test DynamicSelect at beginning of SELECT:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM data")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM data")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -2077,45 +2329,63 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
   
     module IO = Sqlgg_io.Blocking
     module With_subquery_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
         }
       let sub x =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("(SELECT " ^ (match x with `A -> " ( 1 ) " | `B -> " ( 2 ) ") ^ " LIMIT 1)");
@@ -2124,26 +2394,26 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t1")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t1")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t1")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t1")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -2152,14 +2422,14 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t1")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t1")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -2194,52 +2464,70 @@ Test DynamicSelect with module annotation:
   
     module IO = Sqlgg_io.Blocking
     module With_module_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (Product_id.get_column (T.get_column_int64 row idx), idx + 1));
           column = ("id");
           count = 0;
         }
       let name =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
           count = 0;
         }
       let price =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price");
@@ -2248,14 +2536,14 @@ Test DynamicSelect with module annotation:
   
       let select db (col : _ t) ~id =
         let set_params stmt =
-          let p = T.start_params stmt (1 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (1 + col.projection.count) in
+          col.projection.set p;
           T.set_param_int64 p (Product_id.set_param id);
           T.finish_params p
         in
         T.select_one_maybe db
-        ("SELECT " ^ col.column ^ " FROM wrapped WHERE id = ?")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in (__sqlgg_r_col))
+        ("SELECT " ^ col.projection.column ^ " FROM wrapped WHERE id = ?")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in (__sqlgg_r_col))
   
     end
   
@@ -2282,45 +2570,63 @@ Test DynamicSelect with LIMIT 1 (select_one):
   
     module IO = Sqlgg_io.Blocking
     module Select_one_product_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let name =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
           count = 0;
         }
       let price =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price");
@@ -2329,14 +2635,14 @@ Test DynamicSelect with LIMIT 1 (select_one):
   
       let select db (col : _ t) ~id =
         let set_params stmt =
-          let p = T.start_params stmt (1 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (1 + col.projection.count) in
+          col.projection.set p;
           T.set_param_Int p id;
           T.finish_params p
         in
         T.select_one_maybe db
-        ("SELECT " ^ col.column ^ " FROM products WHERE id = ? LIMIT 1")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in (__sqlgg_r_col))
+        ("SELECT " ^ col.projection.column ^ " FROM products WHERE id = ? LIMIT 1")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in (__sqlgg_r_col))
   
     end
   
@@ -2370,59 +2676,77 @@ Test DynamicSelect comprehensive list:
   
     module IO = Sqlgg_io.Blocking
     module Ultimate_combo_simple2_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("id");
           count = 0;
         }
       let name =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
           count = 0;
         }
       let category =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("category");
           count = 0;
         }
       let stock =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("stock");
@@ -2433,7 +2757,7 @@ Test DynamicSelect comprehensive list:
           T.set_param_Int p tax_rate;
           ()
         in
-        {
+        lift [] {
           set = _set_price_with_tax;
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price * (1 + " ^ "?" ^ ")");
@@ -2442,30 +2766,30 @@ Test DynamicSelect comprehensive list:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
         ("SELECT\n\
-     " ^ col.column ^ "\n\
+     " ^ col.projection.column ^ "\n\
   FROM products")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
           ("SELECT\n\
-     " ^ col.column ^ "\n\
+     " ^ col.projection.column ^ "\n\
   FROM products")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -2474,16 +2798,16 @@ Test DynamicSelect comprehensive list:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
           ("SELECT\n\
-     " ^ col.column ^ "\n\
+     " ^ col.projection.column ^ "\n\
   FROM products")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -2519,38 +2843,56 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
   
     module IO = Sqlgg_io.Blocking
     module Bare_param_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
@@ -2561,7 +2903,7 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
           T.set_param_Text p custom_val;
           ()
         in
-        {
+        lift [] {
           set = _set_custom;
           read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
           column = ("" ^ "?");
@@ -2570,28 +2912,28 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
   
       let select db (col : _ t) ~id callback =
         let set_params stmt =
-          let p = T.start_params stmt (1 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (1 + col.projection.count) in
+          col.projection.set p;
           T.set_param_Int p id;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t WHERE id = ?")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t WHERE id = ?")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) ~id callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (1 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (1 + col.projection.count) in
+            col.projection.set p;
             T.set_param_Int p id;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t WHERE id = ?")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t WHERE id = ?")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -2600,15 +2942,15 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
       module List = struct
         let select db (col : _ t) ~id callback =
           let set_params stmt =
-            let p = T.start_params stmt (1 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (1 + col.projection.count) in
+            col.projection.set p;
             T.set_param_Int p id;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t WHERE id = ?")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t WHERE id = ?")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -2638,42 +2980,60 @@ Virtual select: consecutive params as columns:
   
     module IO = Sqlgg_io.Blocking
     module Multi_param_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let col_a a =
         let _set_col_a p =
           T.set_param_Int p a;
           ()
         in
-        {
+        lift [] {
           set = _set_col_a;
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("" ^ "?");
@@ -2684,7 +3044,7 @@ Virtual select: consecutive params as columns:
           T.set_param_Text p b;
           ()
         in
-        {
+        lift [] {
           set = _set_col_b;
           read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
           column = ("" ^ "?");
@@ -2693,26 +3053,26 @@ Virtual select: consecutive params as columns:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -2721,14 +3081,14 @@ Virtual select: consecutive params as columns:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -2758,52 +3118,70 @@ Virtual select: mixed columns and params without spaces after commas:
   
     module IO = Sqlgg_io.Blocking
     module Tight_commas_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
         }
       let name =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("name");
           count = 0;
         }
       let price =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("price");
@@ -2814,7 +3192,7 @@ Virtual select: mixed columns and params without spaces after commas:
           T.set_param_Int p extra;
           ()
         in
-        {
+        lift [] {
           set = _set_bonus;
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("" ^ "?");
@@ -2823,28 +3201,28 @@ Virtual select: mixed columns and params without spaces after commas:
   
       let select db (col : _ t) ~id callback =
         let set_params stmt =
-          let p = T.start_params stmt (1 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (1 + col.projection.count) in
+          col.projection.set p;
           T.set_param_Int p id;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t WHERE id = ?")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t WHERE id = ?")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) ~id callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (1 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (1 + col.projection.count) in
+            col.projection.set p;
             T.set_param_Int p id;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t WHERE id = ?")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t WHERE id = ?")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -2853,15 +3231,15 @@ Virtual select: mixed columns and params without spaces after commas:
       module List = struct
         let select db (col : _ t) ~id callback =
           let set_params stmt =
-            let p = T.start_params stmt (1 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (1 + col.projection.count) in
+            col.projection.set p;
             T.set_param_Int p id;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t WHERE id = ?")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t WHERE id = ?")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -2891,45 +3269,63 @@ Virtual select: subquery expression as dynamic column:
   
     module IO = Sqlgg_io.Blocking
     module Subquery_col_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
         }
       let rank =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("(SELECT COUNT(*) FROM t t2 WHERE t2.id <= t.id)");
@@ -2938,26 +3334,26 @@ Virtual select: subquery expression as dynamic column:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -2966,14 +3362,14 @@ Virtual select: subquery expression as dynamic column:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -3009,45 +3405,63 @@ Virtual select: CASE WHEN as dynamic column:
         let proj = function  | `Active -> "active"| `Inactive -> "inactive"
       end)
     module Case_col_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
         }
       let label =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (Enum_0.get_column row idx, idx + 1));
           column = ("CASE WHEN status = 1 THEN 'active' ELSE 'inactive' END");
@@ -3056,26 +3470,26 @@ Virtual select: CASE WHEN as dynamic column:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -3084,14 +3498,14 @@ Virtual select: CASE WHEN as dynamic column:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -3121,45 +3535,63 @@ Virtual select: function call with multiple args as column:
   
     module IO = Sqlgg_io.Blocking
     module Func_col_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
           count = 0;
         }
       let full_name =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("CONCAT(first_name, ' ', last_name)");
@@ -3168,26 +3600,26 @@ Virtual select: function call with multiple args as column:
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -3196,14 +3628,14 @@ Virtual select: function call with multiple args as column:
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -3233,38 +3665,56 @@ Virtual select: arithmetic with param at expression start:
   
     module IO = Sqlgg_io.Blocking
     module Param_start_expr_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let id =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("id");
@@ -3275,7 +3725,7 @@ Virtual select: arithmetic with param at expression start:
           begin match multiplier with None -> T.set_param_null p | Some v -> T.set_param_Decimal p v end;
           ()
         in
-        {
+        lift [] {
           set = _set_scaled;
           read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
           column = ("" ^ "?" ^ " * price");
@@ -3284,28 +3734,28 @@ Virtual select: arithmetic with param at expression start:
   
       let select db (col : _ t) ~id callback =
         let set_params stmt =
-          let p = T.start_params stmt (1 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (1 + col.projection.count) in
+          col.projection.set p;
           T.set_param_Int p id;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t WHERE id = ?")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t WHERE id = ?")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) ~id callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (1 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (1 + col.projection.count) in
+            col.projection.set p;
             T.set_param_Int p id;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t WHERE id = ?")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t WHERE id = ?")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -3314,15 +3764,15 @@ Virtual select: arithmetic with param at expression start:
       module List = struct
         let select db (col : _ t) ~id callback =
           let set_params stmt =
-            let p = T.start_params stmt (1 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (1 + col.projection.count) in
+            col.projection.set p;
             T.set_param_Int p id;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t WHERE id = ?")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t WHERE id = ?")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
@@ -3359,45 +3809,63 @@ Virtual select: tab-separated columns (non-space whitespace):
   
     module IO = Sqlgg_io.Blocking
     module Tab_sep_col = struct
-      type 'a t = {
+      type source = |
+  
+      (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+      type 'a projection = {
         set: T.params -> unit;
         read: T.row -> int -> 'a * int;
         column: string;
         count: int;
       }
   
+      (* a selector: a projection plus the sources it pulls into FROM *)
+      type 'a t = {
+        projection: 'a projection;
+        deps: source list;
+      }
+  
       let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
+        projection = {
+          set = (fun _p -> ());
+          read = (fun _row idx -> (x, idx));
+          column = "";
+          count = 0;
+        };
+        deps = [];
       }
   
       let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
+        projection = {
+          set = (fun p -> f.projection.set p; a.projection.set p);
+          read = (fun row idx ->
+            let (vf, i1) = f.projection.read row idx in
+            let (va, i2) = a.projection.read row i1 in
+            (vf va, i2));
+          column = (match f.projection.column, a.projection.column with
+            | "", c | c, "" -> c
+            | c1, c2 -> c1 ^ ", " ^ c2);
+          count = f.projection.count + a.projection.count;
+        };
+        deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
       }
   
       let map f a = apply (pure f) a
   
       let (let+) t f = map f t
       let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+  
+      (* lift a pure projection into a selector, tagging the sources it depends on *)
+      let lift deps projection = { projection; deps }
       let a =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
           column = ("a");
           count = 0;
         }
       let b =
-        {
+        lift [] {
           set = (fun _p -> ());
           read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
           column = ("b");
@@ -3406,26 +3874,26 @@ Virtual select: tab-separated columns (non-space whitespace):
   
       let select db (col : _ t) callback =
         let set_params stmt =
-          let p = T.start_params stmt (0 + col.count) in
-          col.set p;
+          let p = T.start_params stmt (0 + col.projection.count) in
+          col.projection.set p;
           T.finish_params p
         in
         T.select db
-        ("SELECT " ^ col.column ^ " FROM t")
-        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+        ("SELECT " ^ col.projection.column ^ " FROM t")
+        set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col)
   
       module Fold = struct
         let select db (col : _ t) callback acc =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref acc in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col !r_acc)))
           (fun () -> IO.return !r_acc)
   
@@ -3434,14 +3902,14 @@ Virtual select: tab-separated columns (non-space whitespace):
       module List = struct
         let select db (col : _ t) callback =
           let set_params stmt =
-            let p = T.start_params stmt (0 + col.count) in
-            col.set p;
+            let p = T.start_params stmt (0 + col.projection.count) in
+            col.projection.set p;
             T.finish_params p
           in
           let r_acc = ref [] in
           IO.(>>=) (T.select db
-          ("SELECT " ^ col.column ^ " FROM t")
-          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.read row 0 in callback
+          ("SELECT " ^ col.projection.column ^ " FROM t")
+          set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   

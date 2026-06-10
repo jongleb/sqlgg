@@ -344,6 +344,8 @@ let match_variant_pattern i name args ~is_poly =
             else ((seen_wildcards, s :: seen_names, false), Some s)
         | DynamicSelect ({ value = None; _ }, _) ->
           ((seen_wildcards, seen_names, all_wc), Some "_")
+        | DynamicSelectJoin _ ->
+          ((seen_wildcards, seen_names, all_wc), None)
       ) ([], [], true) arg_list
     in
     let patterns = List.filter_map identity patterns in
@@ -396,6 +398,7 @@ let rec has_set_params vars =
         | Verbatim _ -> false
       ) ctors
     | DynamicSelect _ -> false
+    | DynamicSelectJoin _ -> false
   ) vars
   
 let set_var index var =
@@ -443,7 +446,7 @@ let set_var index var =
                | Some name -> Hashtbl.add seen name (); true  
                | None -> true)
             | ChoiceIn _ | OptionActionChoice _ 
-            | SharedVarsGroup _ | Choice _ | DynamicSelect _ -> true
+            | SharedVarsGroup _ | Choice _ | DynamicSelect _ | DynamicSelectJoin _ -> true
           in
           if use_var then
             let pattern = match aux index var with
@@ -518,6 +521,7 @@ let set_var index var =
           output "end;"
         )
     | DynamicSelect _ -> None
+    | DynamicSelectJoin _ -> None
   in
   Option.may (fun g -> g ()) (aux index var)
 
@@ -532,6 +536,7 @@ let rec eval_count_params vars =
       | OptionActionChoice (param_id, vars, _, _) -> `OptionActionChoice (param_id, vars)
       | Choice (name, c) -> `Choice (name, c)
       | DynamicSelect _ -> `Static false
+      | DynamicSelectJoin _ -> `Static false
     in
     let rec group_vars (static, choices, bool_choices, choices_in) = function
       | [] -> (List.rev static, List.rev choices, List.rev bool_choices, List.rev choices_in)
@@ -611,7 +616,8 @@ let rec exclude_in_vars l =
       | Choice (param_id, ctors) ->
         Some (Choice (param_id, List.map exclude_in_vars_in_constructors ctors))
       | DynamicSelect (param_id, ctors) ->
-        Some (DynamicSelect (param_id, List.map exclude_in_vars_in_constructors ctors)))
+        Some (DynamicSelect (param_id, List.map exclude_in_vars_in_constructors ctors))
+      | DynamicSelectJoin _ as v -> Some v)
     l
 
 and exclude_in_vars_in_constructors = function
@@ -705,6 +711,11 @@ let make_sql l =
           (match_variant_pattern i ctor.value args ~is_poly:is_poly); loop false sql);
       bprintf b ")";
       loop true tl
+    | DynamicSelectJoin (name, ctor, join_text) :: tl ->
+      if app then bprintf b " ^ ";
+      bprintf b {|(if List.mem %s %s.deps then " " ^ %s else "")|}
+        ctor (make_param_name 0 name) (quote join_text);
+      loop true tl
     | SubstTuple (id, Insertion schema) :: tl ->
       if app then bprintf b " ^ ";
       let label = resolve_tuple_label id in
@@ -746,20 +757,24 @@ type callback_build_state = {
   idx_expr: string option;
 }
 
-let emit_dynamic_select_body ~module_kind ~dynamic_infos stmt =
+let emit_dynamic_select_body ?(outside=false) ~module_kind ~dynamic_infos stmt =
   let sql_pieces = get_sql stmt in
+
+  let col_ref di = di.param_name ^ ".projection" in
+  let deps_ref di = di.param_name ^ ".deps" in
+  let ctor_qual di ctor = if outside then sprintf "%s.%s" di.module_name ctor else ctor in
 
   let other_vars = List.filter (function Sql.DynamicSelect _ -> false | _ -> true) stmt.vars in
   let static_count = eval_count_params other_vars in
   let dynamic_counts = dynamic_infos |> List.map (fun di ->
-    sprintf "%s.count" di.param_name
+    sprintf "%s.count" (col_ref di)
   ) |> String.concat " + " in
 
   output "let set_params stmt =";
   inc_indent ();
   output "let p = T.start_params stmt (%s + %s) in" static_count dynamic_counts;
   List.iter (fun di ->
-    output "%s.set p;" di.param_name
+    output "%s.set p;" (col_ref di)
   ) dynamic_infos;
   List.iteri set_var other_vars;
   output "T.finish_params p";
@@ -782,11 +797,18 @@ let emit_dynamic_select_body ~module_kind ~dynamic_infos stmt =
       let di = find_di_by_pid pid in
       let dyn_expr =
         if pending_comma then
-          sprintf {|(match %s.column with "" -> "" | c -> ", " ^ c)|} di.param_name
+          sprintf {|(match %s.column with "" -> "" | c -> ", " ^ c)|} (col_ref di)
         else
-          sprintf "%s.column" di.param_name
+          sprintf "%s.column" (col_ref di)
       in
       build_parts (dyn_expr :: acc) false rest
+    | Gen.DynamicSelectJoin (pid, ctor, join_text) :: rest ->
+      let di = find_di_by_pid pid in
+      let expr =
+        sprintf {|(if List.mem %s %s then " " ^ %s else "")|}
+          (ctor_qual di ctor) (deps_ref di) (quote join_text)
+      in
+      build_parts (expr :: acc) pending_comma rest
     | _ :: rest -> build_parts acc pending_comma rest
   in
   let sql_parts = build_parts [] false sql_pieces in
@@ -823,7 +845,7 @@ let emit_dynamic_select_body ~module_kind ~dynamic_infos stmt =
       let read_var = sprintf "__sqlgg_r_%s" di.param_name in
       let next_var = sprintf "__sqlgg_idx_after_%s" di.param_name in
       let start = col_idx_at ~base:st.idx_expr ~offset:st.static_idx in
-      let binding = sprintf "let (%s, %s) = %s.read row %s in " read_var next_var di.param_name start in
+      let binding = sprintf "let (%s, %s) = %s.read row %s in " read_var next_var (col_ref di) start in
       { bindings = binding :: st.bindings;
         reads = read_var :: st.reads;
         static_idx = 0;
@@ -915,7 +937,7 @@ let generate_stmt ~module_kind index stmt =
         (function
           | SubstTuple (id, Insertion _) -> Some id
           | SubstTuple (_, ( Where_in _| ValueRows _ ))
-          | Static _ | Dynamic _ | DynamicIn _ | SubstIn _ -> None)
+          | Static _ | Dynamic _ | DynamicIn _ | SubstIn _ | DynamicSelectJoin _ -> None)
         (get_sql stmt)
     with
     | None -> exec
@@ -989,6 +1011,7 @@ let generate_enum_modules stmts =
       | TupleList (_, Where_in { value = (types, _); pos = _ }) ->
         List.concat_map (fun (typ, meta) -> enum_opt_with_meta typ meta) types
       | TupleList (_, Insertion schema) -> schemas_to_enums schema
+      | DynamicSelectJoin _ -> []
     ) vars in
 
   Hashtbl.reset enums_hash_tbl;
@@ -1043,7 +1066,16 @@ let generate_dynamic_select_modules stmts =
     all_dis |> List.iter (fun di ->
       let module_name = di.module_name in
       let sql_pieces = get_sql stmt in
-      
+      let source_ctors =
+        stmt.Gen.vars
+        |> List.filter_map (function Sql.DynamicSelectJoin (_, _, ctor) -> Some ctor | _ -> None)
+        |> List.sort_uniq compare
+      in
+      let deps_of_attr (attr : Sql.attr) =
+        match Sql.Meta.find_opt attr.meta "dynamic_join_src" with
+        | None -> "[]"
+        | Some ctors -> sprintf "[%s]" (ctors |> String.split_on_char ',' |> String.concat "; ")
+      in
       let field_sqls = List.find_map (function
         | Gen.Dynamic (pid, ctors) when pid = di.param_id -> 
           Some (List.map (fun c -> c.Gen.ctor, c.Gen.sql) ctors)
@@ -1065,64 +1097,77 @@ let generate_dynamic_select_modules stmts =
       output "module %s = struct" module_name;
       inc_indent ();
 
+      (match source_ctors with
+       | [] -> output "type source = |"
+       | ctors -> output "type source = %s" (String.concat " | " ctors));
+      empty_line ();
+
       let ind = make_indent () in
-      String.split_on_char '\n' {|type 'a t = {
+      String.split_on_char '\n' {|(* what travels into SELECT: the columns' SQL text, the row reader, the params *)
+type 'a projection = {
   set: T.params -> unit;
   read: T.row -> int -> 'a * int;
   column: string;
   count: int;
 }
 
+(* a selector: a projection plus the sources it pulls into FROM *)
+type 'a t = {
+  projection: 'a projection;
+  deps: source list;
+}
+
 let pure x = {
-  set = (fun _p -> ());
-  read = (fun _row idx -> (x, idx));
-  column = "";
-  count = 0;
+  projection = {
+    set = (fun _p -> ());
+    read = (fun _row idx -> (x, idx));
+    column = "";
+    count = 0;
+  };
+  deps = [];
 }
 
 let apply f a = {
-  set = (fun p -> f.set p; a.set p);
-  read = (fun row idx ->
-    let (vf, i1) = f.read row idx in
-    let (va, i2) = a.read row i1 in
-    (vf va, i2));
-  column = (match f.column, a.column with
-    | "", c | c, "" -> c
-    | c1, c2 -> c1 ^ ", " ^ c2);
-  count = f.count + a.count;
+  projection = {
+    set = (fun p -> f.projection.set p; a.projection.set p);
+    read = (fun row idx ->
+      let (vf, i1) = f.projection.read row idx in
+      let (va, i2) = a.projection.read row i1 in
+      (vf va, i2));
+    column = (match f.projection.column, a.projection.column with
+      | "", c | c, "" -> c
+      | c1, c2 -> c1 ^ ", " ^ c2);
+    count = f.projection.count + a.projection.count;
+  };
+  deps = f.deps @ List.filter (fun d -> not (List.mem d f.deps)) a.deps;
 }
 
 let map f a = apply (pure f) a
 
 let (let+) t f = map f t
-let (and+) a b = apply (map (fun a b -> (a, b)) a) b|}
+let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+
+(* lift a pure projection into a selector, tagging the sources it depends on *)
+let lift deps projection = { projection; deps }|}
       |> List.iter (fun line ->
         if line = "" then print_newline ()
         else Printf.printf "%s%s\n" ind line);
 
-      List.iter2 (fun (field_name, _param_name, all_param_names, _simple_params, args_list, attr, ctor) (_, sql) ->
-        let field_name_lower = 
-          let name = String.lowercase_ascii field_name in
-          if List.mem name Name.reserved then name ^ "_" else name
-        in
+      let field_name_lower_of field_name =
+        let name = String.lowercase_ascii field_name in
+        if List.mem name Name.reserved then name ^ "_" else name
+      in
+      let emit_col_body (field_name, _param_name, _all_param_names, _simple_params, args_list, attr, ctor) (_, sql) =
+        let field_name_lower = field_name_lower_of field_name in
         let read_body = sprintf "(fun row idx -> (%s, idx + 1))" (format_get_column ~row:"row" ~idx:"idx" attr) in
-
-        let column_body = match ctor with 
-          | Sql.Verbatim (_, v) -> quote v 
-          | _ -> make_sql sql 
+        let column_body = match ctor with
+          | Sql.Verbatim (_, v) -> quote v
+          | _ -> make_sql sql
         in
-        
         let count_expr = eval_count_params args_list in
-        
         let has_params = args_list <> [] in
         let set_helper_name = sprintf "_set_%s" field_name_lower in
-        
-        (match all_param_names with
-        | [] -> output "let %s =" field_name_lower
-        | _ -> output "let %s %s =" field_name_lower (String.concat " " all_param_names));
-        inc_indent ();
-        
-        let set_ref = 
+        let set_ref =
           if has_params && has_set_params args_list then begin
             output "let %s p =" set_helper_name;
             inc_indent ();
@@ -1134,17 +1179,24 @@ let (and+) a b = apply (map (fun a b -> (a, b)) a) b|}
           end else
             "(fun _p -> ())"
         in
-        
-        output "{";
+        output "lift %s {" (deps_of_attr attr);
         inc_indent ();
         output "set = %s;" set_ref;
         output "read = %s;" read_body;
         output "column = %s;" column_body;
         output "count = %s;" count_expr;
         dec_indent ();
-        output "}";
+        output "}"
+      in
+      let entries = List.combine fields field_sqls in
+      List.iter (fun ((field_name, _, all_param_names, _, _, _, _) as field, sql) ->
+        (match all_param_names with
+         | [] -> output "let %s =" (field_name_lower_of field_name)
+         | _ -> output "let %s %s =" (field_name_lower_of field_name) (String.concat " " all_param_names));
+        inc_indent ();
+        emit_col_body field sql;
         dec_indent ()
-      ) fields field_sqls;
+      ) entries;
 
       if single_di then begin
         empty_line ();
@@ -1176,7 +1228,7 @@ let generate_stmt_wrapper ~module_kind index stmt =
   | _ :: _ :: _ ->
     if supports_module_kind module_kind stmt then begin
       let _subst = gen_func_signature ~dynamic_infos ~module_kind ~index stmt in
-      emit_dynamic_select_body ~module_kind ~dynamic_infos stmt
+      emit_dynamic_select_body ~outside:true ~module_kind ~dynamic_infos stmt
     end
 
 let generate ~gen_io ~migration_names name stmts =

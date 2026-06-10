@@ -64,7 +64,7 @@ let value ?(inparam=false) v =
   Node ("value", attrs, [])
 
 let tuplelist_value_of_param = function
-  | Sql.Single _ | SingleIn _ | Choice _ | ChoiceIn _ | OptionActionChoice _ | SharedVarsGroup _ | DynamicSelect _ -> None
+  | Sql.Single _ | SingleIn _ | Choice _ | ChoiceIn _ | OptionActionChoice _ | SharedVarsGroup _ | DynamicSelect _ | DynamicSelectJoin _ -> None
   | TupleList ({ value = None; _ }, _) -> failwith "empty label in tuple subst"
   | TupleList ({ value = Some name; _ }, kind) ->
     let schema = match kind with 
@@ -99,6 +99,7 @@ let get_sql_string stmt =
   | SubstTuple (id, _) -> "@@@" ^ make_param_name i id
   | DynamicIn (_p, _, sqls) -> String.concat "" @@ List.map (map 0 ) sqls
   | Dynamic _ -> "{TODO dynamic choice}"
+  | DynamicSelectJoin _ -> "{TODO dynamic join}"
   in
   String.concat "" @@ List.mapi map @@ get_sql stmt
 
@@ -116,7 +117,8 @@ let rec params_only l =
         choices
         |> List.map (function Sql.Verbatim _ | Simple (_,None) -> [] | Simple (_name,Some vars) -> params_only vars) (* TODO prefix names *)
         |> List.concat
-      | TupleList _ -> [])
+      | TupleList _ -> []
+      | DynamicSelectJoin _ -> [])
     l
 
 let generate_code (x,_) index stmt =
