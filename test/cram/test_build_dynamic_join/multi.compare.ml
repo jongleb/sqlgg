@@ -240,7 +240,7 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
   end
 
   module Same_twice_col = struct
-    type source = Profiles | Profiles_1
+    type source = Profiles_p1 | Profiles_p2
 
     (* what travels into SELECT: the columns' SQL text, the row reader, the params *)
     type 'a projection = {
@@ -296,14 +296,14 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
         count = 0;
       }
     let bio1 =
-      lift [Profiles_1] {
+      lift [Profiles_p1] {
         set = (fun _p -> ());
         read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
         column = ("p1.bio");
         count = 0;
       }
     let bio2 =
-      lift [Profiles] {
+      lift [Profiles_p2] {
         set = (fun _p -> ());
         read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
         column = ("p2.bio");
@@ -318,7 +318,7 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
         T.finish_params p
       in
       T.select db
-      ("SELECT " ^ col.projection.column ^ " FROM users u " ^ (if List.mem Profiles_1 col.deps then " " ^ "LEFT JOIN profiles p1 ON p1.user_id = u.id" else "") ^ " " ^ (if List.mem Profiles col.deps then " " ^ "LEFT JOIN profiles p2 ON p2.user_id = u.mentor_id" else "") ^ " WHERE u.id = ?")
+      ("SELECT " ^ col.projection.column ^ " FROM users u " ^ (if List.mem Profiles_p1 col.deps then " " ^ "LEFT JOIN profiles p1 ON p1.user_id = u.id" else "") ^ " " ^ (if List.mem Profiles_p2 col.deps then " " ^ "LEFT JOIN profiles p2 ON p2.user_id = u.mentor_id" else "") ^ " WHERE u.id = ?")
       set_params (fun row -> let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
           __sqlgg_r_col)
 
@@ -332,7 +332,7 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
         in
         let r_acc = ref acc in
         IO.(>>=) (T.select db
-        ("SELECT " ^ col.projection.column ^ " FROM users u " ^ (if List.mem Profiles_1 col.deps then " " ^ "LEFT JOIN profiles p1 ON p1.user_id = u.id" else "") ^ " " ^ (if List.mem Profiles col.deps then " " ^ "LEFT JOIN profiles p2 ON p2.user_id = u.mentor_id" else "") ^ " WHERE u.id = ?")
+        ("SELECT " ^ col.projection.column ^ " FROM users u " ^ (if List.mem Profiles_p1 col.deps then " " ^ "LEFT JOIN profiles p1 ON p1.user_id = u.id" else "") ^ " " ^ (if List.mem Profiles_p2 col.deps then " " ^ "LEFT JOIN profiles p2 ON p2.user_id = u.mentor_id" else "") ^ " WHERE u.id = ?")
         set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
           __sqlgg_r_col !r_acc)))
         (fun () -> IO.return !r_acc)
@@ -349,7 +349,7 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
         in
         let r_acc = ref [] in
         IO.(>>=) (T.select db
-        ("SELECT " ^ col.projection.column ^ " FROM users u " ^ (if List.mem Profiles_1 col.deps then " " ^ "LEFT JOIN profiles p1 ON p1.user_id = u.id" else "") ^ " " ^ (if List.mem Profiles col.deps then " " ^ "LEFT JOIN profiles p2 ON p2.user_id = u.mentor_id" else "") ^ " WHERE u.id = ?")
+        ("SELECT " ^ col.projection.column ^ " FROM users u " ^ (if List.mem Profiles_p1 col.deps then " " ^ "LEFT JOIN profiles p1 ON p1.user_id = u.id" else "") ^ " " ^ (if List.mem Profiles_p2 col.deps then " " ^ "LEFT JOIN profiles p2 ON p2.user_id = u.mentor_id" else "") ^ " WHERE u.id = ?")
         set_params (fun row -> r_acc := (let (__sqlgg_r_col, __sqlgg_idx_after_col) = col.projection.read row 0 in callback
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))

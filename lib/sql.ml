@@ -4,7 +4,27 @@ open Printf
 open ExtLib
 open Prelude
 
-type pos = (int * int) [@@deriving show]
+module Pos = struct
+  type t = int * int [@@deriving show, ord]
+end
+
+type pos = Pos.t [@@deriving show]
+
+module Join_id : sig
+  type t
+  val of_pos : pos -> t
+  val equal : t -> t -> bool
+  val compare : t -> t -> int
+  val to_string : t -> string
+  val of_string : string -> t
+end = struct
+  type t = int
+  let of_pos (start, _) = start
+  let equal = Int.equal
+  let compare = Int.compare
+  let to_string = string_of_int
+  let of_string = int_of_string
+end
 
 type 'a located  = { value : 'a; pos : pos } [@@deriving show, make]
 type 'a collated = { collated: 'a; collation: string located option } [@@deriving show, make]
@@ -325,6 +345,17 @@ module Meta = struct
   let get_is_non_nullifiable meta = Option.default "false" (find_opt meta "non_nullifiable") = "true" 
 end
 
+module Dynamic_join_meta : sig
+  val set : Join_id.t list -> Meta.t -> Meta.t
+  val get : Meta.t -> Join_id.t list option
+end = struct
+  let key = "dynamic_join_src"
+  let encode ids = String.concat "," (List.map Join_id.to_string ids)
+  let decode s = List.map Join_id.of_string (String.split_on_char ',' s)
+  let set ids meta = Meta.merge_right meta (Meta.of_list [key, encode ids])
+  let get meta = Option.map decode (Meta.find_opt meta key)
+end
+
 type attr = {name : string; domain : Type.t; extra : Constraints.t; meta: Meta.t; }
   [@@deriving show {with_path=false}]
 
@@ -506,6 +537,9 @@ let make_table_name ?db tn = { db; tn }
 type schema = Schema.t [@@deriving show]
 type table = table_name * schema [@@deriving show]
 
+type join_source = { table : table_name; alias : table_name option } [@@deriving show]
+let join_source_name { table; alias } = Option.default table alias
+
 let print_table out (name,schema) =
   IO.write_line out (show_table_name name);
   schema |> List.iter begin fun {name;domain;extra;_} ->
@@ -569,7 +603,7 @@ and var =
 | ChoiceIn of { param: param_id; kind : in_or_not_in; vars: var list }
 | Choice of param_id * ctor list
 | DynamicSelect of param_id * ctor list
-| DynamicSelectJoin of param_id * pos * string
+| DynamicSelectJoin of param_id * pos * join_source
 | TupleList of param_id * tuple_list_kind
 (* It differs from Choice that in this case we should generate sql "TRUE", it doesn't seem reusable *)
 | OptionActionChoice of param_id * var list * (pos * pos) * option_actions_kind

@@ -682,7 +682,25 @@ let make_schema_of_tuple_types label =
     name=(sprintf "%s_%Ln" label idx); domain; extra = Constraints.empty; meta;
   })   
 
-let make_sql l =
+let dynamic_join_ctors vars =
+  let joins = List.filter_map (function
+    | Sql.DynamicSelectJoin (_, pos, source) -> Some (Sql.Join_id.of_pos pos, source)
+    | Sql.Single _ | SingleIn _ | ChoiceIn _ | Choice _ | DynamicSelect _
+    | TupleList _ | OptionActionChoice _ | SharedVarsGroup _ -> None) vars
+  in
+  let table source = source.Sql.table.tn in
+  let base source =
+    let name = (Sql.join_source_name source).tn in
+    let same_table_twice = List.length (List.filter (fun (_, s) -> table s = table source) joins) > 1 in
+    if same_table_twice && name <> table source then table source ^ "_" ^ name else table source
+  in
+  let ctors = List.map String.capitalize_ascii (Name.idents ~prefix:"join" (List.map (fun (_, s) -> base s) joins)) in
+  List.map2 (fun (join_id, _) ctor -> join_id, ctor) joins ctors
+
+let join_ctor ctors join_id =
+  try List.assoc join_id ctors with Not_found -> fail "unknown dynamic join %s" (Sql.Join_id.to_string join_id)
+
+let make_sql ~join_ctors l =
   let b = Buffer.create 100 in
   let rec loop app = function
     | [] -> ()
@@ -711,10 +729,10 @@ let make_sql l =
           (match_variant_pattern i ctor.value args ~is_poly:is_poly); loop false sql);
       bprintf b ")";
       loop true tl
-    | DynamicSelectJoin (name, ctor, join_text) :: tl ->
+    | DynamicSelectJoin { pid; join_id; join_text } :: tl ->
       if app then bprintf b " ^ ";
       bprintf b {|(if List.mem %s %s.deps then " " ^ %s else "")|}
-        ctor (make_param_name 0 name) (quote join_text);
+        (join_ctor join_ctors join_id) (make_param_name 0 pid) (quote join_text);
       loop true tl
     | SubstTuple (id, Insertion schema) :: tl ->
       if app then bprintf b " ^ ";
@@ -759,6 +777,7 @@ type callback_build_state = {
 
 let emit_dynamic_select_body ?(outside=false) ~module_kind ~dynamic_infos stmt =
   let sql_pieces = get_sql stmt in
+  let join_ctors = dynamic_join_ctors stmt.Gen.vars in
 
   let col_ref di = di.param_name ^ ".projection" in
   let deps_ref di = di.param_name ^ ".deps" in
@@ -802,11 +821,11 @@ let emit_dynamic_select_body ?(outside=false) ~module_kind ~dynamic_infos stmt =
           sprintf "%s.column" (col_ref di)
       in
       build_parts (dyn_expr :: acc) false rest
-    | Gen.DynamicSelectJoin (pid, ctor, join_text) :: rest ->
+    | Gen.DynamicSelectJoin { pid; join_id; join_text } :: rest ->
       let di = find_di_by_pid pid in
       let expr =
         sprintf {|(if List.mem %s %s then " " ^ %s else "")|}
-          (ctor_qual di ctor) (deps_ref di) (quote join_text)
+          (ctor_qual di (join_ctor join_ctors join_id)) (deps_ref di) (quote join_text)
       in
       build_parts (expr :: acc) pending_comma rest
     | _ :: rest -> build_parts acc pending_comma rest
@@ -895,7 +914,7 @@ let emit_dynamic_module_select ~module_kind ~dynamic_infos stmt =
 let generate_stmt ~module_kind index stmt =
   if not (supports_module_kind module_kind stmt) then () else
   let subst = gen_func_signature ~dynamic_infos:[] ~module_kind ~index stmt in
-  let sql = make_sql @@ get_sql stmt in
+  let sql = make_sql ~join_ctors:(dynamic_join_ctors stmt.Gen.vars) @@ get_sql stmt in
   let sql = match subst with
   | [] -> sql
   | vars ->
@@ -1066,15 +1085,12 @@ let generate_dynamic_select_modules stmts =
     all_dis |> List.iter (fun di ->
       let module_name = di.module_name in
       let sql_pieces = get_sql stmt in
-      let source_ctors =
-        stmt.Gen.vars
-        |> List.filter_map (function Sql.DynamicSelectJoin (_, _, ctor) -> Some ctor | _ -> None)
-        |> List.sort_uniq compare
-      in
+      let join_ctors = dynamic_join_ctors stmt.Gen.vars in
+      let source_ctors = List.sort_uniq compare (List.map snd join_ctors) in
       let deps_of_attr (attr : Sql.attr) =
-        match Sql.Meta.find_opt attr.meta "dynamic_join_src" with
+        match Sql.Dynamic_join_meta.get attr.meta with
         | None -> "[]"
-        | Some ctors -> sprintf "[%s]" (ctors |> String.split_on_char ',' |> String.concat "; ")
+        | Some ids -> sprintf "[%s]" (ids |> List.map (join_ctor join_ctors) |> String.concat "; ")
       in
       let field_sqls = List.find_map (function
         | Gen.Dynamic (pid, ctors) when pid = di.param_id -> 
@@ -1162,7 +1178,7 @@ let lift deps projection = { projection; deps }|}
         let read_body = sprintf "(fun row idx -> (%s, idx + 1))" (format_get_column ~row:"row" ~idx:"idx" attr) in
         let column_body = match ctor with
           | Sql.Verbatim (_, v) -> quote v
-          | _ -> make_sql sql
+          | Sql.Simple _ -> make_sql ~join_ctors sql
         in
         let count_expr = eval_count_params args_list in
         let has_params = args_list <> [] in

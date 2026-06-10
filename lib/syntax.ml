@@ -13,6 +13,11 @@ module Config = struct
   let dynamic_select = ref false
 end
 
+type query_scope =
+  | Top_level
+  | Subquery
+  | From_passthrough
+
 type env = {
   tables : Tables.table list;
   schema : table_name Schema.Source.t;
@@ -29,13 +34,7 @@ type env = {
   (* Check if the current query is an UPDATE statement *)
   is_update: bool;
   insert_resolved_types: (string, Type.t) Hashtbl.t; (* for INSERT .. VALUES *)
-  is_subquery: bool;  (* whether we are inside a subquery *)
-  from_source: bool;
-  allow_from_dynamic: bool;
-  from_dynamic: schema_column_with_sources list;
-  join_candidates: (pos * table_name list * bool) list;
-  join_on_cols: (pos * col_name list) list;
-  join_on_blocked: bool;
+  scope: query_scope;
 }
 
 (* Merge global tables with ctes during resolving sources in SELECT .. FROM sources, JOIN *)
@@ -77,13 +76,7 @@ let empty_env = { query_has_grouping = false;
   is_order_by = false;
   is_update = false;
   insert_resolved_types = Hashtbl.create 16;
-  is_subquery = false;
-  from_source = false;
-  allow_from_dynamic = false;
-  from_dynamic = [];
-  join_candidates = [];
-  join_on_cols = [];
-  join_on_blocked = false;
+  scope = Top_level;
 }
 
 let flat_map f l = List.flatten (List.map f l)
@@ -342,7 +335,11 @@ let extract_meta_from_col ~env expr =
   in
   aux expr    
 
-let dynamic_allowed env = !Config.dynamic_select && (not env.is_subquery || env.from_source)
+let dynamic_allowed env =
+  !Config.dynamic_select &&
+  match env.scope with
+  | Top_level | From_passthrough -> true
+  | Subquery -> false
 
 let make_dynamic_select ~env columns =
   if not (dynamic_allowed env) then
@@ -400,71 +397,262 @@ let make_dynamic_select ~env columns =
   
 
 
-let columns_of_expr e =
-  let blocked = ref false in
-  let rec go acc = function
-    | Sql.Value _ | Param _ | Inparam _ | Of_values _ -> acc
-    | Column c -> c.Sql.collated :: acc
-    | Choices (_, l) -> List.fold_left (fun acc (_, eo) -> match eo with Some e -> go acc e | None -> acc) acc l
-    | InChoice (_, _, e) -> go acc e
-    | OptionActions { choice; _ } -> go acc choice
-    | Fun { parameters; _ } -> List.fold_left go acc parameters
-    | InTupleList { value = { exprs; _ }; _ } -> List.fold_left go acc exprs
-    | Case { case; branches; else_ } ->
-      let acc = match case with Some e -> go acc e | None -> acc in
-      let acc = List.fold_left (fun acc (b : Sql.case_branch) -> go (go acc b.when_) b.then_) acc branches in
-      (match else_ with Some e -> go acc e | None -> acc)
-    | SelectExpr _ -> blocked := true; acc
-  in
-  let cols = go [] e in
-  cols, !blocked
+type resolved_source = {
+  rsrc_schema : table_name Schema.Source.t;
+  rsrc_params : vars;
+  rsrc_tables : Tables.table list;
+  rsrc_dynamic : schema_column_with_sources list;
+  rsrc_physical_table : Sql.join_source option;
+}
 
-let join_eql_columns expr =
-  let rec aux acc = function
+module From = struct
+  type join = {
+    src : resolved_source;
+    kind : Schema.Join.typ;
+    cond : join_condition;
+    pos : pos;
+  }
+
+  type t = {
+    base : resolved_source;
+    joins : join list;
+  }
+
+  let dynamic_columns from =
+    let sources { base; joins } = base :: List.map (fun j -> j.src) joins in
+    List.concat_map (fun src -> src.rsrc_dynamic) (Option.map_default sources [] from)
+end
+
+let belongs_to source (a : table_name Schema.Source.Attr.t) =
+  let name = Sql.join_source_name source in
+  List.exists (fun (s : table_name) -> s.tn = name.tn) a.sources
+
+let pins_unique_row ~env source expr =
+  let own_column = function
+    | Sql.Column c ->
+      (match resolve_column ~env c.collated with
+       | attr when belongs_to source attr -> Some attr
+       | _ | exception (Schema.Error _ | Failure _) -> None)
+    | _ -> None
+  in
+  let rec pinned acc = function
     | [] -> acc
     | Sql.Fun { kind = Comparison Comp_equal; parameters = [v1; v2]; _ } :: tl ->
-      let cols = List.filter_map (function Sql.Column c -> Some c.collated | _ -> None) [v1; v2] in
-      aux (cols @ acc) tl
-    | Fun { kind = Logical And; parameters; _ } :: tl -> aux acc (parameters @ tl)
-    | _ :: tl -> aux acc tl
+      let pin a b =
+        match own_column a, own_column b with
+        | Some attr, None -> [attr]
+        | Some _, Some _ | None, _ -> []
+      in
+      pinned (pin v1 v2 @ pin v2 v1 @ acc) tl
+    | Fun { kind = Logical And; parameters; _ } :: tl -> pinned acc (parameters @ tl)
+    | _ :: tl -> pinned acc tl
   in
-  aux [] [expr]
-
-let source_key names = match List.rev names with k :: _ -> Some k | [] -> None
-let source_has_key names (srcs : table_name list) =
-  match source_key names with
-  | Some (k : table_name) -> List.exists (fun (s : table_name) -> s.tn = k.tn) srcs
-  | None -> false
-
-let on_makes_table_unique ~env tnames on_expr =
-  let open Schema in
-  let cols = join_eql_columns on_expr in
-  let attrs = List.filter_map (fun c -> try Some (resolve_column ~env c) with _ -> None) cols in
-  let attrs = List.filter (fun a -> source_has_key tnames a.Source.Attr.sources) attrs in
-  let constraints = List.map (fun (a : table_name Source.Attr.t) -> a.attr.extra) attrs in
+  let attrs = pinned [] [expr] in
+  let constraints = List.map (fun (a : table_name Schema.Source.Attr.t) -> a.attr.extra) attrs in
   let single =
     List.exists (fun c -> Constraints.mem PrimaryKey c || Constraints.mem Unique c) constraints
   in
   let composite =
-    let open Constraint.StringSet in
-    let ids = of_list (List.map (fun a -> a.Source.Attr.attr.name) attrs) in
+    let ids = Constraint.StringSet.of_seq (Seq.map (fun a -> a.Schema.Source.Attr.attr.name) (List.to_seq attrs)) in
     List.exists (fun c ->
       List.exists (function
         | Constraint.Composite (CompositePrimary s)
-        | Constraint.Composite (CompositeUnique s) -> subset s ids
+        | Constraint.Composite (CompositeUnique s) -> Constraint.StringSet.subset s ids
         | _ -> false)
         (Constraints.elements c))
       constraints
   in
   single || composite
 
-type resolved_source = {
-  rsrc_schema : table_name Schema.Source.t;
-  rsrc_params : vars;
-  rsrc_tables : Tables.table list;
-  rsrc_dynamic : schema_column_with_sources list;
-  rsrc_is_table : bool;
-}
+module Dynamic_join = struct
+
+  let sub_exprs = function
+    | Sql.Value _ | Param _ | Inparam _ | Column _ | Of_values _ | SelectExpr _ -> []
+    | Choices (_, l) -> List.filter_map snd l
+    | InChoice (_, _, e) -> [e]
+    | OptionActions { choice; _ } -> [choice]
+    | Fun { parameters; _ } -> parameters
+    | InTupleList { value = { exprs; _ }; _ } -> exprs
+    | Case { case; branches; else_ } ->
+      option_list case
+      @ List.concat_map (fun (b : Sql.case_branch) -> [b.when_; b.then_]) branches
+      @ option_list else_
+
+  module Table_refs = struct
+    module Names = Set.Make(String)
+
+    type t =
+      | Only of Names.t
+      | Anything
+
+    let empty = Only Names.empty
+
+    let union a b =
+      match a, b with
+      | Only x, Only y -> Only (Names.union x y)
+      | Anything, (Only _ | Anything) | Only _, Anything -> Anything
+
+    let rec of_expr ~env = function
+      | Sql.Column c ->
+        (match resolve_column ~env c.collated with
+         | attr -> Only (Names.of_seq (Seq.map (fun (s : table_name) -> s.tn) (List.to_seq attr.Schema.Source.Attr.sources)))
+         | exception (Schema.Error _ | Failure _) -> Anything)
+      | SelectExpr _ -> Anything
+      | e -> of_exprs ~env (sub_exprs e)
+
+    and of_exprs ~env l = List.fold_left (fun acc e -> union acc (of_expr ~env e)) empty l
+
+    let may_refer source = function
+      | Only names -> Names.mem (Sql.join_source_name source).tn names
+      | Anything -> true
+  end
+
+  module Id_set = Set.Make(Sql.Join_id)
+
+  type droppable = {
+    drop_source : Sql.join_source;
+    drop_pos : pos;
+  }
+
+  let id d = Sql.Join_id.of_pos d.drop_pos
+
+  let candidate ~env { From.src; kind; cond; pos } =
+    let rec has_params = function
+      | Sql.Param _ | Inparam _ | InTupleList _ | Choices _ | InChoice _ | OptionActions _ | SelectExpr _ -> true
+      | Value _ | Column _ | Of_values _ -> false
+      | (Fun _ | Case _) as e -> List.exists has_params (sub_exprs e)
+    in
+    match kind, cond, src.rsrc_physical_table with
+    | Schema.Join.Left, Schema.Join.On e, Some source
+      when not (has_params e) && pins_unique_row ~env source e ->
+      Some { drop_source = source; drop_pos = pos }
+    | _ -> None
+
+  type on_ref = {
+    on_join : Sql.Join_id.t;
+    on_refs : Table_refs.t;
+  }
+
+  let mark ~env ~from ~columns ~where ~group ~having ~order final_schema from_params =
+    let joins = Option.map_default (fun f -> f.From.joins) [] from in
+    match List.filter_map (candidate ~env) joins with
+    | [] -> final_schema, from_params
+    | candidates ->
+      let outside =
+        let projection_exprs =
+          List.concat_map (fun c -> match c.Sql.value with
+            | All | AllOf _ -> []
+            | Expr ({ value = Choices (_, choices); _ }, _) ->
+              List.filter_map (function
+                | (_, Some (Sql.Column _)) | (_, None) -> None
+                | (_, Some e) -> Some e) choices
+            | Expr ({ value = Column _; _ }, _) -> []
+            | Expr ({ value = e; _ }, _) -> [e])
+            columns
+        in
+        Table_refs.of_exprs ~env (option_list where @ group @ option_list having @ List.map fst order @ projection_exprs)
+      in
+      let on_refs =
+        List.filter_map (fun { From.cond; pos; _ } -> match cond with
+          | Schema.Join.On e -> Some { on_join = Sql.Join_id.of_pos pos; on_refs = Table_refs.of_expr ~env e }
+          | Default | Natural | Using _ -> None)
+          joins
+      in
+      let rec refine current =
+        let current_ids = Id_set.of_seq (Seq.map id (List.to_seq current)) in
+        let pins d r =
+          not (Sql.Join_id.equal r.on_join (id d))
+          && not (Id_set.mem r.on_join current_ids)
+          && Table_refs.may_refer d.drop_source r.on_refs
+        in
+        let keep d =
+          not (Table_refs.may_refer d.drop_source outside) && not (List.exists (pins d) on_refs)
+        in
+        match List.partition keep current with
+        | kept, [] -> kept
+        | kept, _ :: _ -> refine kept
+      in
+      match refine candidates with
+      | [] -> final_schema, from_params
+      | (_ :: _ as droppable) ->
+        let deps =
+          let parents =
+            let tbl = Hashtbl.create (List.length droppable) in
+            List.iter (fun d ->
+              let ps =
+                match List.find_opt (fun r -> Sql.Join_id.equal r.on_join (id d)) on_refs with
+                | None -> []
+                | Some r ->
+                  List.filter (fun p ->
+                    not (Sql.Join_id.equal (id p) (id d)) && Table_refs.may_refer p.drop_source r.on_refs)
+                    droppable
+              in
+              Hashtbl.replace tbl (id d) ps)
+              droppable;
+            fun d -> Hashtbl.find tbl (id d)
+          in
+          let closure d =
+            let rec go seen acc = function
+              | [] -> List.rev acc
+              | x :: rest ->
+                if Id_set.mem (id x) seen then go seen acc rest
+                else go (Id_set.add (id x) seen) (x :: acc) (parents x @ rest)
+            in
+            go Id_set.empty [] [d]
+          in
+          let closures = Hashtbl.create (List.length droppable) in
+          List.iter (fun d -> Hashtbl.replace closures (id d) (closure d)) droppable;
+          fun d -> Hashtbl.find closures (id d)
+        in
+        let owner (a : table_name Schema.Source.Attr.t) =
+          List.find_opt (fun d -> belongs_to d.drop_source a) droppable
+        in
+        let mark_attr (cp, a) =
+          match owner a with
+          | None -> (cp, a)
+          | Some d ->
+            let meta = Sql.Dynamic_join_meta.set (List.map id (deps d)) a.attr.meta in
+            (cp, { a with attr = { a.attr with meta } })
+        in
+        let final_schema =
+          List.map (function
+            | DynamicWithSources (p, cols) -> DynamicWithSources (p, List.map mark_attr cols)
+            | AttrWithSources _ as x -> x)
+            final_schema
+        in
+        let holes =
+          match List.find_map (function DynamicWithSources (p, _) -> Some p | AttrWithSources _ -> None) final_schema with
+          | None -> []
+          | Some pid ->
+            let reachable =
+              final_schema
+              |> List.to_seq
+              |> Seq.concat_map (function
+                | DynamicWithSources (_, cols) -> List.to_seq cols
+                | AttrWithSources _ -> Seq.empty)
+              |> Seq.concat_map (fun (_, a) ->
+                match owner a with
+                | Some d -> Seq.map id (List.to_seq (deps d))
+                | None -> Seq.empty)
+              |> Id_set.of_seq
+            in
+            droppable
+            |> List.filter (fun d -> Id_set.mem (id d) reachable)
+            |> List.map (fun d -> Sql.DynamicSelectJoin (pid, d.drop_pos, d.drop_source))
+        in
+        match holes with
+        | [] -> final_schema, from_params
+        | _ :: _ ->
+          let lead = function
+            | Sql.Single (p, _) | SingleIn (p, _) -> fst p.id.pos
+            | Choice (id, _) | DynamicSelect (id, _) | TupleList (id, _)
+            | OptionActionChoice (id, _, _, _) -> fst id.pos
+            | ChoiceIn { param; _ } -> fst param.pos
+            | SharedVarsGroup (_, id) -> fst id.pos
+            | DynamicSelectJoin (_, (j1, _), _) -> j1
+          in
+          final_schema, List.stable_sort (fun a b -> compare (lead a) (lead b)) (from_params @ holes)
+end
 
 (** resolve each name reference (Column, Inserted, etc) into ResValue or ResFun of corresponding type *)
 let rec resolve_columns env expr =
@@ -567,7 +755,7 @@ let rec resolve_columns env expr =
       end
     (* nested select *)
     | SelectExpr (select, usage) ->
-      let (schema, p, _) = eval_select_full { env with is_subquery = true } select in
+      let (schema, p, _) = eval_select_full { env with scope = Subquery } select in
       let schema = List.map (function
         | AttrWithSources a -> a
         | DynamicWithSources _ -> fail "nested select cannot have dynamic attributes"
@@ -884,7 +1072,7 @@ and infer_schema ~not_null_keys env columns =
     | Fun { kind = Null_handling (Coalesce _ | If_null); parameters = e :: _; _ } -> propagate_meta ~env e
     (* Or for subselect which always requests only one column, TODO: consider CTE in subselect, perhaps a rare occurrence *)
     | SelectExpr ({ select_complete = { select = ({columns = [{ value = Expr ({ value; _ }, _); _ }]; from; _}, _); _ }; _ }, _) ->
-      let (env,_) = eval_nested env from in
+      let (env,_,_) = eval_nested ~child_scope:Subquery env from in
       propagate_meta ~env value
     | Case _
     | Value _
@@ -970,33 +1158,20 @@ and get_params_opt env = function
 
 and get_params_l env l = flat_map (get_params env) l
 
-and do_join (env,params) (src,join_type,join_cond,pos) =
-  let schema = Schema.Join.join join_type join_cond env.schema src.rsrc_schema in
-  let env = { env with schema; from_dynamic = env.from_dynamic @ src.rsrc_dynamic } in
-  let p = match join_cond with
+and do_join (env,params) { From.src; kind; cond; _ } =
+  let schema = Schema.Join.join kind cond env.schema src.rsrc_schema in
+  let env = { env with schema } in
+  let p = match cond with
   | Default | Natural | Using _ -> []
   | On e -> get_params { env with set_tyvar_strict = true } e (* TODO should use final schema (same as tables)? *)
   in
-  let on_cols, on_blocked = match join_cond with On e -> columns_of_expr e | Default | Natural | Using _ -> [], false in
-  let env = { env with
-    join_on_cols = (pos, on_cols) :: env.join_on_cols;
-    join_on_blocked = env.join_on_blocked || on_blocked } in
-  let env =
-    match join_type, join_cond, p, src.rsrc_params, src.rsrc_tables with
-    | Schema.Join.Left, On e, [], [], (_ :: _ as tbls) when src.rsrc_is_table ->
-      let names = List.map fst tbls in
-      let unique = on_makes_table_unique ~env names e in
-      { env with join_candidates = (pos, names, unique) :: env.join_candidates }
-    | _ -> env
-  in
   env, params @ src.rsrc_params @ p
 
-and join env (first,joins) =
+and join env { From.base; joins } =
   assert (env.schema = []);
-  let all_tables = List.flatten (first.rsrc_tables :: List.map (fun (src,_,_,_) -> src.rsrc_tables) joins) in
-  let env = { env with tables = env.tables @ all_tables; schema = first.rsrc_schema; from_dynamic = first.rsrc_dynamic;
-    join_candidates = []; join_on_cols = []; join_on_blocked = false; } in
-  List.fold_left do_join (env, first.rsrc_params) joins
+  let all_tables = List.flatten (base.rsrc_tables :: List.map (fun j -> j.From.src.rsrc_tables) joins) in
+  let env = { env with tables = env.tables @ all_tables; schema = base.rsrc_schema } in
+  List.fold_left do_join (env, base.rsrc_params) joins
 
 
 and params_of_assigns env ss =
@@ -1062,14 +1237,23 @@ and ensure_res_expr = function
   | SelectExpr _ -> failwith "not implemented : ensure_res_expr for SELECT"
   | OptionActions _ -> failwith  "BoolChoice is used in WHERE expr only"
 
-and eval_nested env nested =
+and eval_nested ~child_scope env nested =
   (* nested selects generate new fresh schema in scope, cannot refer to outer schema,
     but can refer to attributes of tables through `tables` *)
   let env = { env with schema = [] } in
   (* FIXME resolved table schema depends on join (nullability with left), this is resolving too early *)
   match nested with
-  | Some (t,l) -> join env (resolve_source env t, List.map (fun loc -> let (x,jt,jc) = loc.value in resolve_source env x, jt.value, jc, loc.pos) l)
-  | None -> env, []
+  | Some (t,l) ->
+    let resolve = resolve_source ~child_scope env in
+    let from = {
+      From.base = resolve t;
+      joins = List.map (fun loc ->
+        let (x,jt,jc) = loc.value in
+        { From.src = resolve x; kind = jt.value; cond = jc; pos = loc.pos }) l;
+    } in
+    let env, params = join env from in
+    env, params, Some from
+  | None -> env, [], None
 
 (** Extract (sources, name) pairs for columns with IS NOT NULL in WHERE/HAVING
 
@@ -1154,19 +1338,23 @@ and extract_not_null_column_keys env = function
 
     expr |> analyze |> extract
 
-and eval_select ?(order=[]) env { columns; from; where; group; having; } =
-  let is_passthrough = columns <> [] && List.for_all (fun c -> match c.value with All | AllOf _ -> true | _ -> false) columns in
-  let raw_columns = columns in
-  let (env,p2) = eval_nested { env with allow_from_dynamic = is_passthrough } from in
+and eval_select ~order env { columns; from; where; group; having; } =
+  let is_passthrough = columns <> [] && List.for_all (fun c -> match c.value with All | AllOf _ -> true | Expr _ -> false) columns in
+  let child_scope =
+    match env.scope with
+    | (Top_level | From_passthrough) when is_passthrough -> From_passthrough
+    | Top_level | From_passthrough | Subquery -> Subquery
+  in
+  let (env,p2,resolved_from) = eval_nested ~child_scope env from in
   let env = { env with query_has_grouping = List.length group > 0 } in
   (* Extract IS NOT NULL predicates from WHERE and HAVING *)
   let not_null_keys_where = extract_not_null_column_keys env where in
   let not_null_keys_having = extract_not_null_column_keys env having in
   let not_null_keys = not_null_keys_where @ not_null_keys_having in
-  let columns = make_dynamic_select ~env columns in
-  let final_schema = infer_schema ~not_null_keys env columns in
+  let projection = make_dynamic_select ~env columns in
+  let final_schema = infer_schema ~not_null_keys env projection in
   let final_schema =
-    if is_passthrough && env.from_dynamic <> [] then final_schema @ env.from_dynamic
+    if is_passthrough then final_schema @ From.dynamic_columns resolved_from
     else final_schema
   in
   let final_schema' = List.concat_map (function
@@ -1174,7 +1362,7 @@ and eval_select ?(order=[]) env { columns; from; where; group; having; } =
     | DynamicWithSources (_, l) -> List.map snd l
   ) final_schema in
   (* use schema without aliases here *)
-  let p1 = get_params_of_columns env columns in
+  let p1 = get_params_of_columns env projection in
   let env, p3 = if Dialect.Semantic.is_where_aliases_dialect () then 
     let env = { env with schema = make_unique (Schema.Join.cross env.schema final_schema') } in
     env, get_params_opt { env with set_tyvar_strict = true; } where
@@ -1186,214 +1374,29 @@ and eval_select ?(order=[]) env { columns; from; where; group; having; } =
   in
   (* ORDER BY, HAVING, GROUP BY allow have column without explicit referring to source if it's specified in SELECT *)
   let env = { env with schema = update_schema_with_aliases env.schema final_schema' } in
-  let satisfies_some_relevant_constraint table where env =
-    let get_all_eql_checks expr = 
-      let rec aux acc expr_list =
-        match expr_list with
-        | [] -> acc
-        | expr :: expr_list ->
-          match expr with
-          | Fun { kind = Comparison Comp_equal; parameters = [v1; v2]; _ } ->
-            let columns_in_eql_check =
-            match v1, v2 with
-            | Column _, Column _ -> [] (* Columns may refer to each other in foreign
-                                          key constraints, so don't add any of them for now. 
-                                          TODO: consider foreign key constraints *)
-            | Column c, _ | _, Column c -> [c.collated]
-            | _ -> []
-            in
-            aux (columns_in_eql_check @ acc) expr_list
-          | Fun { kind = Logical And; parameters = [x; y]; _ } -> aux acc (x :: y :: expr_list)
-            (* as OR, XOR can easily propagate to tautology, we avoid checking them *)
-          | Fun { kind = Logical Or; _ } -> aux acc expr_list
-          | Fun { kind = Logical Xor; _ } -> aux acc expr_list
-          | _ -> aux acc expr_list
-      in
-      aux [] [expr]
-    in
-    let open Schema in
-    (* identify if the set of columns used in WHERE clause contains/represents constraints *)
-    let columns_in_where = get_all_eql_checks where in
-    let attributes_in_where = List.map (resolve_column ~env) columns_in_where in
-    let attributes_in_where = List.filter (fun attr -> List.mem table attr.Schema.Source.Attr.sources) attributes_in_where in
-    let column_constraints = 
-      List.map (fun (attr : table_name Source.Attr.t) -> attr.attr.extra) attributes_in_where 
-    in
-    let satisfies_single_value_constraint () =
-      List.exists (fun column_constraint -> 
-        Constraints.mem PrimaryKey column_constraint || Constraints.mem Unique column_constraint
-      ) column_constraints
-    in
-    let satisfies_composite_constraint () =
-      let open Constraint.StringSet in
-      let ids_set = of_list (List.map (fun col -> col.cname) columns_in_where) in
-      List.exists
-        (fun col ->
-          List.exists
-            (function
-              | Constraint.Composite (CompositePrimary s)
-              | Constraint.Composite (CompositeUnique s) -> subset s ids_set
-              | _ -> false)
-            (Constraints.elements col)
-        )
-        column_constraints
-    in
-    satisfies_single_value_constraint () || satisfies_composite_constraint ()
-  in
   let cardinality =
     match from, where with
     | None, None ->
       `One
     | None, Some _ ->
       `Zero_one
-    | Some _, _ when group = [] && exists_grouping columns && not (exists_windowing columns) ->
+    | Some _, _ when group = [] && exists_grouping projection && not (exists_windowing projection) ->
       `One
       (* TODO: analyse join types to determine if cardinality optimization can be done *)
-    | Some ((`Table t, _), []), Some w when satisfies_some_relevant_constraint t w env ->
+    | Some ((`Table t, _), []), Some w when pins_unique_row ~env { Sql.table = t; alias = None } w ->
       `Zero_one
     | Some _, _ ->
       `Nat
   in
   let p4 = get_params_l env group in
   let p5 = get_params_opt env having in
-  let drop_blocked = ref false in
-  let collect e = let (cs, b) = columns_of_expr e in if b then drop_blocked := true; cs in
-  let where_cols = match where with Some e -> collect e | None -> [] in
-  let group_cols = List.concat_map collect group in
-  let having_cols = match having with Some e -> collect e | None -> [] in
-  let order_cols = List.concat_map (fun (e, _) -> collect e) order in
-  let projection_blockers =
-    List.concat_map (fun c -> match c.Sql.value with
-      | All | AllOf _ -> []
-      | Expr ({ value = Choices (_, choices); _ }, _) ->
-        List.concat_map (function
-          | (_, Some (Sql.Column _)) -> []
-          | (_, Some e) -> collect e
-          | (_, None) -> []) choices
-      | Expr ({ value = Column _; _ }, _) -> []
-      | Expr ({ value = e; _ }, _) -> collect e
-    ) raw_columns
+  let final_schema, p2 =
+    Dynamic_join.mark ~env ~from:resolved_from ~columns ~where ~group ~having ~order final_schema p2
   in
-  let resolve_failed = ref false in
-  let cols_to_tables cols =
-    List.concat_map (fun c ->
-      match (try Some (resolve_column ~env c).Schema.Source.Attr.sources with _ -> None) with
-      | Some s -> s
-      | None -> resolve_failed := true; []) cols
-  in
-  let outside_tables = cols_to_tables (where_cols @ group_cols @ having_cols @ order_cols @ projection_blockers) in
-  let droppable =
-    if !drop_blocked || env.join_on_blocked || !resolve_failed then []
-    else begin
-      let candidates =
-        List.filter_map (fun (pos, names, unique) -> if unique then Some (pos, names) else None)
-          env.join_candidates
-      in
-      let rec refine current =
-        let keep (pos, names) =
-          not (source_has_key names outside_tables) &&
-          List.for_all (fun (p, cs) ->
-            p = pos
-            || List.mem_assoc p current
-            || not (source_has_key names (cols_to_tables cs)))
-            env.join_on_cols
-        in
-        let next = List.filter keep current in
-        if List.length next = List.length current then current else refine next
-      in
-      refine candidates |> List.map (fun (pos, names) -> (names, pos))
-    end
-  in
-  let droppable = if !resolve_failed then [] else droppable in
-  let droppable =
-    let used = Hashtbl.create 8 in
-    let sanitize raw =
-      let buf = Buffer.create (String.length raw) in
-      String.iter (fun c ->
-        if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c = '_'
-        then Buffer.add_char buf c) raw;
-      let s = Buffer.contents buf in
-      let s = if s = "" then "Join"
-        else match s.[0] with 'a'..'z' | 'A'..'Z' -> s | _ -> "Join_" ^ s in
-      String.capitalize_ascii s
-    in
-    let ctor_of names =
-      let base = sanitize (match names with n :: _ -> n.tn | [] -> "join") in
-      let rec uniq n =
-        let cand = if n = 0 then base else Printf.sprintf "%s_%d" base n in
-        if Hashtbl.mem used cand then uniq (n + 1)
-        else (Hashtbl.add used cand (); cand)
-      in
-      uniq 0
-    in
-    List.map (fun (names, pos) -> (names, pos, ctor_of names)) droppable
-  in
-  let direct_parents (_, pos_c, _) =
-    let on_cols = try List.assoc pos_c env.join_on_cols with Not_found -> [] in
-    let srcs = cols_to_tables on_cols in
-    List.filter (fun (names_p, pos_p, _) -> pos_p <> pos_c && source_has_key names_p srcs) droppable
-  in
-  let closure d =
-    let rec go seen acc = function
-      | [] -> List.rev acc
-      | ((_, pos, _) as x) :: rest ->
-        if List.mem pos seen then go seen acc rest
-        else go (pos :: seen) (x :: acc) (rest @ direct_parents x)
-    in
-    go [] [] [d]
-  in
-  let attr_from_droppable (a : table_name Schema.Source.Attr.t) =
-    List.find_opt (fun (names, _, _) -> source_has_key names a.sources) droppable
-  in
-  let final_schema =
-    if droppable = [] then final_schema
-    else List.map (function
-      | DynamicWithSources (p, cols) ->
-        DynamicWithSources (p, List.map (fun (cp, a) ->
-          match attr_from_droppable a with
-          | None -> (cp, a)
-          | Some d ->
-            let ctors = List.map (fun (_, _, c) -> c) (closure d) in
-            let meta = Meta.merge_right a.attr.meta (Meta.of_list ["dynamic_join_src", String.concat "," ctors]) in
-            (cp, { a with attr = { a.attr with meta } })
-        ) cols)
-      | x -> x
-    ) final_schema
-  in
-  let holes =
-    match List.find_map (function DynamicWithSources (p, _) -> Some p | _ -> None) final_schema with
-    | None -> []
-    | Some pid ->
-      let reachable =
-        List.concat_map (function
-          | DynamicWithSources (_, cols) ->
-            List.concat_map (fun (_, a) ->
-              match attr_from_droppable a with
-              | Some d -> List.map (fun (_, p, _) -> p) (closure d)
-              | None -> []) cols
-          | _ -> []) final_schema
-      in
-      droppable
-      |> List.filter (fun (_, pos, _) -> List.mem pos reachable)
-      |> List.map (fun (_, pos, ctor) -> Sql.DynamicSelectJoin (pid, pos, ctor))
-  in
-  let from_region =
-    if holes = [] then p2
-    else
-      let lead = function
-        | Sql.Single (p, _) | SingleIn (p, _) -> fst p.id.pos
-        | Choice (id, _) | DynamicSelect (id, _) | TupleList (id, _)
-        | OptionActionChoice (id, _, _, _) -> fst id.pos
-        | ChoiceIn { param; _ } -> fst param.pos
-        | SharedVarsGroup (_, id) -> fst id.pos
-        | DynamicSelectJoin (_, (j1, _), _) -> j1
-      in
-      List.stable_sort (fun a b -> compare (lead a) (lead b)) (p2 @ holes)
-  in
-  (final_schema, p1 @ from_region @ p3 @ p4 @ p5, env, cardinality)
+  (final_schema, p1 @ p2 @ p3 @ p4 @ p5, env, cardinality)
 
 (** @return final schema, params and tables that can be referenced by outside scope *)
-and resolve_source env (x, alias) =
+and resolve_source ~child_scope env (x, alias) =
   let resolve_schema_with_alias schema = begin match alias with 
     | Some { table_name; column_aliases = Some col_schema } -> 
       let schema = Schema.compound ((List.map (fun attr -> Schema.Source.Attr.{sources=[]; attr;})) col_schema) schema in
@@ -1405,7 +1408,7 @@ and resolve_source env (x, alias) =
   end in
   match x with
   | `Select select ->
-    let (s,p,_) = eval_select_full { env with is_subquery = true; from_source = env.allow_from_dynamic } select in
+    let (s,p,_) = eval_select_full { env with scope = child_scope } select in
     let tbl_alias = Option.map (fun { table_name; _ } -> table_name) alias in
     let add_src i = { i with Schema.Source.Attr.sources = List.concat [option_list tbl_alias; i.Schema.Source.Attr.sources] } in
     let dyn = List.filter_map (function
@@ -1417,9 +1420,9 @@ and resolve_source env (x, alias) =
       | DynamicWithSources _ -> None
     ) s in
     let s, tables = resolve_schema_with_alias s in
-    { rsrc_schema = s; rsrc_params = p; rsrc_tables = tables; rsrc_dynamic = dyn; rsrc_is_table = false }
+    { rsrc_schema = s; rsrc_params = p; rsrc_tables = tables; rsrc_dynamic = dyn; rsrc_physical_table = None }
   | `Nested from ->
-    let (env,p) = eval_nested env (Some from) in
+    let (env,p,resolved_from) = eval_nested ~child_scope env (Some from) in
     let s = infer_schema ~not_null_keys:[] env [dummy_loc All] in
     if alias <> None then failwith "No alias allowed on nested tables";
     let s = List.map (function 
@@ -1427,14 +1430,15 @@ and resolve_source env (x, alias) =
        (* TODO: next step optimize it *)
       | DynamicWithSources _ -> failwith "Nested source cannot have dynamic columns"
     ) s in
-    { rsrc_schema = s; rsrc_params = p; rsrc_tables = env.tables; rsrc_dynamic = env.from_dynamic; rsrc_is_table = false }
+    { rsrc_schema = s; rsrc_params = p; rsrc_tables = env.tables; rsrc_dynamic = From.dynamic_columns resolved_from; rsrc_physical_table = None }
   | `Table s ->
     let (name,s) = Tables_with_derived.get ~env s in
     let is_cte = List.exists (fun (n, _) -> n = name) env.ctes in
     let alias = Option.map (fun { table_name; _ } -> table_name) alias in
     let sources = (name :: option_list alias) in
     let s3 = List.map (fun attr -> { Schema.Source.Attr.attr; sources }) s  in
-    { rsrc_schema = s3; rsrc_params = []; rsrc_tables = List.map (fun name -> name, s) sources; rsrc_dynamic = []; rsrc_is_table = not is_cte }
+    { rsrc_schema = s3; rsrc_params = []; rsrc_tables = List.map (fun name -> name, s) sources; rsrc_dynamic = [];
+      rsrc_physical_table = if is_cte then None else Some { Sql.table = name; alias } }
   | `ValueRows { row_constructor_list; row_order; row_limit; } ->
     (* 
       The columns of the table output from VALUES have the implicitly 
@@ -1464,7 +1468,7 @@ and resolve_source env (x, alias) =
           [ TupleList (id, ValueRows { types = List.map Source_type.to_infer_type types; values_start_pos }) ], Stmt.Select `Nat
     in
     let s, tables = resolve_schema_with_alias s in
-    { rsrc_schema = s; rsrc_params = p; rsrc_tables = tables; rsrc_dynamic = []; rsrc_is_table = false }
+    { rsrc_schema = s; rsrc_params = p; rsrc_tables = tables; rsrc_dynamic = []; rsrc_physical_table = None }
 
 
 and eval_select_full env { select_complete; cte } =
@@ -1492,7 +1496,7 @@ and eval_cte { cte_items; is_recursive } =
           end
           in
           let stmt = { stmt_ with select = select, other } in
-          let s1, p1, env, cardinality = eval_select env (fst stmt.select) in
+          let s1, p1, env, cardinality = eval_select ~order:[] env (fst stmt.select) in
           let s1' = List.map (function 
             | AttrWithSources attr -> attr
             (* TODO: next step is to support it for CTEs *)
@@ -1507,7 +1511,7 @@ and eval_cte { cte_items; is_recursive } =
       else (
         match cte.stmt with
         | CteInline stmt ->
-          let s1, p1, env, cardinality = eval_select env (fst stmt.select) in
+          let s1, p1, env, cardinality = eval_select ~order:[] env (fst stmt.select) in
           eval_compound ~env:{ env with tables = env.tables } (p1, s1, cardinality, stmt)
         | CteSharedQuery shared_query_name ->
           let (_, stmt) = Shared_queries.get shared_query_name.value in
@@ -1528,7 +1532,7 @@ and eval_compound ~env result =
   let (p1, s1, cardinality, stmt) = result in
   let { select=(_select, other); order; limit; _; } = stmt in
   let other = List.map snd other in
-  let (s2l, p2l) = List.split (List.map (fun (s,p,_,_) -> s,p) @@ List.map (eval_select env) other) in
+  let (s2l, p2l) = List.split (List.map (fun (s,p,_,_) -> s,p) @@ List.map (eval_select ~order:[] env) other) in
   let cardinality = if other = [] then cardinality else `Nat in
   (* ignoring tables in compound statements - they cannot be used in ORDER BY *)
   let final_schema = 
@@ -1861,14 +1865,15 @@ let rec eval (stmt:Sql.stmt) =
     let f, s = Tables.get table in
     let env = { empty_env with is_update = true } in
     let r = List.map (fun attr -> {Schema.Source.Attr.attr; sources=[f] }) s in
-    let params = update_tables ~env [{ rsrc_schema = r; rsrc_params = []; rsrc_tables = [(f, s)]; rsrc_dynamic = []; rsrc_is_table = true }] ss w in
+    let params = update_tables ~env [{ rsrc_schema = r; rsrc_params = []; rsrc_tables = [(f, s)]; rsrc_dynamic = [];
+      rsrc_physical_table = Some { Sql.table = f; alias = None } }] ss w in
     let env = { env with schema = update_schema_with_aliases [] r; is_update = true } in
     let p3 = params_of_order o [] { env with tables = [(f, s)] } in
     let lim = List.map (fun p -> make_param ~id:p.id ~typ:(Source_type.to_infer_type p.typ)) lim in
     [], params @ p3 @ (List.map (fun p -> Single (p, Meta.empty())) lim), Update (Some table)
   | UpdateMulti (tables,ss,w,o,lim) ->
     let env = { empty_env with is_update = true } in
-    let sources = List.map (fun src -> resolve_source env ((`Nested src), None)) tables in
+    let sources = List.map (fun src -> resolve_source ~child_scope:Subquery env ((`Nested src), None)) tables in
     let tables = List.map (fun src -> src.rsrc_tables) sources |> List.flatten in
     let params = update_tables ~env sources ss w in
     let p3 = params_of_order o [] { env with schema = Schema.cross_all @@ List.map (fun src -> src.rsrc_schema) sources; tables } in

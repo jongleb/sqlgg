@@ -74,7 +74,7 @@ type sql =
   | SubstIn of Sql.Type.t Sql.param * Sql.Meta.t
   | DynamicIn of Sql.param_id * [`In | `NotIn] * sql list
   | SubstTuple of Sql.param_id * Sql.tuple_list_kind
-  | DynamicSelectJoin of Sql.param_id * string * string
+  | DynamicSelectJoin of { pid : Sql.param_id; join_id : Sql.Join_id.t; join_text : string }
 
 and sql_dynamic_ctor = { 
   ctor: Sql.param_id; 
@@ -124,11 +124,11 @@ let substitute_vars s vars subst_param =
       assert (i1 > i);
       let acc = Dynamic (name, dyn) :: Static (String.slice ~first:i ~last:i1 s) :: acc in
       loop s acc i2 parami tl
-    | DynamicSelectJoin (name, (j1,j2), ctor) :: tl ->
+    | DynamicSelectJoin (name, (j1,j2), _source) :: tl ->
       assert (j2 > j1);
       assert (j1 > i);
       let join_text = String.trim (String.slice ~first:j1 ~last:j2 s) in
-      let acc = DynamicSelectJoin (name, ctor, join_text) :: Static (String.slice ~first:i ~last:j1 s) :: acc in
+      let acc = DynamicSelectJoin { pid = name; join_id = Sql.Join_id.of_pos (j1, j2); join_text } :: Static (String.slice ~first:i ~last:j1 s) :: acc in
       loop s acc j2 parami tl
     | TupleList (id, Where_in { value = (types, in_not_in); pos = (j1, j2) }) :: tl ->
       let (i1,i2) = id.pos in
