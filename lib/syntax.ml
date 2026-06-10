@@ -428,85 +428,95 @@ module From = struct
     List.concat_map (fun src -> src.rsrc_dynamic) (Option.map_default sources [] from)
 end
 
-let pins_unique_row ~env source expr =
-  let belongs (a : table_name Schema.Source.Attr.t) =
-    let name = Sql.join_source_name source in
-    List.exists (fun (s : table_name) -> s.tn = name.tn) a.sources
-  in
-  let own_column = function
+let sub_exprs = function
+  | Sql.Value _ | Param _ | Inparam _ | Column _ | Of_values _ | SelectExpr _ -> []
+  | Choices (_, l) -> List.filter_map snd l
+  | InChoice (_, _, e) -> [e]
+  | OptionActions { choice; _ } -> [choice]
+  | Fun { parameters; _ } -> parameters
+  | InTupleList { value = { exprs; _ }; _ } -> exprs
+  | Case { case; branches; else_ } ->
+    option_list case
+    @ List.concat_map (fun (b : Sql.case_branch) -> [b.when_; b.then_]) branches
+    @ option_list else_
+
+let rec conjuncts e =
+  match e with
+  | Sql.Fun { kind = Logical And; parameters; _ } ->
+    Seq.concat_map conjuncts (List.to_seq parameters)
+  | e -> Seq.return e
+
+module Table_refs = struct
+  module Names = Set.Make(String)
+
+  type t =
+    | Only of Names.t
+    | Anything
+
+  let empty = Only Names.empty
+
+  let union a b =
+    match a, b with
+    | Only x, Only y -> Only (Names.union x y)
+    | Anything, (Only _ | Anything) | Only _, Anything -> Anything
+
+  let rec of_expr ~env = function
     | Sql.Column c ->
       (match resolve_column_opt ~env c.collated with
-       | Some attr when belongs attr -> Some attr
-       | Some _ | None -> None)
-    | _ -> None
+       | Some attr -> Only (Names.of_seq (Seq.map (fun (s : table_name) -> s.tn) (List.to_seq attr.Schema.Source.Attr.sources)))
+       | None -> Anything)
+    | SelectExpr _ -> Anything
+    | e -> of_exprs ~env (sub_exprs e)
+
+  and of_exprs ~env l = List.fold_left (fun acc e -> union acc (of_expr ~env e)) empty l
+
+  let may_refer source = function
+    | Only names -> Names.mem (Sql.join_source_name source).tn names
+    | Anything -> true
+end
+
+let pins_unique_row ~env source expr =
+  let module SS = Constraint.StringSet in
+  let source_name = Sql.join_source_name source in
+  let belongs (a : table_name Schema.Source.Attr.t) =
+    List.exists (fun (s : table_name) -> s.tn = source_name.tn) a.sources
   in
-  let rec pinned acc = function
-    | [] -> acc
-    | Sql.Fun { kind = Comparison Comp_equal; parameters = [v1; v2]; _ } :: tl ->
-      let pin a b =
-        match own_column a, own_column b with
-        | Some attr, None -> [attr]
-        | Some _, Some _ | None, _ -> []
-      in
-      pinned (pin v1 v2 @ pin v2 v1 @ acc) tl
-    | Fun { kind = Logical And; parameters; _ } :: tl -> pinned acc (parameters @ tl)
-    | _ :: tl -> pinned acc tl
+  let source_attrs =
+    List.filter_map
+      (fun a -> if belongs a then Some a.Schema.Source.Attr.attr else None)
+      env.schema
   in
-  let attrs = pinned [] [expr] in
-  let constraints =
-    List.fold_left (fun acc (a : table_name Schema.Source.Attr.t) -> Constraints.union acc a.attr.extra)
-      Constraints.empty attrs
-  in
-  let ids = Constraint.StringSet.of_seq (Seq.map (fun a -> a.Schema.Source.Attr.attr.name) (List.to_seq attrs)) in
-  let pins = function
-    | Constraint.PrimaryKey | Unique -> true
-    | Composite (CompositePrimary s) | Composite (CompositeUnique s) -> Constraint.StringSet.subset s ids
-    | NotNull | Null | Autoincrement | OnConflict _ | WithDefault -> false
-  in
-  Constraints.exists pins constraints
-
-module Dynamic_join = struct
-
-  let sub_exprs = function
-    | Sql.Value _ | Param _ | Inparam _ | Column _ | Of_values _ | SelectExpr _ -> []
-    | Choices (_, l) -> List.filter_map snd l
-    | InChoice (_, _, e) -> [e]
-    | OptionActions { choice; _ } -> [choice]
-    | Fun { parameters; _ } -> parameters
-    | InTupleList { value = { exprs; _ }; _ } -> exprs
-    | Case { case; branches; else_ } ->
-      option_list case
-      @ List.concat_map (fun (b : Sql.case_branch) -> [b.when_; b.then_]) branches
-      @ option_list else_
-
-  module Table_refs = struct
-    module Names = Set.Make(String)
-
-    type t =
-      | Only of Names.t
-      | Anything
-
-    let empty = Only Names.empty
-
-    let union a b =
-      match a, b with
-      | Only x, Only y -> Only (Names.union x y)
-      | Anything, (Only _ | Anything) | Only _, Anything -> Anything
-
-    let rec of_expr ~env = function
+  match unique_keys source_attrs with
+  | [] -> false
+  | keys ->
+    let relevant = List.fold_left SS.union SS.empty keys in
+    let own_column = function
       | Sql.Column c ->
         (match resolve_column_opt ~env c.collated with
-         | Some attr -> Only (Names.of_seq (Seq.map (fun (s : table_name) -> s.tn) (List.to_seq attr.Schema.Source.Attr.sources)))
-         | None -> Anything)
-      | SelectExpr _ -> Anything
-      | e -> of_exprs ~env (sub_exprs e)
+         | Some attr when belongs attr -> Some attr
+         | Some _ | None -> None)
+      | _ -> None
+    in
+    let row_independent e =
+      not (Table_refs.may_refer source (Table_refs.of_expr ~env e))
+    in
+    let pin1 a b =
+      match own_column a with
+      | Some attr when SS.mem attr.Schema.Source.Attr.attr.name relevant && row_independent b ->
+        Some attr.Schema.Source.Attr.attr.name
+      | Some _ | None -> None
+    in
+    let pin a b = match pin1 a b with Some _ as r -> r | None -> pin1 b a in
+    let pinned =
+      conjuncts expr
+      |> Seq.filter_map (function
+        | Sql.Fun { kind = Comparison Comp_equal; parameters = [a; b]; _ } -> pin a b
+        | _ -> None)
+      |> SS.of_seq
+    in
+    List.exists (fun k -> SS.subset k pinned) keys
 
-    and of_exprs ~env l = List.fold_left (fun acc e -> union acc (of_expr ~env e)) empty l
-
-    let may_refer source = function
-      | Only names -> Names.mem (Sql.join_source_name source).tn names
-      | Anything -> true
-  end
+module Dynamic_join = struct
 
   module Id_set = Set.Make(Sql.Join_id)
   module Id_map = Map.Make(Sql.Join_id)

@@ -359,6 +359,17 @@ end
 type attr = {name : string; domain : Type.t; extra : Constraints.t; meta: Meta.t; }
   [@@deriving show {with_path=false}]
 
+let unique_keys schema =
+  let keys_of a =
+    Constraints.fold (fun c acc ->
+      match c with
+      | Constraint.PrimaryKey | Unique -> Constraint.StringSet.singleton a.name :: acc
+      | Composite (CompositePrimary s | CompositeUnique s) -> s :: acc
+      | NotNull | Null | Autoincrement | OnConflict _ | WithDefault -> acc)
+      a.extra []
+  in
+  List.concat_map keys_of schema |> List.sort_uniq Constraint.StringSet.compare
+
 let make_attribute name kind extra ~meta =
   if Constraints.mem Null extra && Constraints.mem NotNull extra then fail "Column %s can be either NULL or NOT NULL, but not both" name;
   let domain = Type.{ t = Option.default Int kind; nullability = if List.exists (fun cstrt -> Constraints.mem cstrt extra) [NotNull; PrimaryKey]
