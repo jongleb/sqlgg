@@ -440,12 +440,6 @@ let sub_exprs = function
     @ List.concat_map (fun (b : Sql.case_branch) -> [b.when_; b.then_]) branches
     @ option_list else_
 
-let rec conjuncts e =
-  match e with
-  | Sql.Fun { kind = Logical And; parameters; _ } ->
-    Seq.concat_map conjuncts (List.to_seq parameters)
-  | e -> Seq.return e
-
 module Table_refs = struct
   module Names = Set.Make(String)
 
@@ -507,13 +501,22 @@ let pins_unique_row ~env source expr =
       | Some _ | None -> None
     in
     let pin a b = match pin1 a b with Some _ as r -> r | None -> pin1 b a in
-    let pinned =
-      conjuncts expr
-      |> Seq.filter_map (function
-        | Sql.Fun { kind = Comparison Comp_equal; parameters = [a; b]; _ } -> pin a b
-        | _ -> None)
-      |> SS.of_seq
+    let rec pinned_set = function
+      | Sql.Fun { kind = Logical And; parameters; _ } ->
+        List.fold_left (fun acc e -> SS.union acc (pinned_set e)) SS.empty parameters
+      | Fun { kind = Comparison Comp_equal; parameters = [a; b]; _ } ->
+        (match pin a b with Some n -> SS.singleton n | None -> SS.empty)
+      | Choices (_, branches) ->
+        (match branches with
+         | [] -> SS.empty
+         | (_, e) :: tl ->
+           List.fold_left
+             (fun acc (_, e) -> SS.inter acc (Option.map_default pinned_set SS.empty e))
+             (Option.map_default pinned_set SS.empty e) tl)
+      | Fun _ | Value _ | Param _ | Inparam _ | Column _ | Of_values _ | SelectExpr _
+      | InChoice _ | OptionActions _ | InTupleList _ | Case _ -> SS.empty
     in
+    let pinned = pinned_set expr in
     List.exists (fun k -> SS.subset k pinned) keys
 
 module Dynamic_join = struct
