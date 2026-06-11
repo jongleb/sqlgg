@@ -122,6 +122,11 @@ Chains: a pick renders only the joins its closure needs, the parent is emitted o
   [MOCK] PREPARE[9]: SELECT a.url, b.label FROM users u  LEFT JOIN profiles p ON p.user_id = u.id  LEFT JOIN avatars a ON a.id = p.avatar_id  LEFT JOIN badges b ON b.id = p.user_id WHERE u.id = ?
   [SQL] SELECT a.url, b.label FROM users u  LEFT JOIN profiles p ON p.user_id = u.id  LEFT JOIN avatars a ON a.id = p.avatar_id  LEFT JOIN badges b ON b.id = p.user_id WHERE u.id = 1
   [MOCK] Returning 0 rows
+  === chain_pinned: pick id (WHERE pins the whole chain, no joins dropped) ===
+  [MOCK SELECT] Connection type: [> `RO ]
+  [MOCK] PREPARE[10]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id LEFT JOIN avatars a ON a.id = p.avatar_id LEFT JOIN badges b ON b.id = a.badge_id WHERE b.label = ?
+  [SQL] SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id LEFT JOIN avatars a ON a.id = p.avatar_id LEFT JOIN badges b ON b.id = a.badge_id WHERE b.label = 'x'
+  [MOCK] Returning 0 rows
 
 Independent joins and the same table twice: each pick renders only its own join:
 
@@ -216,123 +221,133 @@ droppable) and pick the joined column (the join is always present):
   [MOCK] PREPARE[10]: SELECT u.id FROM users u NATURAL LEFT JOIN profiles p WHERE u.id = ?
   [SQL] SELECT u.id FROM users u NATURAL LEFT JOIN profiles p WHERE u.id = 1
   [MOCK] Returning 0 rows
+  === join_kinds/using_after: pick id -> candidate kept (later USING) ===
+  [MOCK SELECT] Connection type: [> `RO ]
+  [MOCK] PREPARE[11]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id JOIN orders o USING (bio) WHERE u.id = ?
+  [SQL] SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id JOIN orders o USING (bio) WHERE u.id = 1
+  [MOCK] Returning 0 rows
+  === join_kinds/natural_after: pick id -> candidate kept (later NATURAL) ===
+  [MOCK SELECT] Connection type: [> `RO ]
+  [MOCK] PREPARE[12]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id NATURAL JOIN orders o WHERE u.id = ?
+  [SQL] SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id NATURAL JOIN orders o WHERE u.id = 1
+  [MOCK] Returning 0 rows
   === on_shapes/param_in_on: pick id -> join kept (param in ON) ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[11]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id AND p.bio = ? WHERE u.id = ?
+  [MOCK] PREPARE[13]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id AND p.bio = ? WHERE u.id = ?
   [SQL] SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id AND p.bio = 'x' WHERE u.id = 1
   [MOCK] Returning 0 rows
   === on_shapes/extra_const_on: pick id -> join dropped ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[12]: SELECT u.id FROM users u  WHERE u.id = ?
+  [MOCK] PREPARE[14]: SELECT u.id FROM users u  WHERE u.id = ?
   [SQL] SELECT u.id FROM users u  WHERE u.id = 1
   [MOCK] Returning 0 rows
   === on_shapes/extra_const_on: pick bio -> join present ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[13]: SELECT p.bio FROM users u  LEFT JOIN profiles p ON p.user_id = u.id AND p.bio = 'x' WHERE u.id = ?
+  [MOCK] PREPARE[15]: SELECT p.bio FROM users u  LEFT JOIN profiles p ON p.user_id = u.id AND p.bio = 'x' WHERE u.id = ?
   [SQL] SELECT p.bio FROM users u  LEFT JOIN profiles p ON p.user_id = u.id AND p.bio = 'x' WHERE u.id = 1
   [MOCK] Returning 0 rows
   === on_shapes/inequality: pick id -> join kept ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[14]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id > u.id WHERE u.id = ?
+  [MOCK] PREPARE[16]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id > u.id WHERE u.id = ?
   [SQL] SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id > u.id WHERE u.id = 1
   [MOCK] Returning 0 rows
   === on_shapes/no_alias: pick id -> join dropped ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[15]: SELECT u.id FROM users u  WHERE u.id = ?
+  [MOCK] PREPARE[17]: SELECT u.id FROM users u  WHERE u.id = ?
   [SQL] SELECT u.id FROM users u  WHERE u.id = 1
   [MOCK] Returning 0 rows
   === on_shapes/no_alias: pick bio -> join present ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[16]: SELECT profiles.bio FROM users u  LEFT JOIN profiles ON profiles.user_id = u.id WHERE u.id = ?
+  [MOCK] PREPARE[18]: SELECT profiles.bio FROM users u  LEFT JOIN profiles ON profiles.user_id = u.id WHERE u.id = ?
   [SQL] SELECT profiles.bio FROM users u  LEFT JOIN profiles ON profiles.user_id = u.id WHERE u.id = 1
   [MOCK] Returning 0 rows
   === key_shapes/unique: pick id -> join dropped (UNIQUE key) ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[17]: SELECT u.id FROM users u  WHERE u.id = ?
+  [MOCK] PREPARE[19]: SELECT u.id FROM users u  WHERE u.id = ?
   [SQL] SELECT u.id FROM users u  WHERE u.id = 1
   [MOCK] Returning 0 rows
   === key_shapes/unique: pick label -> join present ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[18]: SELECT a.label FROM users u  LEFT JOIN accounts a ON a.email = u.email WHERE u.id = ?
+  [MOCK] PREPARE[20]: SELECT a.label FROM users u  LEFT JOIN accounts a ON a.email = u.email WHERE u.id = ?
   [SQL] SELECT a.label FROM users u  LEFT JOIN accounts a ON a.email = u.email WHERE u.id = 1
   [MOCK] Returning 0 rows
   === key_shapes/composite_partial: pick id -> join kept ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[19]: SELECT u.id FROM users u LEFT JOIN memberships m ON m.org = u.org WHERE u.id = ?
+  [MOCK] PREPARE[21]: SELECT u.id FROM users u LEFT JOIN memberships m ON m.org = u.org WHERE u.id = ?
   [SQL] SELECT u.id FROM users u LEFT JOIN memberships m ON m.org = u.org WHERE u.id = 1
   [MOCK] Returning 0 rows
   === key_shapes/composite_full: pick id -> join dropped ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[20]: SELECT u.id FROM users u  WHERE u.id = ?
+  [MOCK] PREPARE[22]: SELECT u.id FROM users u  WHERE u.id = ?
   [SQL] SELECT u.id FROM users u  WHERE u.id = 1
   [MOCK] Returning 0 rows
   === key_shapes/composite_full: pick title -> join present ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[21]: SELECT m.title FROM users u  LEFT JOIN memberships m ON m.org = u.org AND m.dept = u.dept WHERE u.id = ?
+  [MOCK] PREPARE[23]: SELECT m.title FROM users u  LEFT JOIN memberships m ON m.org = u.org AND m.dept = u.dept WHERE u.id = ?
   [SQL] SELECT m.title FROM users u  LEFT JOIN memberships m ON m.org = u.org AND m.dept = u.dept WHERE u.id = 1
   [MOCK] Returning 0 rows
   === outside_refs/group: pick id -> join kept (GROUP BY) ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[22]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id GROUP BY p.bio
+  [MOCK] PREPARE[24]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id GROUP BY p.bio
   [SQL] SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id GROUP BY p.bio
   [MOCK] Returning 0 rows
   === outside_refs/order: pick id -> join kept (ORDER BY) ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[23]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id ORDER BY p.bio
+  [MOCK] PREPARE[25]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id ORDER BY p.bio
   [SQL] SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id ORDER BY p.bio
   [MOCK] Returning 0 rows
   === outside_refs/having: pick id -> join kept (HAVING) ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[24]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id GROUP BY u.id HAVING MAX(p.user_id) > 0
+  [MOCK] PREPARE[26]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id GROUP BY u.id HAVING MAX(p.user_id) > 0
   [SQL] SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id GROUP BY u.id HAVING MAX(p.user_id) > 0
   [MOCK] Returning 0 rows
   === outside_refs/complex_proj: pick id -> join kept (complex expr) ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[25]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?
+  [MOCK] PREPARE[27]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?
   [SQL] SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = 1
   [MOCK] Returning 0 rows
   === outside_refs/subq_in_where: pick id -> join kept (subquery in WHERE) ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[26]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id IN (SELECT user_id FROM profiles)
+  [MOCK] PREPARE[28]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id IN (SELECT user_id FROM profiles)
   [SQL] SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id IN (SELECT user_id FROM profiles)
   [MOCK] Returning 0 rows
   === outside_refs/unqualified: pick id -> join kept (unqualified ref) ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[27]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE bio = 'x'
+  [MOCK] PREPARE[29]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE bio = 'x'
   [SQL] SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE bio = 'x'
   [MOCK] Returning 0 rows
   === outside_refs/unreferenced: pick id -> join rendered statically ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[28]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?
+  [MOCK] PREPARE[30]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?
   [SQL] SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = 1
   [MOCK] Returning 0 rows
   === subquery_sources/plain: pick id -> join kept (subquery source) ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[29]: SELECT u.id FROM users u LEFT JOIN (SELECT user_id, bio FROM profiles) s ON s.user_id = u.id WHERE u.id = ?
+  [MOCK] PREPARE[31]: SELECT u.id FROM users u LEFT JOIN (SELECT user_id, bio FROM profiles) s ON s.user_id = u.id WHERE u.id = ?
   [SQL] SELECT u.id FROM users u LEFT JOIN (SELECT user_id, bio FROM profiles) s ON s.user_id = u.id WHERE u.id = 1
   [MOCK] Returning 0 rows
   === subquery_sources/cross_dup: pick id -> join kept ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[30]: SELECT u.id FROM users u LEFT JOIN (SELECT p.user_id, p.bio FROM profiles p, users x) s ON s.user_id = u.id WHERE u.id = ?
+  [MOCK] PREPARE[32]: SELECT u.id FROM users u LEFT JOIN (SELECT p.user_id, p.bio FROM profiles p, users x) s ON s.user_id = u.id WHERE u.id = ?
   [SQL] SELECT u.id FROM users u LEFT JOIN (SELECT p.user_id, p.bio FROM profiles p, users x) s ON s.user_id = u.id WHERE u.id = 1
   [MOCK] Returning 0 rows
   === subquery_sources/union_dup: pick id -> join kept ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[31]: SELECT u.id FROM users u LEFT JOIN (SELECT user_id, bio FROM profiles UNION ALL SELECT user_id, bio FROM profiles) s ON s.user_id = u.id WHERE u.id = ?
+  [MOCK] PREPARE[33]: SELECT u.id FROM users u LEFT JOIN (SELECT user_id, bio FROM profiles UNION ALL SELECT user_id, bio FROM profiles) s ON s.user_id = u.id WHERE u.id = ?
   [SQL] SELECT u.id FROM users u LEFT JOIN (SELECT user_id, bio FROM profiles UNION ALL SELECT user_id, bio FROM profiles) s ON s.user_id = u.id WHERE u.id = 1
   [MOCK] Returning 0 rows
   === subquery_sources/subq_base: pick id -> table join dropped ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[32]: SELECT s.id FROM (SELECT id FROM users) s 
+  [MOCK] PREPARE[34]: SELECT s.id FROM (SELECT id FROM users) s 
   [SQL] SELECT s.id FROM (SELECT id FROM users) s 
   [MOCK] Returning 0 rows
   === subquery_sources/subq_base: pick bio -> table join present ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[33]: SELECT p.bio FROM (SELECT id FROM users) s  LEFT JOIN profiles p ON p.user_id = s.id
+  [MOCK] PREPARE[35]: SELECT p.bio FROM (SELECT id FROM users) s  LEFT JOIN profiles p ON p.user_id = s.id
   [SQL] SELECT p.bio FROM (SELECT id FROM users) s  LEFT JOIN profiles p ON p.user_id = s.id
   [MOCK] Returning 0 rows
   === chain_bad: pick id -> both joins kept (child pins parent) ===
   [MOCK SELECT] Connection type: [> `RO ]
-  [MOCK] PREPARE[34]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id LEFT JOIN avatars a ON a.profile_id = p.id WHERE u.id = ?
+  [MOCK] PREPARE[36]: SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id LEFT JOIN avatars a ON a.profile_id = p.id WHERE u.id = ?
   [SQL] SELECT u.id FROM users u LEFT JOIN profiles p ON p.user_id = u.id LEFT JOIN avatars a ON a.profile_id = p.id WHERE u.id = 1
   [MOCK] Returning 0 rows

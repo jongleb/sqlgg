@@ -29,3 +29,8 @@ let () =
     ignore (List.select () label ~uid:1L (fun x -> x)));
   run "diamond: pick both (parent emitted once)" (fun () ->
     ignore (List.select () (let+ u = url and+ l = label in (u, l)) ~uid:1L (fun x -> x)))
+
+let () =
+  let open S.Chain_pinned_col in
+  run "chain_pinned: pick id (WHERE pins the whole chain, no joins dropped)" (fun () ->
+    ignore (List.select () id ~label:"x" (fun x -> x)))

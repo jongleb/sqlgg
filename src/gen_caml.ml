@@ -1090,9 +1090,10 @@ let generate_dynamic_select_modules stmts =
       let join_ctors = dynamic_join_ctors stmt.Gen.vars in
       let source_ctors = List.sort_uniq compare (List.map snd join_ctors) in
       let deps_of_attr (attr : Sql.attr) =
-        match Sql.Dynamic_join_meta.get attr.meta with
-        | None -> "[]"
-        | Some ids -> sprintf "[%s]" (ids |> List.map (join_ctor join_ctors) |> String.concat "; ")
+        Sql.Dynamic_join_meta.get attr.meta
+        |> Option.map_default
+          (fun ids -> sprintf "[%s]" (ids |> List.map (join_ctor join_ctors) |> String.concat "; "))
+          "[]"
       in
       let field_sqls = List.find_map (function
         | Gen.Dynamic (pid, ctors) when pid = di.param_id -> 

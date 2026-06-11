@@ -15,3 +15,8 @@ SELECT u.id, p.bio, a.url, b.label FROM users u LEFT JOIN profiles p ON p.user_i
 -- [sqlgg] dynamic_select=true
 -- @diamond
 SELECT u.id, a.url, b.label FROM users u LEFT JOIN profiles p ON p.user_id = u.id LEFT JOIN avatars a ON a.id = p.avatar_id LEFT JOIN badges b ON b.id = p.user_id WHERE u.id = @uid;
+-- pinning is transitive: WHERE pins badges, whose ON pins avatars, whose ON pins
+-- profiles -> nothing is droppable, all joins stay static
+-- [sqlgg] dynamic_select=true
+-- @chain_pinned
+SELECT u.id, p.bio, a.url, b.label FROM users u LEFT JOIN profiles p ON p.user_id = u.id LEFT JOIN avatars a ON a.id = p.avatar_id LEFT JOIN badges b ON b.id = a.badge_id WHERE b.label = @label;

@@ -50,6 +50,14 @@ let () =
   let open Join_kinds.Join_natural_col in
   run "join_kinds/natural: pick id -> join kept (NATURAL)" (fun () -> ignore (List.select () id ~uid:1L (fun x -> x)))
 
+let () =
+  let open Join_kinds.Using_after_candidate_col in
+  run "join_kinds/using_after: pick id -> candidate kept (later USING)" (fun () -> ignore (List.select () id ~uid:1L (fun x -> x)))
+
+let () =
+  let open Join_kinds.Natural_after_candidate_col in
+  run "join_kinds/natural_after: pick id -> candidate kept (later NATURAL)" (fun () -> ignore (List.select () id ~uid:1L (fun x -> x)))
+
 (* ---- ON shapes ---- *)
 module On_shapes = On_shapes.Sqlgg(Print_impl)
 

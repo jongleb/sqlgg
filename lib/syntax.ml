@@ -433,6 +433,7 @@ let sub_exprs = function
   | Choices (_, l) -> List.filter_map snd l
   | InChoice (_, _, e) -> [e]
   | OptionActions { choice; _ } -> [choice]
+  | Fun { kind = Agg (With_order { order; _ }); parameters; _ } -> parameters @ List.map fst order
   | Fun { parameters; _ } -> parameters
   | InTupleList { value = { exprs; _ }; _ } -> exprs
   | Case { case; branches; else_ } ->
@@ -455,10 +456,11 @@ module Table_refs = struct
     | Anything, (Only _ | Anything) | Only _, Anything -> Anything
 
   let rec of_expr ~env = function
-    | Sql.Column c ->
-      (match resolve_column_opt ~env c.collated with
-       | Some attr -> Only (Names.of_seq (Seq.map (fun (s : table_name) -> s.tn) (List.to_seq attr.Schema.Source.Attr.sources)))
-       | None -> Anything)
+    | Sql.Column c -> c.collated
+      |> resolve_column_opt ~env 
+      |> Option.map_default (fun attr -> 
+          Only (Names.of_seq (Seq.map (fun (s : table_name) -> s.tn) (List.to_seq attr.Schema.Source.Attr.sources))))
+         Anything
     | SelectExpr _ -> Anything
     | e -> of_exprs ~env (sub_exprs e)
 
@@ -469,94 +471,110 @@ module Table_refs = struct
     | Anything -> true
 end
 
-let pins_unique_row ~env source expr =
+let matches_at_most_one_row ~env table expr =
   let module SS = Constraint.StringSet in
-  let source_name = Sql.join_source_name source in
+  let table_name = Sql.join_source_name table in
   let belongs (a : table_name Schema.Source.Attr.t) =
-    List.exists (fun (s : table_name) -> s.tn = source_name.tn) a.sources
+    List.exists (fun (s : table_name) -> s.tn = table_name.tn) a.sources
   in
-  let source_attrs =
+  let table_attrs =
     List.filter_map
       (fun a -> if belongs a then Some a.Schema.Source.Attr.attr else None)
       env.schema
   in
-  match unique_keys source_attrs with
+  match unique_keys table_attrs with
   | [] -> false
   | keys ->
-    let relevant = List.fold_left SS.union SS.empty keys in
-    let own_column = function
+    let independent_of_table e =
+      not (Table_refs.may_refer table (Table_refs.of_expr ~env e))
+    in
+    let bound1 a b =
+      match a with
       | Sql.Column c ->
-        (match resolve_column_opt ~env c.collated with
-         | Some attr when belongs attr -> Some attr
-         | Some _ | None -> None)
+        Stdlib.Option.bind (resolve_column_opt ~env c.collated) (fun attr ->
+          if belongs attr && independent_of_table b
+          then Some attr.Schema.Source.Attr.attr.name else None)
       | _ -> None
     in
-    let row_independent e =
-      not (Table_refs.may_refer source (Table_refs.of_expr ~env e))
-    in
-    let pin1 a b =
-      match own_column a with
-      | Some attr when SS.mem attr.Schema.Source.Attr.attr.name relevant && row_independent b ->
-        Some attr.Schema.Source.Attr.attr.name
-      | Some _ | None -> None
-    in
-    let pin a b = match pin1 a b with Some _ as r -> r | None -> pin1 b a in
-    let rec pinned_set = function
+    let bound_part a b = match bound1 a b with Some _ as r -> r | None -> bound1 b a in
+    let rec bound_parts = function
       | Sql.Fun { kind = Logical And; parameters; _ } ->
-        List.fold_left (fun acc e -> SS.union acc (pinned_set e)) SS.empty parameters
+        List.fold_left (fun acc e -> SS.union acc (bound_parts e)) SS.empty parameters
       | Fun { kind = Comparison Comp_equal; parameters = [a; b]; _ } ->
-        (match pin a b with Some n -> SS.singleton n | None -> SS.empty)
+        b |> bound_part a |> Option.map_default SS.singleton SS.empty
       | Choices (_, branches) ->
+        let of_branch (_, e) = Option.map_default bound_parts SS.empty e in
         (match branches with
          | [] -> SS.empty
-         | (_, e) :: tl ->
-           List.fold_left
-             (fun acc (_, e) -> SS.inter acc (Option.map_default pinned_set SS.empty e))
-             (Option.map_default pinned_set SS.empty e) tl)
+         | hd :: tl -> List.fold_left (fun acc b -> SS.inter acc (of_branch b)) (of_branch hd) tl)
       | Fun _ | Value _ | Param _ | Inparam _ | Column _ | Of_values _ | SelectExpr _
       | InChoice _ | OptionActions _ | InTupleList _ | Case _ -> SS.empty
     in
-    let pinned = pinned_set expr in
-    List.exists (fun k -> SS.subset k pinned) keys
+    let bound = bound_parts expr in
+    List.exists (fun k -> SS.subset k bound) keys
 
-module Dynamic_join = struct
+module Table_elimination = struct
 
   module Id_set = Set.Make(Sql.Join_id)
   module Id_map = Map.Make(Sql.Join_id)
-  module Name_map = Map.Make(String)
+  module Table_map = Map.Make(String)
 
-  type droppable = {
-    drop_source : Sql.join_source;
-    drop_pos : pos;
+  type candidate = {
+    table : Sql.join_source;
+    join : From.join;
   }
 
-  let id d = Sql.Join_id.of_pos d.drop_pos
+  let join_id c = Sql.Join_id.of_pos c.join.pos
 
-  let candidate ~env { From.src; kind; cond; pos } =
+  let eliminable ~env ({ From.src; kind; cond; pos = _ } as join) =
     let rec has_params = function
       | Sql.Param _ | Inparam _ | InTupleList _ | Choices _ | InChoice _ | OptionActions _ | SelectExpr _ -> true
       | Value _ | Column _ | Of_values _ -> false
       | (Fun _ | Case _) as e -> List.exists has_params (sub_exprs e)
     in
     match kind, cond, src.rsrc_physical_table with
-    | Schema.Join.Left, Schema.Join.On e, Some source
-      when not (has_params e) && pins_unique_row ~env source e ->
-      Some { drop_source = source; drop_pos = pos }
+    | Schema.Join.Left, Schema.Join.On e, Some table
+      when not (has_params e) && matches_at_most_one_row ~env table e ->
+      Some { table; join }
     | _ -> None
 
-  type on_ref = {
-    on_join : Sql.Join_id.t;
-    mentions : Id_set.t;
-  }
-
-  let mark ~env ~from ~columns ~where ~group ~having ~order final_schema from_params =
+  let eliminate ~env ~from ~columns ~where ~group ~having ~order final_schema from_params =
+    let unchanged = final_schema, from_params in
     let joins = Option.map_default (fun f -> f.From.joins) [] from in
-    match List.filter_map (candidate ~env) joins with
-    | [] -> final_schema, from_params
+    (* NATURAL/USING bind columns implicitly, invisibly to the analysis *)
+    let candidates =
+      let flagged, _ =
+        List.fold_right (fun j (acc, implicit_later) ->
+          let implicit = match j.From.cond with
+            | Schema.Join.Natural | Using _ -> true
+            | On _ | Default -> false
+          in
+          (j, implicit_later) :: acc, implicit || implicit_later)
+          joins ([], false)
+      in
+      List.filter_map (fun (j, implicit_later) -> if implicit_later then None else eliminable ~env j) flagged
+    in
+    match candidates with
+    | [] -> unchanged
     | candidates ->
-      let ids_of l = Id_set.of_list (List.map id l) in
-      let outside =
-        let projection_exprs =
+      let outside_select_list = option_list where @ group @ option_list having @ List.map fst order in
+      (* the parser erases OVER (..) exprs, their table references are invisible *)
+      let rec uses_window_function e =
+        match e with
+        | Sql.Fun { is_over_clause = true; _ } -> true
+        | e -> List.exists uses_window_function (sub_exprs e)
+      in
+      let query_exprs =
+        List.concat_map (fun c -> match c.Sql.value with
+          | All | AllOf _ -> []
+          | Expr ({ value = e; _ }, _) -> [e])
+          columns
+        @ outside_select_list
+      in
+      if List.exists uses_window_function query_exprs then unchanged else
+      let ids_of l = Id_set.of_list (List.map join_id l) in
+      let used_elsewhere =
+        let static_select_list =
           List.concat_map (fun c -> match c.Sql.value with
             | All | AllOf _ -> []
             | Expr ({ value = Choices (_, choices); _ }, _) ->
@@ -567,86 +585,74 @@ module Dynamic_join = struct
             | Expr ({ value = e; _ }, _) -> [e])
             columns
         in
-        Table_refs.of_exprs ~env (option_list where @ group @ option_list having @ List.map fst order @ projection_exprs)
+        Table_refs.of_exprs ~env (outside_select_list @ static_select_list)
       in
-      let on_refs =
-        List.filter_map (fun { From.cond; pos; _ } -> match cond with
+      let condition_refs =
+        List.fold_left (fun m { From.cond; pos; _ } ->
+          match cond with
           | Schema.Join.On e ->
             let refs = Table_refs.of_expr ~env e in
-            let mentions = ids_of (List.filter (fun c -> Table_refs.may_refer c.drop_source refs) candidates) in
-            Some { on_join = Sql.Join_id.of_pos pos; mentions }
-          | Default | Natural | Using _ -> None)
-          joins
+            let j = Sql.Join_id.of_pos pos in
+            let referenced =
+              candidates
+              |> List.filter (fun c -> Table_refs.may_refer c.table refs)
+              |> ids_of 
+              |> Id_set.remove j
+            in
+            Id_map.add j referenced m
+          | Default | Natural | Using _ -> m)
+          Id_map.empty joins
       in
-      let mention_map =
-        List.fold_left
-          (fun m r -> Id_map.add r.on_join (Id_set.remove r.on_join r.mentions) m)
-          Id_map.empty on_refs
+      let condition_refs_of j = condition_refs |> Id_map.find_opt j |> Option.default Id_set.empty in
+      (* a cycle is possible via Table_refs.Anything: keep this a fixpoint *)
+      let saturate refs set =
+        let rec go s =
+          let expanded = Id_set.fold (fun j -> Id_set.union (refs j)) s s in
+          if Id_set.equal expanded s then s else go expanded
+        in
+        go set
       in
-      let mentions_of j = Id_map.find_opt j mention_map |> Option.default Id_set.empty in
-      let droppable_ids =
-        let start =
+      let redundant_ids =
+        let unreferenced =
           candidates
-          |> List.filter (fun d -> not (Table_refs.may_refer d.drop_source outside))
+          |> List.filter (fun c -> not (Table_refs.may_refer c.table used_elsewhere))
           |> ids_of
         in
-        let rec sweep dropped frontier =
-          if Id_set.is_empty frontier then dropped
-          else
-            let pinned = Id_set.fold (fun j acc -> Id_set.union acc (mentions_of j)) frontier Id_set.empty in
-            let killed = Id_set.inter pinned dropped in
-            sweep (Id_set.diff dropped killed) killed
+        let retained =
+          Id_map.fold (fun j _ acc -> if Id_set.mem j unreferenced then acc else Id_set.add j acc)
+            condition_refs Id_set.empty
         in
-        let roots =
-          on_refs
-          |> List.filter_map (fun r -> if Id_set.mem r.on_join start then None else Some r.on_join)
-          |> Id_set.of_list
-        in
-        sweep start roots
+        Id_set.diff unreferenced (saturate condition_refs_of retained)
       in
-      match List.filter (fun d -> Id_set.mem (id d) droppable_ids) candidates with
-      | [] -> final_schema, from_params
-      | (_ :: _ as droppable) ->
-        let deps_ids =
-          let parents =
-            List.fold_left (fun m d ->
-              Id_map.add (id d) (Id_set.inter (mentions_of (id d)) droppable_ids) m)
-              Id_map.empty droppable
-          in
-          let closure seed =
-            let rec go acc frontier =
-              if Id_set.is_empty frontier then acc
-              else
-                let acc = Id_set.union acc frontier in
-                let next = Id_set.fold (fun i s -> Id_set.union s (Id_map.find i parents)) frontier Id_set.empty in
-                go acc (Id_set.diff next acc)
-            in
-            go Id_set.empty (Id_set.singleton seed)
-          in
-          let memo = List.fold_left (fun m d -> Id_map.add (id d) (closure (id d)) m) Id_map.empty droppable in
-          fun d -> Id_map.find (id d) memo
+      match List.filter (fun c -> Id_set.mem (join_id c) redundant_ids) candidates with
+      | [] -> unchanged
+      | (_ :: _ as redundant) ->
+        let prerequisites j =
+          let direct i = Id_set.inter (condition_refs_of i) redundant_ids in
+          saturate direct (Id_set.singleton j)
         in
-        let owner =
-          let owner_map =
-            List.fold_left (fun m d -> Name_map.add (Sql.join_source_name d.drop_source).tn d m)
-              Name_map.empty droppable
+        let join_of_column =
+          let by_table =
+            List.fold_left (fun m c ->
+              let pre = prerequisites (join_id c) in
+              Table_map.add (Sql.join_source_name c.table).tn (pre, Id_set.elements pre) m)
+              Table_map.empty redundant
           in
           fun (a : table_name Schema.Source.Attr.t) ->
-            List.find_map (fun (s : table_name) -> Name_map.find_opt s.tn owner_map) a.sources
+            List.find_map (fun (s : table_name) -> Table_map.find_opt s.tn by_table) a.sources
         in
-        let mark_attr reachable (cp, a) =
-          match owner a with
-          | None -> reachable, (cp, a)
-          | Some d ->
-            let ids = deps_ids d in
-            let meta = Sql.Dynamic_join_meta.set (Id_set.elements ids) a.attr.meta in
-            Id_set.union reachable ids,
-            (cp, { a with attr = { a.attr with meta } })
+        let annotate_column needed (cp, (a : table_name Schema.Source.Attr.t)) =
+          join_of_column a
+          |> Option.map_default
+            (fun (pre, pre_list) ->
+              Id_set.union needed pre,
+              (cp, { a with attr = { a.attr with meta = Sql.Dynamic_join_meta.set pre_list a.attr.meta } }))
+            (needed, (cp, a))
         in
-        let reachable, final_schema =
+        let needed, final_schema =
           List.fold_left_map (fun acc -> function
             | DynamicWithSources (p, cols) ->
-              let acc, cols = List.fold_left_map mark_attr acc cols in
+              let acc, cols = List.fold_left_map annotate_column acc cols in
               acc, DynamicWithSources (p, cols)
             | AttrWithSources _ as x -> acc, x)
             Id_set.empty final_schema
@@ -655,15 +661,15 @@ module Dynamic_join = struct
           final_schema
           |> List.find_map (function DynamicWithSources (p, _) -> Some p | AttrWithSources _ -> None)
           |> Option.map_default (fun pid ->
-            droppable
-            |> List.filter (fun d -> Id_set.mem (id d) reachable)
-            |> List.map (fun d -> Sql.DynamicSelectJoin (pid, d.drop_pos, d.drop_source)))
+            redundant
+            |> List.filter (fun c -> Id_set.mem (join_id c) needed)
+            |> List.map (fun c -> Sql.DynamicSelectJoin (pid, c.join.pos, c.table)))
             []
         in
         match holes with
         | [] -> final_schema, from_params
         | _ :: _ ->
-          let lead = function
+          let position = function
             | Sql.Single (p, _) | SingleIn (p, _) -> fst p.id.pos
             | Choice (id, _) | DynamicSelect (id, _) | TupleList (id, _)
             | OptionActionChoice (id, _, _, _) -> fst id.pos
@@ -671,8 +677,8 @@ module Dynamic_join = struct
             | SharedVarsGroup (_, id) -> fst id.pos
             | DynamicSelectJoin (_, (j1, _), _) -> j1
           in
-          let by_lead a b = Int.compare (lead a) (lead b) in
-          final_schema, List.merge by_lead from_params (List.sort ~cmp:by_lead holes)
+          let by_position a b = Int.compare (position a) (position b) in
+          final_schema, List.merge by_position from_params (List.sort ~cmp:by_position holes)
 end
 
 (** resolve each name reference (Column, Inserted, etc) into ResValue or ResFun of corresponding type *)
@@ -1401,7 +1407,7 @@ and eval_select ~order env { columns; from; where; group; having; } =
     | Some _, _ when group = [] && exists_grouping projection && not (exists_windowing projection) ->
       `One
       (* TODO: analyse join types to determine if cardinality optimization can be done *)
-    | Some ((`Table t, _), []), Some w when pins_unique_row ~env { Sql.table = t; alias = None } w ->
+    | Some ((`Table t, _), []), Some w when matches_at_most_one_row ~env { Sql.table = t; alias = None } w ->
       `Zero_one
     | Some _, _ ->
       `Nat
@@ -1409,7 +1415,7 @@ and eval_select ~order env { columns; from; where; group; having; } =
   let p4 = get_params_l env group in
   let p5 = get_params_opt env having in
   let final_schema, p2 =
-    Dynamic_join.mark ~env ~from:resolved_from ~columns ~where ~group ~having ~order final_schema p2
+    Table_elimination.eliminate ~env ~from:resolved_from ~columns ~where ~group ~having ~order final_schema p2
   in
   (final_schema, p1 @ p2 @ p3 @ p4 @ p5, env, cardinality)
 
