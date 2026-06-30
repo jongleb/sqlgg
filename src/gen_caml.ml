@@ -1033,7 +1033,64 @@ let generate_enum_modules stmts =
     ()
   )
   
-let generate_dynamic_select_preamble _stmts = ()
+let dynamic_select_combinators_src = {|type 'a t = {
+  set: T.params -> unit;
+  read: T.row -> int -> 'a * int;
+  column: string;
+  count: int;
+}
+
+let pure x = {
+  set = (fun _p -> ());
+  read = (fun _row idx -> (x, idx));
+  column = "";
+  count = 0;
+}
+
+let apply f a = {
+  set = (fun p -> f.set p; a.set p);
+  read = (fun row idx ->
+    let (vf, i1) = f.read row idx in
+    let (va, i2) = a.read row i1 in
+    (vf va, i2));
+  column = (match f.column, a.column with
+    | "", c | c, "" -> c
+    | c1, c2 -> c1 ^ ", " ^ c2);
+  count = f.count + a.count;
+}
+
+let map f a = apply (pure f) a
+
+let (let+) t f = map f t
+let (and+) a b = apply (map (fun a b -> (a, b)) a) b|}
+
+let emit_verbatim_block src =
+  let ind = make_indent () in
+  String.split_on_char '\n' src
+  |> List.iter (fun line ->
+    if line = "" then print_newline ()
+    else Printf.printf "%s%s\n" ind line)
+
+let stmt_has_dynamic_select stmt =
+  List.exists (function Sql.DynamicSelect _ -> true | _ -> false) stmt.Gen.vars
+
+let stmt_is_scoped stmt = Props.get stmt.Gen.props "scoped" = Some "true"
+
+let stmt_is_scoped_fixed stmt =
+  stmt_is_scoped stmt
+  && not (stmt_has_dynamic_select stmt)
+  && (match stmt.Gen.kind with Stmt.Select _ -> true | _ -> false)
+  && List.exists (fun a -> a.Sql.name <> "") (schema_to_attrs stmt.Gen.schema)
+
+let generate_dynamic_select_preamble stmts =
+  if List.exists (fun s -> stmt_has_dynamic_select s && stmt_is_scoped s) stmts then begin
+    output "module Dynamic_select = struct";
+    inc_indent ();
+    emit_verbatim_block dynamic_select_combinators_src;
+    dec_indent ();
+    output "end";
+    empty_line ()
+  end
 
 let get_all_dynamic_select_infos index stmt =
   let query_name = Gen.choose_name stmt.Gen.props stmt.Gen.kind index in
@@ -1074,40 +1131,10 @@ let generate_dynamic_select_modules stmts =
       output "module %s = struct" module_name;
       inc_indent ();
 
-      let ind = make_indent () in
-      String.split_on_char '\n' {|type 'a t = {
-  set: T.params -> unit;
-  read: T.row -> int -> 'a * int;
-  column: string;
-  count: int;
-}
-
-let pure x = {
-  set = (fun _p -> ());
-  read = (fun _row idx -> (x, idx));
-  column = "";
-  count = 0;
-}
-
-let apply f a = {
-  set = (fun p -> f.set p; a.set p);
-  read = (fun row idx ->
-    let (vf, i1) = f.read row idx in
-    let (va, i2) = a.read row i1 in
-    (vf va, i2));
-  column = (match f.column, a.column with
-    | "", c | c, "" -> c
-    | c1, c2 -> c1 ^ ", " ^ c2);
-  count = f.count + a.count;
-}
-
-let map f a = apply (pure f) a
-
-let (let+) t f = map f t
-let (and+) a b = apply (map (fun a b -> (a, b)) a) b|}
-      |> List.iter (fun line ->
-        if line = "" then print_newline ()
-        else Printf.printf "%s%s\n" ind line);
+      if stmt_is_scoped stmt then
+        output "include Dynamic_select"
+      else
+        emit_verbatim_block dynamic_select_combinators_src;
 
       List.iter2 (fun (field_name, _param_name, all_param_names, _simple_params, args_list, attr, ctor) (_, sql) ->
         let field_name_lower = 
@@ -1177,7 +1204,99 @@ let (and+) a b = apply (map (fun a b -> (a, b)) a) b|}
     )
   ) stmts
 
+let generate_scope_preamble stmts =
+  if List.exists stmt_is_scoped_fixed stmts then begin
+    output "module Scope = Sqlgg_scope.Make(T)";
+    empty_line ()
+  end
+
+let emit_scoped_selectors stmt =
+  let seen = Hashtbl.create 16 in
+  List.iteri (fun i attr ->
+    match attr.Sql.name with
+    | "" -> ()
+    | name ->
+      let field =
+        let n = String.lowercase_ascii name in
+        if List.mem n Name.reserved then n ^ "_" else n
+      in
+      if not (Hashtbl.mem seen field) then begin
+        Hashtbl.add seen field ();
+        let value = format_get_column ~row:"row" ~idx:(string_of_int i) attr in
+        output "let %s = { Scope.read = (fun row -> %s) }" field value
+      end
+  ) (schema_to_attrs stmt.Gen.schema)
+
+let emit_scoped_select ~index ~module_kind stmt =
+  if not (supports_module_kind module_kind stmt) then () else begin
+  let subst = Props.get_all stmt.props "subst" in
+  let inputs = (subst @ names_of_vars stmt.vars) |> List.map (sprintf "~%s") |> inline_values in
+  let has_callback = has_row_callback stmt in
+  let params = append_func_params ~has_callback ~module_kind inputs in
+  output "let select db (fieldset : _ Scope.t) %s =" params;
+  inc_indent ();
+  let sql = make_sql @@ get_sql stmt in
+  let sql = match subst with
+  | [] -> sql
+  | vars ->
+    output "let __sqlgg_sql =";
+    output "  let replace_all ~str ~sub ~by =";
+    output "    let rec loop str = match ExtString.String.replace ~str ~sub ~by with";
+    output "    | true, str -> loop str";
+    output "    | false, s -> s";
+    output "    in loop str";
+    output "  in";
+    output "  let sql = %s in" sql;
+    List.iter (fun var -> output "  let sql = replace_all ~str:sql ~sub:(\"%%%%%s%%%%\") ~by:%s in" var var) vars;
+    output "  sql";
+    output "in";
+    "__sqlgg_sql"
+  in
+  let func = select_func_of_kind stmt.kind in
+  let params_binder_name = output_params_binder index stmt.vars in
+  output_r_acc_init module_kind;
+  let decode = "fieldset.Scope.read row" in
+  let is_single = match stmt.kind with Stmt.Select (`One | `Zero_one) -> true | _ -> false in
+  let (bind_start, bind_end, full_callback) =
+    if is_single then "", "", sprintf "(fun row -> %s)" decode
+    else match module_kind with
+    | `Fold -> "IO.(>>=) (", ")", sprintf "(fun row -> r_acc := callback (%s) !r_acc)" decode
+    | `List -> "IO.(>>=) (", ")", sprintf "(fun row -> r_acc := callback (%s) :: !r_acc)" decode
+    | `Direct | `Single -> "", "", sprintf "(fun row -> callback (%s))" decode
+  in
+  output "%sT.%s db %s %s %s%s" bind_start func sql params_binder_name full_callback bind_end;
+  complete_func module_kind
+  end
+
+let generate_scoped_modules stmts =
+  List.iteri (fun index stmt ->
+    if stmt_is_scoped_fixed stmt then begin
+      let query_name = choose_name stmt.props stmt.kind index in
+      let module_name = sprintf "%s_col" (String.capitalize_ascii query_name) in
+      output "module %s = struct" module_name;
+      inc_indent ();
+      emit_scoped_selectors stmt;
+      empty_line ();
+      emit_scoped_select ~index ~module_kind:`Direct stmt;
+      [`Fold; `List]
+      |> List.iter (fun module_kind ->
+        if supports_module_kind module_kind stmt then begin
+          let name = module_kind_name module_kind in
+          output "module %s = struct" name;
+          inc_indent ();
+          emit_scoped_select ~index ~module_kind stmt;
+          dec_indent ();
+          output "end (* module %s *)" name;
+          empty_line ()
+        end);
+      dec_indent ();
+      output "end";
+      empty_line ()
+    end
+  ) stmts
+
 let generate_stmt_wrapper ~module_kind index stmt =
+  if stmt_is_scoped_fixed stmt then () else
   let dynamic_infos = get_all_dynamic_select_infos index stmt in
   match dynamic_infos with
   | [] -> generate_stmt ~module_kind index stmt
@@ -1205,11 +1324,13 @@ let generate ~gen_io ~migration_names name stmts =
   output "module IO = %s" io;
   generate_enum_modules stmts;
   generate_dynamic_select_preamble stmts;
+  generate_scope_preamble stmts;
   generate_dynamic_select_modules stmts;
+  generate_scoped_modules stmts;
   empty_line ();
   List.iteri (generate_stmt_wrapper ~module_kind:`Direct) stmts;
-  let has_row_cb = List.exists has_row_callback stmts in
-  let has_single = List.exists is_single_row_select stmts in
+  let has_row_cb = List.exists (fun s -> has_row_callback s && not (stmt_is_scoped_fixed s)) stmts in
+  let has_single = List.exists (fun s -> is_single_row_select s && not (stmt_is_scoped_fixed s)) stmts in
   [`Single, has_single; `Fold, has_row_cb; `List, has_row_cb]
   |> List.filter_map (fun (module_kind, cond) -> if cond then Some module_kind else None)
   |> List.iteri (fun i module_kind ->

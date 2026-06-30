@@ -13,9 +13,13 @@ let () = Printexc.(register_printer begin function
   | _ -> None
 end)
 
-let set_dynamic_select_prop props = match Props.get props "dynamic_select" with
-  | Some s -> String.lowercase_ascii s = "true"
-  | None -> false
+let bool_prop props name = match Props.get props name with
+  | Some s -> Some (String.lowercase_ascii s = "true")
+  | None -> None
+
+let set_dynamic_select_prop props = Option.default false (bool_prop props "dynamic_select")
+
+let set_scoped_prop props = Option.default !Sqlgg_config.scoped (bool_prop props "scoped")
 
 (** Handle parsing error and format a helpful error message *)
 let handle_parsing_error sql exn (line, cnum, tok, tail) =
@@ -91,6 +95,7 @@ let check_statement stmt sql =
 
 let parse_one' (sql, props) =
     if Sqlgg_config.debug1 () then Printf.eprintf "------\n%s\n%!" sql;
+    let scoped = set_scoped_prop props in
     Syntax.Config.dynamic_select := set_dynamic_select_prop props;
     let (sql, schema, vars, kind, dialect_features) = Syntax.parse sql in
     check_dialect sql dialect_features;
@@ -99,6 +104,7 @@ let parse_one' (sql, props) =
     | _ -> ()
     end;
     let props = Props.set props "sql" sql in
+    let props = Props.set props "scoped" (string_of_bool scoped) in
     { Gen.schema; vars; kind; props }
 
 (** @return parsed statement or [None] in case of parsing failure.
