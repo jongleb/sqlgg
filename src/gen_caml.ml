@@ -873,17 +873,9 @@ let emit_dynamic_module_select ~module_kind ~dynamic_infos stmt =
   inc_indent ();
   emit_dynamic_select_body ~module_kind ~dynamic_infos stmt
 
-let generate_stmt ~module_kind index stmt =
-  if not (supports_module_kind module_kind stmt) then () else
-  if Props.get stmt.props "noop" <> None then begin
-    let _ = gen_func_signature ~dynamic_infos:[] ~module_kind ~index stmt in
-    output "ignore db;";
-    output "IO.return { T.affected_rows = 0L; insert_id = None }";
-    complete_func module_kind
-  end else
-  let subst = gen_func_signature ~dynamic_infos:[] ~module_kind ~index stmt in
+let emit_sql_with_subst subst stmt =
   let sql = make_sql @@ get_sql stmt in
-  let sql = match subst with
+  match subst with
   | [] -> sql
   | vars ->
     output "let __sqlgg_sql =";
@@ -898,7 +890,17 @@ let generate_stmt ~module_kind index stmt =
     output "  sql";
     output "in";
     "__sqlgg_sql"
-  in
+
+let generate_stmt ~module_kind index stmt =
+  if not (supports_module_kind module_kind stmt) then () else
+  if Props.get stmt.props "noop" <> None then begin
+    let _ = gen_func_signature ~dynamic_infos:[] ~module_kind ~index stmt in
+    output "ignore db;";
+    output "IO.return { T.affected_rows = 0L; insert_id = None }";
+    complete_func module_kind
+  end else
+  let subst = gen_func_signature ~dynamic_infos:[] ~module_kind ~index stmt in
+  let sql = emit_sql_with_subst subst stmt in
   let (func, callback) =
     match stmt.schema with
     | [] -> "execute", ""
@@ -1235,23 +1237,7 @@ let emit_scoped_select ~index ~module_kind stmt =
   let params = append_func_params ~has_callback ~module_kind inputs in
   output "let select db (fieldset : _ Scope.t) %s =" params;
   inc_indent ();
-  let sql = make_sql @@ get_sql stmt in
-  let sql = match subst with
-  | [] -> sql
-  | vars ->
-    output "let __sqlgg_sql =";
-    output "  let replace_all ~str ~sub ~by =";
-    output "    let rec loop str = match ExtString.String.replace ~str ~sub ~by with";
-    output "    | true, str -> loop str";
-    output "    | false, s -> s";
-    output "    in loop str";
-    output "  in";
-    output "  let sql = %s in" sql;
-    List.iter (fun var -> output "  let sql = replace_all ~str:sql ~sub:(\"%%%%%s%%%%\") ~by:%s in" var var) vars;
-    output "  sql";
-    output "in";
-    "__sqlgg_sql"
-  in
+  let sql = emit_sql_with_subst subst stmt in
   let func = select_func_of_kind stmt.kind in
   let params_binder_name = output_params_binder index stmt.vars in
   output_r_acc_init module_kind;
@@ -1296,7 +1282,6 @@ let generate_scoped_modules stmts =
   ) stmts
 
 let generate_stmt_wrapper ~module_kind index stmt =
-  if stmt_is_scoped_fixed stmt then () else
   let dynamic_infos = get_all_dynamic_select_infos index stmt in
   match dynamic_infos with
   | [] -> generate_stmt ~module_kind index stmt
@@ -1329,8 +1314,8 @@ let generate ~gen_io ~migration_names name stmts =
   generate_scoped_modules stmts;
   empty_line ();
   List.iteri (generate_stmt_wrapper ~module_kind:`Direct) stmts;
-  let has_row_cb = List.exists (fun s -> has_row_callback s && not (stmt_is_scoped_fixed s)) stmts in
-  let has_single = List.exists (fun s -> is_single_row_select s && not (stmt_is_scoped_fixed s)) stmts in
+  let has_row_cb = List.exists has_row_callback stmts in
+  let has_single = List.exists is_single_row_select stmts in
   [`Single, has_single; `Fold, has_row_cb; `List, has_row_cb]
   |> List.filter_map (fun (module_kind, cond) -> if cond then Some module_kind else None)
   |> List.iteri (fun i module_kind ->

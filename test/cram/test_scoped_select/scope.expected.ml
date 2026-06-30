@@ -70,4 +70,84 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
     stock INT\n\
 )") T.no_params
 
+  let scope_q1 db ~id =
+    let get_row stmt =
+      (T.get_column_Int stmt 0), (T.get_column_Text_nullable stmt 1), (T.get_column_Decimal_nullable stmt 2), (T.get_column_Text_nullable stmt 3)
+    in
+    let set_params stmt =
+      let p = T.start_params stmt (1) in
+      T.set_param_Int p id;
+      T.finish_params p
+    in
+    T.select_one_maybe db ("SELECT id, name, price, category FROM products WHERE id = ?") set_params get_row
+
+  let scope_q2 db ~min_stock callback =
+    let invoke_callback stmt =
+      callback
+        ~stock:(T.get_column_Int_nullable stmt 0)
+        ~id:(T.get_column_Int stmt 1)
+        ~name:(T.get_column_Text_nullable stmt 2)
+    in
+    let set_params stmt =
+      let p = T.start_params stmt (1) in
+      T.set_param_Int p min_stock;
+      T.finish_params p
+    in
+    T.select db ("SELECT stock, id, name FROM products WHERE stock > ?") set_params invoke_callback
+
+  module Single = struct
+    let scope_q1 db ~id callback =
+      let invoke_callback stmt =
+        callback
+          ~id:(T.get_column_Int stmt 0)
+          ~name:(T.get_column_Text_nullable stmt 1)
+          ~price:(T.get_column_Decimal_nullable stmt 2)
+          ~category:(T.get_column_Text_nullable stmt 3)
+      in
+      let set_params stmt =
+        let p = T.start_params stmt (1) in
+        T.set_param_Int p id;
+        T.finish_params p
+      in
+      T.select_one_maybe db ("SELECT id, name, price, category FROM products WHERE id = ?") set_params invoke_callback
+
+  end (* module Single *)
+  
+  module Fold = struct
+    let scope_q2 db ~min_stock callback acc =
+      let invoke_callback stmt =
+        callback
+          ~stock:(T.get_column_Int_nullable stmt 0)
+          ~id:(T.get_column_Int stmt 1)
+          ~name:(T.get_column_Text_nullable stmt 2)
+      in
+      let set_params stmt =
+        let p = T.start_params stmt (1) in
+        T.set_param_Int p min_stock;
+        T.finish_params p
+      in
+      let r_acc = ref acc in
+      IO.(>>=) (T.select db ("SELECT stock, id, name FROM products WHERE stock > ?") set_params (fun x -> r_acc := invoke_callback x !r_acc))
+      (fun () -> IO.return !r_acc)
+
+  end (* module Fold *)
+  
+  module List = struct
+    let scope_q2 db ~min_stock callback =
+      let invoke_callback stmt =
+        callback
+          ~stock:(T.get_column_Int_nullable stmt 0)
+          ~id:(T.get_column_Int stmt 1)
+          ~name:(T.get_column_Text_nullable stmt 2)
+      in
+      let set_params stmt =
+        let p = T.start_params stmt (1) in
+        T.set_param_Int p min_stock;
+        T.finish_params p
+      in
+      let r_acc = ref [] in
+      IO.(>>=) (T.select db ("SELECT stock, id, name FROM products WHERE stock > ?") set_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+      (fun () -> IO.return (List.rev !r_acc))
+
+  end (* module List *)
 end (* module Sqlgg *)

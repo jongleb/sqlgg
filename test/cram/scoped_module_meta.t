@@ -6,8 +6,8 @@ type-agnostic and lines up with the generated selector type:
   $ cp test_scoped_select/product_id.ml .
   $ cp test_scoped_select/scope_mod_frag.ml .
   $ cat scope_mod.sql | sqlgg -no-header -gen caml_io -params unnamed -gen caml -dialect mysql - > output.ml
-  $ grep -n "Product_id.get_column" output.ml
-  7:    let id = { Scope.read = (fun row -> Product_id.get_column (T.get_column_int64 row 0)) }
+  $ grep -c "Scope.read = (fun row -> Product_id.get_column" output.ml
+  1
   $ ocamlfind ocamlc -package sqlgg.traits -I . -c product_id.ml
   $ ocamlfind ocamlc -package sqlgg.traits -I . -c output.ml
   $ ocamlfind ocamlc -package sqlgg.traits,sqlgg.ppx -I . -c scope_mod_frag.ml
