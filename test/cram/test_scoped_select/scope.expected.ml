@@ -4,10 +4,13 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
   module Scope = Sqlgg_scope.Make(T)
 
   module Scope_q1_col = struct
-    let id = { Scope.read = (fun row -> T.get_column_Int row 0) }
-    let name = { Scope.read = (fun row -> T.get_column_Text_nullable row 1) }
-    let price = { Scope.read = (fun row -> T.get_column_Decimal_nullable row 2) }
-    let category = { Scope.read = (fun row -> T.get_column_Text_nullable row 3) }
+    module Cols = struct
+      let id = { Scope.read = (fun row -> T.get_column_Int row 0) }
+      let name = { Scope.read = (fun row -> T.get_column_Text_nullable row 1) }
+      let price = { Scope.read = (fun row -> T.get_column_Decimal_nullable row 2) }
+      let category = { Scope.read = (fun row -> T.get_column_Text_nullable row 3) }
+    end
+    include Cols
 
     let select db (fieldset : _ Scope.t) ~id =
       let set_params stmt =
@@ -20,9 +23,12 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
   end
 
   module Scope_q2_col = struct
-    let stock = { Scope.read = (fun row -> T.get_column_Int_nullable row 0) }
-    let id = { Scope.read = (fun row -> T.get_column_Int row 1) }
-    let name = { Scope.read = (fun row -> T.get_column_Text_nullable row 2) }
+    module Cols = struct
+      let stock = { Scope.read = (fun row -> T.get_column_Int_nullable row 0) }
+      let id = { Scope.read = (fun row -> T.get_column_Int row 1) }
+      let name = { Scope.read = (fun row -> T.get_column_Text_nullable row 2) }
+    end
+    include Cols
 
     let select db (fieldset : _ Scope.t) ~min_stock callback =
       let set_params stmt =

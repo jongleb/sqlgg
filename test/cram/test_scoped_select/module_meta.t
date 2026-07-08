@@ -2,9 +2,6 @@ Scoped (fixed-SQL) selectors honor the [sqlgg] module= column meta, so a derived
 record can use the wrapper's type (not just int/string). The deriver is
 type-agnostic and lines up with the generated selector type:
 
-  $ cp test_scoped_select/scope_mod.sql .
-  $ cp test_scoped_select/product_id.ml .
-  $ cp test_scoped_select/scope_mod_frag.ml .
   $ cat scope_mod.sql | sqlgg -no-header -gen caml_io -params unnamed -gen caml -dialect mysql - > output.ml
   $ grep -c "Scope.read = (fun row -> Product_id.get_column" output.ml
   1

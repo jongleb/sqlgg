@@ -10,6 +10,6 @@ module Frag (T : Sqlgg_traits.M with
   type who = { id : Product_id.t; name : string option } [@@deriving sqlgg]
 
   let _q db =
-    Wrapped_scope_col.select db (who_of_scope (module Wrapped_scope_col))
-      ~id:(Product_id.get_column 1L)
+    Wrapped_scope_col.(select db (who_of_scope (module Cols))
+      ~id:(Product_id.get_column 1L))
 end

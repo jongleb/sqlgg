@@ -2,9 +2,7 @@ Scoped (fixed-SQL) decoding runs custom [module=] conversions end-to-end with a
 genuinely custom type (a variant, not an int/string alias). The derived record
 uses Color.t, and decoding a mock row actually produces the variant values:
 
-  $ cp test_scoped_select/items.sql .
-  $ cp test_scoped_select/color.ml .
-  $ cp test_scoped_select/scope_custom_run.ml .
+  $ cp ../print_ocaml_impl.ml .
   $ cat items.sql | sqlgg -no-header -gen caml -params unnamed -dialect mysql - > output.ml
   $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -c print_ocaml_impl.ml
   $ ocamlfind ocamlc -package sqlgg.traits -I . -c color.ml

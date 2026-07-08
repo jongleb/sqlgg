@@ -1,7 +1,5 @@
 Test DynamicSelect with applicative combinators generates proper SQL:
-  $ cp test_build_dynamic_select/dynamic_select.sql .
-  $ cp test_build_dynamic_select/product_id.ml .
-  $ cp test_build_dynamic_select/test_run.ml .
+  $ cp ../print_ocaml_impl.ml .
   $ cat dynamic_select.sql | sqlgg -no-header -gen caml_io -params unnamed -gen caml -dialect mysql - > output.ml
   $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -c print_ocaml_impl.ml
   $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -c product_id.ml
@@ -442,36 +440,7 @@ Test DynamicSelect edge: single column:
   
     module IO = Sqlgg_io.Blocking
     module Single_col_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -547,36 +516,7 @@ DynamicSelect: SELECT * remains static select:
   
     module IO = Sqlgg_io.Blocking
     module All_cols_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -659,36 +599,7 @@ DynamicSelect: SELECT * with expression in same list:
   
     module IO = Sqlgg_io.Blocking
     module All_cols_plus_expr_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -778,36 +689,7 @@ DynamicSelect: auto names for expressions without alias:
   
     module IO = Sqlgg_io.Blocking
     module Auto_names_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let col1 =
         {
           set = (fun _p -> ());
@@ -897,36 +779,7 @@ Test DynamicSelect edge: expression at first position:
   
     module IO = Sqlgg_io.Blocking
     module Expr_first_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id_plus =
         {
           set = (fun _p -> ());
@@ -1002,36 +855,7 @@ Test DynamicSelect edge: literal only:
   
     module IO = Sqlgg_io.Blocking
     module Literal_only_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let greeting =
         {
           set = (fun _p -> ());
@@ -1114,36 +938,7 @@ Test DynamicSelect edge: many columns:
   
     module IO = Sqlgg_io.Blocking
     module Many_cols_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let a =
         {
           set = (fun _p -> ());
@@ -1247,36 +1042,7 @@ Test DynamicSelect edge: no space after commas:
   
     module IO = Sqlgg_io.Blocking
     module No_space_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -1366,36 +1132,7 @@ Test DynamicSelect edge: minimal spacing:
   
     module IO = Sqlgg_io.Blocking
     module Tight_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let a =
         {
           set = (fun _p -> ());
@@ -1478,36 +1215,7 @@ Test DynamicSelect edge: column without alias gets auto name:
   
     module IO = Sqlgg_io.Blocking
     module No_alias_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let col1 =
         {
           set = (fun _p -> ());
@@ -1583,36 +1291,7 @@ Test DynamicSelect with dynamic_select flag:
   
     module IO = Sqlgg_io.Blocking
     module Select_ids2_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -1720,36 +1399,7 @@ Test DynamicSelect with two dynamic columns:
   
     module IO = Sqlgg_io.Blocking
     module Multi_dynamic_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -1846,36 +1496,7 @@ Test DynamicSelect with Verbatim branches:
   
     module IO = Sqlgg_io.Blocking
     module With_verbatim_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -1965,36 +1586,7 @@ Test DynamicSelect at beginning of SELECT:
   
     module IO = Sqlgg_io.Blocking
     module First_col_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let a =
         {
           set = (fun _p -> ());
@@ -2077,36 +1669,7 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
   
     module IO = Sqlgg_io.Blocking
     module With_subquery_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -2194,36 +1757,7 @@ Test DynamicSelect with module annotation:
   
     module IO = Sqlgg_io.Blocking
     module With_module_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -2282,36 +1816,7 @@ Test DynamicSelect with LIMIT 1 (select_one):
   
     module IO = Sqlgg_io.Blocking
     module Select_one_product_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let name =
         {
           set = (fun _p -> ());
@@ -2370,36 +1875,7 @@ Test DynamicSelect comprehensive list:
   
     module IO = Sqlgg_io.Blocking
     module Ultimate_combo_simple2_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -2519,36 +1995,7 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
   
     module IO = Sqlgg_io.Blocking
     module Bare_param_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -2638,36 +2085,7 @@ Virtual select: consecutive params as columns:
   
     module IO = Sqlgg_io.Blocking
     module Multi_param_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let col_a a =
         let _set_col_a p =
           T.set_param_Int p a;
@@ -2758,36 +2176,7 @@ Virtual select: mixed columns and params without spaces after commas:
   
     module IO = Sqlgg_io.Blocking
     module Tight_commas_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -2891,36 +2280,7 @@ Virtual select: subquery expression as dynamic column:
   
     module IO = Sqlgg_io.Blocking
     module Subquery_col_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -3009,36 +2369,7 @@ Virtual select: CASE WHEN as dynamic column:
         let proj = function  | `Active -> "active"| `Inactive -> "inactive"
       end)
     module Case_col_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -3121,36 +2452,7 @@ Virtual select: function call with multiple args as column:
   
     module IO = Sqlgg_io.Blocking
     module Func_col_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -3233,36 +2535,7 @@ Virtual select: arithmetic with param at expression start:
   
     module IO = Sqlgg_io.Blocking
     module Param_start_expr_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let id =
         {
           set = (fun _p -> ());
@@ -3359,36 +2632,7 @@ Virtual select: tab-separated columns (non-space whitespace):
   
     module IO = Sqlgg_io.Blocking
     module Tab_sep_col = struct
-      type 'a t = {
-        set: T.params -> unit;
-        read: T.row -> int -> 'a * int;
-        column: string;
-        count: int;
-      }
-  
-      let pure x = {
-        set = (fun _p -> ());
-        read = (fun _row idx -> (x, idx));
-        column = "";
-        count = 0;
-      }
-  
-      let apply f a = {
-        set = (fun p -> f.set p; a.set p);
-        read = (fun row idx ->
-          let (vf, i1) = f.read row idx in
-          let (va, i2) = a.read row i1 in
-          (vf va, i2));
-        column = (match f.column, a.column with
-          | "", c | c, "" -> c
-          | c1, c2 -> c1 ^ ", " ^ c2);
-        count = f.count + a.count;
-      }
-  
-      let map f a = apply (pure f) a
-  
-      let (let+) t f = map f t
-      let (and+) a b = apply (map (fun a b -> (a, b)) a) b
+      include Sqlgg_scope.Dynamic(T)
       let a =
         {
           set = (fun _p -> ());

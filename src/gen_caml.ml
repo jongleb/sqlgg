@@ -1035,44 +1035,6 @@ let generate_enum_modules stmts =
     ()
   )
   
-let dynamic_select_combinators_src = {|type 'a t = {
-  set: T.params -> unit;
-  read: T.row -> int -> 'a * int;
-  column: string;
-  count: int;
-}
-
-let pure x = {
-  set = (fun _p -> ());
-  read = (fun _row idx -> (x, idx));
-  column = "";
-  count = 0;
-}
-
-let apply f a = {
-  set = (fun p -> f.set p; a.set p);
-  read = (fun row idx ->
-    let (vf, i1) = f.read row idx in
-    let (va, i2) = a.read row i1 in
-    (vf va, i2));
-  column = (match f.column, a.column with
-    | "", c | c, "" -> c
-    | c1, c2 -> c1 ^ ", " ^ c2);
-  count = f.count + a.count;
-}
-
-let map f a = apply (pure f) a
-
-let (let+) t f = map f t
-let (and+) a b = apply (map (fun a b -> (a, b)) a) b|}
-
-let emit_verbatim_block src =
-  let ind = make_indent () in
-  String.split_on_char '\n' src
-  |> List.iter (fun line ->
-    if line = "" then print_newline ()
-    else Printf.printf "%s%s\n" ind line)
-
 let stmt_has_dynamic_select stmt =
   List.exists (function Sql.DynamicSelect _ -> true | _ -> false) stmt.Gen.vars
 
@@ -1086,11 +1048,7 @@ let stmt_is_scoped_fixed stmt =
 
 let generate_dynamic_select_preamble stmts =
   if List.exists (fun s -> stmt_has_dynamic_select s && stmt_is_scoped s) stmts then begin
-    output "module Dynamic_select = struct";
-    inc_indent ();
-    emit_verbatim_block dynamic_select_combinators_src;
-    dec_indent ();
-    output "end";
+    output "module Dynamic_select = Sqlgg_scope.Dynamic(T)";
     empty_line ()
   end
 
@@ -1133,10 +1091,12 @@ let generate_dynamic_select_modules stmts =
       output "module %s = struct" module_name;
       inc_indent ();
 
-      if stmt_is_scoped stmt then
-        output "include Dynamic_select"
-      else
-        emit_verbatim_block dynamic_select_combinators_src;
+      if stmt_is_scoped stmt then begin
+        output "include Dynamic_select";
+        output "module Cols = struct";
+        inc_indent ()
+      end else
+        output "include Sqlgg_scope.Dynamic(T)";
 
       List.iter2 (fun (field_name, _param_name, all_param_names, _simple_params, args_list, attr, ctor) (_, sql) ->
         let field_name_lower = 
@@ -1183,6 +1143,12 @@ let generate_dynamic_select_modules stmts =
         output "}";
         dec_indent ()
       ) fields field_sqls;
+
+      if stmt_is_scoped stmt then begin
+        dec_indent ();
+        output "end";
+        output "include Cols"
+      end;
 
       if single_di then begin
         empty_line ();
@@ -1261,7 +1227,12 @@ let generate_scoped_modules stmts =
       let module_name = sprintf "%s_col" (String.capitalize_ascii query_name) in
       output "module %s = struct" module_name;
       inc_indent ();
+      output "module Cols = struct";
+      inc_indent ();
       emit_scoped_selectors stmt;
+      dec_indent ();
+      output "end";
+      output "include Cols";
       empty_line ();
       emit_scoped_select ~index ~module_kind:`Direct stmt;
       [`Fold; `List]

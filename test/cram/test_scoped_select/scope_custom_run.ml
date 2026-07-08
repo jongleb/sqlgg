@@ -9,5 +9,5 @@ let () =
   setup_select_response
     [ make_mock_row [ mock_int 7L; mock_text "green" ];
       make_mock_row [ mock_int 8L; mock_text "blue" ] ];
-  Db.Items_scope_col.select () (item_of_scope (module Db.Items_scope_col))
+  Db.Items_scope_col.(select () (item_of_scope (module Cols)))
     (fun it -> Printf.printf "DECODED id=%Ld color=%s\n" it.id (Color.to_string it.color))

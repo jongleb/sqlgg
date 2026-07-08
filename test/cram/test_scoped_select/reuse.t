@@ -3,10 +3,7 @@ a plain string (name) with an opaque id type (User_id.t, abstract int64). It is
 derived once and applied first to query 1 (users), then to a totally different
 query 2 (admins) whose id/name sit at different absolute positions:
 
-  $ cp test_scoped_select/reuse.sql .
-  $ cp test_scoped_select/user_id.ml .
-  $ cp test_scoped_select/user_id.mli .
-  $ cp test_scoped_select/reuse_run.ml .
+  $ cp ../print_ocaml_impl.ml .
   $ cat reuse.sql | sqlgg -no-header -gen caml -params unnamed -dialect mysql - > output.ml
   $ ocamlfind ocamlc -package sqlgg.traits,yojson -I . -c print_ocaml_impl.ml
   $ ocamlfind ocamlc -package sqlgg.traits -I . -c user_id.mli

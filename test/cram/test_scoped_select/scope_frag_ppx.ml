@@ -9,7 +9,7 @@ module Frag (T : Sqlgg_traits.M with
 
   type who = { id : int64; name : string option } [@@deriving sqlgg]
 
-  let _q1 db = Scope_q1_col.select db (who_of_scope (module Scope_q1_col)) ~id:1L
+  let _q1 db = Scope_q1_col.(select db (who_of_scope (module Cols)) ~id:1L)
   let _q2 db =
-    Scope_q2_col.select db (who_of_scope (module Scope_q2_col)) ~min_stock:10L (fun _ -> ())
+    Scope_q2_col.(select db (who_of_scope (module Cols)) ~min_stock:10L (fun _ -> ()))
 end
