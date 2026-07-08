@@ -8,13 +8,14 @@ module Frag (T : Sqlgg_traits.M with
   open Sql
 
   module type WHO = sig
-    val id   : int64 Scope.t
-    val name : string option Scope.t
+    type t
+    val id   : (int64, t) Scope.t
+    val name : (string option, t) Scope.t
   end
   type who = { id : int64; name : string option }
 
-  let who_fr (module M : WHO) : who Scope.t =
-    let open Scope in
+  let who_fr (type q) (module M : WHO with type t = q) : (who, q) Scope.t =
+    let open Scope.Ops (M) in
     let+ id = M.id and+ name = M.name in { id; name }
 
   let _q1 db = Scope_q1_col.select db (who_fr (module Scope_q1_col)) ~id:1L

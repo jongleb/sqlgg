@@ -1,18 +1,21 @@
 module Sqlgg (T : Sqlgg_traits.M) = struct
 
   module IO = Sqlgg_io.Blocking
-  module Scope = Sqlgg_scope.Make(T)
+  module Row = struct type t = T.row end
+  module Scope = Sqlgg_scope.Make(Row)
 
   module Scope_q1_col = struct
     module Cols = struct
-      let id = { Scope.read = (fun row -> T.get_column_Int row 0) }
-      let name = { Scope.read = (fun row -> T.get_column_Text_nullable row 1) }
-      let price = { Scope.read = (fun row -> T.get_column_Decimal_nullable row 2) }
-      let category = { Scope.read = (fun row -> T.get_column_Text_nullable row 3) }
+      type t
+      let id : (_, t) Scope.t = { Scope.read = (fun row -> T.get_column_Int row 0) }
+      let name : (_, t) Scope.t = { Scope.read = (fun row -> T.get_column_Text_nullable row 1) }
+      let price : (_, t) Scope.t = { Scope.read = (fun row -> T.get_column_Decimal_nullable row 2) }
+      let category : (_, t) Scope.t = { Scope.read = (fun row -> T.get_column_Text_nullable row 3) }
     end
     include Cols
+    include Scope.Ops(Cols)
 
-    let select db (fieldset : _ Scope.t) ~id =
+    let select db (fieldset : (_, t) Scope.t) ~id =
       let set_params stmt =
         let p = T.start_params stmt (1) in
         T.set_param_Int p id;
@@ -24,13 +27,15 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
 
   module Scope_q2_col = struct
     module Cols = struct
-      let stock = { Scope.read = (fun row -> T.get_column_Int_nullable row 0) }
-      let id = { Scope.read = (fun row -> T.get_column_Int row 1) }
-      let name = { Scope.read = (fun row -> T.get_column_Text_nullable row 2) }
+      type t
+      let stock : (_, t) Scope.t = { Scope.read = (fun row -> T.get_column_Int_nullable row 0) }
+      let id : (_, t) Scope.t = { Scope.read = (fun row -> T.get_column_Int row 1) }
+      let name : (_, t) Scope.t = { Scope.read = (fun row -> T.get_column_Text_nullable row 2) }
     end
     include Cols
+    include Scope.Ops(Cols)
 
-    let select db (fieldset : _ Scope.t) ~min_stock callback =
+    let select db (fieldset : (_, t) Scope.t) ~min_stock callback =
       let set_params stmt =
         let p = T.start_params stmt (1) in
         T.set_param_Int p min_stock;
@@ -39,7 +44,7 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
       T.select db ("SELECT stock, id, name FROM products WHERE stock > ?") set_params (fun row -> callback (fieldset.Scope.read row))
 
     module Fold = struct
-      let select db (fieldset : _ Scope.t) ~min_stock callback acc =
+      let select db (fieldset : (_, t) Scope.t) ~min_stock callback acc =
         let set_params stmt =
           let p = T.start_params stmt (1) in
           T.set_param_Int p min_stock;
@@ -52,7 +57,7 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
     end (* module Fold *)
 
     module List = struct
-      let select db (fieldset : _ Scope.t) ~min_stock callback =
+      let select db (fieldset : (_, t) Scope.t) ~min_stock callback =
         let set_params stmt =
           let p = T.start_params stmt (1) in
           T.set_param_Int p min_stock;

@@ -3,7 +3,8 @@ module Applicative_ops (A : sig
   val pure : 'a -> 'a t
   val apply : ('a -> 'b) t -> 'a t -> 'b t
 end) = struct
-  open A
+  let pure = A.pure
+  let apply = A.apply
 
   let map f a = apply (pure f) a
 
@@ -11,35 +12,41 @@ end) = struct
   let ( and+ ) a b = apply (map (fun a b -> (a, b)) a) b
 end
 
-module Make (T : sig type row end) = struct
-  type 'a t = { read : T.row -> 'a }
+module Make (Row : sig type t end) = struct
+  type ('a, 'q) t = { read : Row.t -> 'a }
 
-  let pure x = { read = (fun _row -> x) }
-  let apply f a = { read = (fun row -> (f.read row) (a.read row)) }
+  (* The brand parameter is phantom, so without annotations inference would
+     assign each argument its own brand variable and [apply] would happily
+     mix fragments of different queries. The annotations tie them together. *)
+  let pure : 'a -> ('a, 'q) t = fun x -> { read = (fun _row -> x) }
+  let apply : ('a -> 'b, 'q) t -> ('a, 'q) t -> ('b, 'q) t =
+    fun f a -> { read = (fun row -> (f.read row) (a.read row)) }
 
-  include Applicative_ops (struct
-    type nonrec 'a t = 'a t
+  module Ops (Q : sig type t end) = Applicative_ops (struct
+    type nonrec 'a t = ('a, Q.t) t
     let pure = pure
     let apply = apply
   end)
 end
 
-module Dynamic (T : sig type row type params end) = struct
-  type 'a t = {
-    set : T.params -> unit;
-    read : T.row -> int -> 'a * int;
+module Dynamic (Row : sig type t end) (Params : sig type t end) = struct
+  type ('a, 'q) t = {
+    set : Params.t -> unit;
+    read : Row.t -> int -> 'a * int;
     column : string;
     count : int;
   }
 
-  let pure x = {
+  (* Same as in [Make]: the phantom brand must be tied explicitly, otherwise
+     [apply] would accept fragments of different queries. *)
+  let pure : 'a -> ('a, 'q) t = fun x -> {
     set = (fun _p -> ());
     read = (fun _row idx -> (x, idx));
     column = "";
     count = 0;
   }
 
-  let apply f a = {
+  let apply : ('a -> 'b, 'q) t -> ('a, 'q) t -> ('b, 'q) t = fun f a -> {
     set = (fun p -> f.set p; a.set p);
     read = (fun row idx ->
       let (vf, i1) = f.read row idx in
@@ -51,8 +58,8 @@ module Dynamic (T : sig type row type params end) = struct
     count = f.count + a.count;
   }
 
-  include Applicative_ops (struct
-    type nonrec 'a t = 'a t
+  module Ops (Q : sig type t end) = Applicative_ops (struct
+    type nonrec 'a t = ('a, Q.t) t
     let pure = pure
     let apply = apply
   end)

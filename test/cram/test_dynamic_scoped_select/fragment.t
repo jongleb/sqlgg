@@ -5,9 +5,9 @@ generated [Dynamic_select] module. The fragment is derived with
 [@@deriving sqlgg] (which targets [Scope]):
 
   $ cat dyn_scoped.sql | sqlgg -no-header -gen caml_io -params unnamed -gen caml -dialect mysql - > output.ml
-  $ grep -c "module Dynamic_select = Sqlgg_scope.Dynamic(T)" output.ml
+  $ grep -c "module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)" output.ml
   1
-  $ grep -c "include Dynamic_select" output.ml
+  $ grep -c "include Dynamic_select.Ops(Cols)" output.ml
   2
   $ grep -c "module Scope = struct" output.ml
   0

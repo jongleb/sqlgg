@@ -439,17 +439,25 @@ Test DynamicSelect edge: single column:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Single_col_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module Single_col_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -461,7 +469,7 @@ Test DynamicSelect edge: single column:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -477,7 +485,7 @@ Test DynamicSelect edge: single column:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -515,24 +523,32 @@ DynamicSelect: SELECT * remains static select:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module All_cols_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = "t.id";
-          count = 0;
-        }
-      let name =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = "t.name";
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module All_cols_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = "t.id";
+            count = 0;
+          }
+        let name : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = "t.name";
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -544,7 +560,7 @@ DynamicSelect: SELECT * remains static select:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -560,7 +576,7 @@ DynamicSelect: SELECT * remains static select:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -598,31 +614,39 @@ DynamicSelect: SELECT * with expression in same list:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module All_cols_plus_expr_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = "t.id";
-          count = 0;
-        }
-      let name =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = "t.name";
-          count = 0;
-        }
-      let id_plus =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id + 2");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module All_cols_plus_expr_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = "t.id";
+            count = 0;
+          }
+        let name : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = "t.name";
+            count = 0;
+          }
+        let id_plus : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id + 2");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -634,7 +658,7 @@ DynamicSelect: SELECT * with expression in same list:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -650,7 +674,7 @@ DynamicSelect: SELECT * with expression in same list:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -688,31 +712,39 @@ DynamicSelect: auto names for expressions without alias:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Auto_names_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let col1 =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id + 1");
-          count = 0;
-        }
-      let col2 =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id * 2");
-          count = 0;
-        }
-      let name =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("name");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module Auto_names_col = struct
+      module Cols = struct
+        type t
+        let col1 : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id + 1");
+            count = 0;
+          }
+        let col2 : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id * 2");
+            count = 0;
+          }
+        let name : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("name");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -724,7 +756,7 @@ DynamicSelect: auto names for expressions without alias:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -740,7 +772,7 @@ DynamicSelect: auto names for expressions without alias:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -778,17 +810,25 @@ Test DynamicSelect edge: expression at first position:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Expr_first_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id_plus =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id + 1");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module Expr_first_col = struct
+      module Cols = struct
+        type t
+        let id_plus : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id + 1");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -800,7 +840,7 @@ Test DynamicSelect edge: expression at first position:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -816,7 +856,7 @@ Test DynamicSelect edge: expression at first position:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -854,24 +894,32 @@ Test DynamicSelect edge: literal only:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Literal_only_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let greeting =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
-          column = ("'hello'");
-          count = 0;
-        }
-      let answer =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
-          column = ("42");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module Literal_only_col = struct
+      module Cols = struct
+        type t
+        let greeting : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
+            column = ("'hello'");
+            count = 0;
+          }
+        let answer : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
+            column = ("42");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -883,7 +931,7 @@ Test DynamicSelect edge: literal only:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -899,7 +947,7 @@ Test DynamicSelect edge: literal only:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -937,45 +985,53 @@ Test DynamicSelect edge: many columns:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Many_cols_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let a =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("a");
-          count = 0;
-        }
-      let b =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("b");
-          count = 0;
-        }
-      let c =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
-          column = ("c");
-          count = 0;
-        }
-      let d =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("d");
-          count = 0;
-        }
-      let e =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("e");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module Many_cols_col = struct
+      module Cols = struct
+        type t
+        let a : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("a");
+            count = 0;
+          }
+        let b : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("b");
+            count = 0;
+          }
+        let c : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
+            column = ("c");
+            count = 0;
+          }
+        let d : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("d");
+            count = 0;
+          }
+        let e : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("e");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -987,7 +1043,7 @@ Test DynamicSelect edge: many columns:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1003,7 +1059,7 @@ Test DynamicSelect edge: many columns:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1041,31 +1097,39 @@ Test DynamicSelect edge: no space after commas:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module No_space_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id");
-          count = 0;
-        }
-      let name =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("name");
-          count = 0;
-        }
-      let price =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
-          column = ("price");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module No_space_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id");
+            count = 0;
+          }
+        let name : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("name");
+            count = 0;
+          }
+        let price : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
+            column = ("price");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1077,7 +1141,7 @@ Test DynamicSelect edge: no space after commas:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1093,7 +1157,7 @@ Test DynamicSelect edge: no space after commas:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1131,24 +1195,32 @@ Test DynamicSelect edge: minimal spacing:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Tight_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let a =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("a");
-          count = 0;
-        }
-      let b =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("b");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module Tight_col = struct
+      module Cols = struct
+        type t
+        let a : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("a");
+            count = 0;
+          }
+        let b : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("b");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1160,7 +1232,7 @@ Test DynamicSelect edge: minimal spacing:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1176,7 +1248,7 @@ Test DynamicSelect edge: minimal spacing:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1214,17 +1286,25 @@ Test DynamicSelect edge: column without alias gets auto name:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module No_alias_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let col1 =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id + 1");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module No_alias_col = struct
+      module Cols = struct
+        type t
+        let col1 : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id + 1");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1236,7 +1316,7 @@ Test DynamicSelect edge: column without alias gets auto name:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1252,7 +1332,7 @@ Test DynamicSelect edge: column without alias gets auto name:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1290,46 +1370,54 @@ Test DynamicSelect with dynamic_select flag:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Select_ids2_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
-          column = ("id");
-          count = 0;
-        }
-      let balance =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
-          column = ("balance");
-          count = 0;
-        }
-      let t_plus_one t =
-        let _set_t_plus_one p =
-          T.set_param_Int p t;
-          ()
-        in
-        {
-          set = _set_t_plus_one;
-          read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
-          column = ("" ^ "?" ^ " + 1");
-          count = 1;
-        }
-      let sub_result seven =
-        let _set_sub_result p =
-          T.set_param_Int p seven;
-          ()
-        in
-        {
-          set = _set_sub_result;
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("(SELECT 6 + " ^ "?" ^ " LIMIT 1)");
-          count = 1;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) ~t callback =
+    module Select_ids2_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
+            column = ("id");
+            count = 0;
+          }
+        let balance : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
+            column = ("balance");
+            count = 0;
+          }
+        let t_plus_one t : (_, t) Dynamic_select.t =
+          let _set_t_plus_one p =
+            T.set_param_Int p t;
+            ()
+          in
+          {
+            set = _set_t_plus_one;
+            read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
+            column = ("" ^ "?" ^ " + 1");
+            count = 1;
+          }
+        let sub_result seven : (_, t) Dynamic_select.t =
+          let _set_sub_result p =
+            T.set_param_Int p seven;
+            ()
+          in
+          {
+            set = _set_sub_result;
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("(SELECT 6 + " ^ "?" ^ " LIMIT 1)");
+            count = 1;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) ~t callback =
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -1342,7 +1430,7 @@ Test DynamicSelect with dynamic_select flag:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) ~t callback acc =
+        let select db (col : (_, t) Dynamic_select.t) ~t callback acc =
           let set_params stmt =
             let p = T.start_params stmt (1 + col.count) in
             col.set p;
@@ -1359,7 +1447,7 @@ Test DynamicSelect with dynamic_select flag:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) ~t callback =
+        let select db (col : (_, t) Dynamic_select.t) ~t callback =
           let set_params stmt =
             let p = T.start_params stmt (1 + col.count) in
             col.set p;
@@ -1398,38 +1486,46 @@ Test DynamicSelect with two dynamic columns:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Multi_dynamic_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id");
-          count = 0;
-        }
-      let name =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("name");
-          count = 0;
-        }
-      let price =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
-          column = ("price");
-          count = 0;
-        }
-      let doubled_price =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
-          column = ("price * 2");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module Multi_dynamic_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id");
+            count = 0;
+          }
+        let name : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("name");
+            count = 0;
+          }
+        let price : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
+            column = ("price");
+            count = 0;
+          }
+        let doubled_price : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
+            column = ("price * 2");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1441,7 +1537,7 @@ Test DynamicSelect with two dynamic columns:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1457,7 +1553,7 @@ Test DynamicSelect with two dynamic columns:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1495,31 +1591,39 @@ Test DynamicSelect with Verbatim branches:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module With_verbatim_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id");
-          count = 0;
-        }
-      let status =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("status");
-          count = 0;
-        }
-      let literal_status =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
-          column = ("'active'");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module With_verbatim_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id");
+            count = 0;
+          }
+        let status : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("status");
+            count = 0;
+          }
+        let literal_status : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
+            column = ("'active'");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1531,7 +1635,7 @@ Test DynamicSelect with Verbatim branches:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1547,7 +1651,7 @@ Test DynamicSelect with Verbatim branches:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1585,24 +1689,32 @@ Test DynamicSelect at beginning of SELECT:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module First_col_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let a =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("a");
-          count = 0;
-        }
-      let b =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("b");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module First_col_col = struct
+      module Cols = struct
+        type t
+        let a : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("a");
+            count = 0;
+          }
+        let b : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("b");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1614,7 +1726,7 @@ Test DynamicSelect at beginning of SELECT:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1630,7 +1742,7 @@ Test DynamicSelect at beginning of SELECT:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1668,24 +1780,32 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module With_subquery_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id");
-          count = 0;
-        }
-      let sub x =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("(SELECT " ^ (match x with `A -> " ( 1 ) " | `B -> " ( 2 ) ") ^ " LIMIT 1)");
-          count = 0 + (match x with `A -> 0 | `B -> 0);
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module With_subquery_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id");
+            count = 0;
+          }
+        let sub x : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("(SELECT " ^ (match x with `A -> " ( 1 ) " | `B -> " ( 2 ) ") ^ " LIMIT 1)");
+            count = 0 + (match x with `A -> 0 | `B -> 0);
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1697,7 +1817,7 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1713,7 +1833,7 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1756,31 +1876,39 @@ Test DynamicSelect with module annotation:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module With_module_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (Product_id.get_column (T.get_column_int64 row idx), idx + 1));
-          column = ("id");
-          count = 0;
-        }
-      let name =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("name");
-          count = 0;
-        }
-      let price =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
-          column = ("price");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) ~id =
+    module With_module_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (Product_id.get_column (T.get_column_int64 row idx), idx + 1));
+            column = ("id");
+            count = 0;
+          }
+        let name : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("name");
+            count = 0;
+          }
+        let price : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
+            column = ("price");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) ~id =
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -1815,24 +1943,32 @@ Test DynamicSelect with LIMIT 1 (select_one):
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Select_one_product_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let name =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("name");
-          count = 0;
-        }
-      let price =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
-          column = ("price");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) ~id =
+    module Select_one_product_col = struct
+      module Cols = struct
+        type t
+        let name : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("name");
+            count = 0;
+          }
+        let price : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
+            column = ("price");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) ~id =
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -1874,49 +2010,57 @@ Test DynamicSelect comprehensive list:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Ultimate_combo_simple2_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
-          column = ("id");
-          count = 0;
-        }
-      let name =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("name");
-          count = 0;
-        }
-      let category =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("category");
-          count = 0;
-        }
-      let stock =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("stock");
-          count = 0;
-        }
-      let price_with_tax tax_rate =
-        let _set_price_with_tax p =
-          T.set_param_Int p tax_rate;
-          ()
-        in
-        {
-          set = _set_price_with_tax;
-          read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
-          column = ("price * (1 + " ^ "?" ^ ")");
-          count = 1;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module Ultimate_combo_simple2_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
+            column = ("id");
+            count = 0;
+          }
+        let name : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("name");
+            count = 0;
+          }
+        let category : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("category");
+            count = 0;
+          }
+        let stock : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("stock");
+            count = 0;
+          }
+        let price_with_tax tax_rate : (_, t) Dynamic_select.t =
+          let _set_price_with_tax p =
+            T.set_param_Int p tax_rate;
+            ()
+          in
+          {
+            set = _set_price_with_tax;
+            read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
+            column = ("price * (1 + " ^ "?" ^ ")");
+            count = 1;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -1930,7 +2074,7 @@ Test DynamicSelect comprehensive list:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1948,7 +2092,7 @@ Test DynamicSelect comprehensive list:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -1994,28 +2138,36 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Bare_param_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id");
-          count = 0;
-        }
-      let custom custom_val =
-        let _set_custom p =
-          T.set_param_Text p custom_val;
-          ()
-        in
-        {
-          set = _set_custom;
-          read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
-          column = ("" ^ "?");
-          count = 1;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) ~id callback =
+    module Bare_param_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id");
+            count = 0;
+          }
+        let custom custom_val : (_, t) Dynamic_select.t =
+          let _set_custom p =
+            T.set_param_Text p custom_val;
+            ()
+          in
+          {
+            set = _set_custom;
+            read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
+            column = ("" ^ "?");
+            count = 1;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) ~id callback =
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -2028,7 +2180,7 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) ~id callback acc =
+        let select db (col : (_, t) Dynamic_select.t) ~id callback acc =
           let set_params stmt =
             let p = T.start_params stmt (1 + col.count) in
             col.set p;
@@ -2045,7 +2197,7 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) ~id callback =
+        let select db (col : (_, t) Dynamic_select.t) ~id callback =
           let set_params stmt =
             let p = T.start_params stmt (1 + col.count) in
             col.set p;
@@ -2084,32 +2236,40 @@ Virtual select: consecutive params as columns:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Multi_param_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let col_a a =
-        let _set_col_a p =
-          T.set_param_Int p a;
-          ()
-        in
-        {
-          set = _set_col_a;
-          read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
-          column = ("" ^ "?");
-          count = 1;
-        }
-      let col_b b =
-        let _set_col_b p =
-          T.set_param_Text p b;
-          ()
-        in
-        {
-          set = _set_col_b;
-          read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
-          column = ("" ^ "?");
-          count = 1;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module Multi_param_col = struct
+      module Cols = struct
+        type t
+        let col_a a : (_, t) Dynamic_select.t =
+          let _set_col_a p =
+            T.set_param_Int p a;
+            ()
+          in
+          {
+            set = _set_col_a;
+            read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
+            column = ("" ^ "?");
+            count = 1;
+          }
+        let col_b b : (_, t) Dynamic_select.t =
+          let _set_col_b p =
+            T.set_param_Text p b;
+            ()
+          in
+          {
+            set = _set_col_b;
+            read = (fun row idx -> (T.get_column_Text row idx, idx + 1));
+            column = ("" ^ "?");
+            count = 1;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2121,7 +2281,7 @@ Virtual select: consecutive params as columns:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -2137,7 +2297,7 @@ Virtual select: consecutive params as columns:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -2175,42 +2335,50 @@ Virtual select: mixed columns and params without spaces after commas:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Tight_commas_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id");
-          count = 0;
-        }
-      let name =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("name");
-          count = 0;
-        }
-      let price =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
-          column = ("price");
-          count = 0;
-        }
-      let bonus extra =
-        let _set_bonus p =
-          T.set_param_Int p extra;
-          ()
-        in
-        {
-          set = _set_bonus;
-          read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
-          column = ("" ^ "?");
-          count = 1;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) ~id callback =
+    module Tight_commas_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id");
+            count = 0;
+          }
+        let name : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("name");
+            count = 0;
+          }
+        let price : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
+            column = ("price");
+            count = 0;
+          }
+        let bonus extra : (_, t) Dynamic_select.t =
+          let _set_bonus p =
+            T.set_param_Int p extra;
+            ()
+          in
+          {
+            set = _set_bonus;
+            read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
+            column = ("" ^ "?");
+            count = 1;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) ~id callback =
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -2223,7 +2391,7 @@ Virtual select: mixed columns and params without spaces after commas:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) ~id callback acc =
+        let select db (col : (_, t) Dynamic_select.t) ~id callback acc =
           let set_params stmt =
             let p = T.start_params stmt (1 + col.count) in
             col.set p;
@@ -2240,7 +2408,7 @@ Virtual select: mixed columns and params without spaces after commas:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) ~id callback =
+        let select db (col : (_, t) Dynamic_select.t) ~id callback =
           let set_params stmt =
             let p = T.start_params stmt (1 + col.count) in
             col.set p;
@@ -2279,24 +2447,32 @@ Virtual select: subquery expression as dynamic column:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Subquery_col_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id");
-          count = 0;
-        }
-      let rank =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
-          column = ("(SELECT COUNT(*) FROM t t2 WHERE t2.id <= t.id)");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module Subquery_col_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id");
+            count = 0;
+          }
+        let rank : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
+            column = ("(SELECT COUNT(*) FROM t t2 WHERE t2.id <= t.id)");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2308,7 +2484,7 @@ Virtual select: subquery expression as dynamic column:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -2324,7 +2500,7 @@ Virtual select: subquery expression as dynamic column:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -2368,24 +2544,32 @@ Virtual select: CASE WHEN as dynamic column:
         let inj = function | "active" -> `Active | "inactive" -> `Inactive | s -> failwith (Printf.sprintf "Invalid enum value: %s" s)
         let proj = function  | `Active -> "active"| `Inactive -> "inactive"
       end)
-    module Case_col_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id");
-          count = 0;
-        }
-      let label =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (Enum_0.get_column row idx, idx + 1));
-          column = ("CASE WHEN status = 1 THEN 'active' ELSE 'inactive' END");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module Case_col_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id");
+            count = 0;
+          }
+        let label : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (Enum_0.get_column row idx, idx + 1));
+            column = ("CASE WHEN status = 1 THEN 'active' ELSE 'inactive' END");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2397,7 +2581,7 @@ Virtual select: CASE WHEN as dynamic column:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -2413,7 +2597,7 @@ Virtual select: CASE WHEN as dynamic column:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -2451,24 +2635,32 @@ Virtual select: function call with multiple args as column:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Func_col_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id");
-          count = 0;
-        }
-      let full_name =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("CONCAT(first_name, ' ', last_name)");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module Func_col_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id");
+            count = 0;
+          }
+        let full_name : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("CONCAT(first_name, ' ', last_name)");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2480,7 +2672,7 @@ Virtual select: function call with multiple args as column:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -2496,7 +2688,7 @@ Virtual select: function call with multiple args as column:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -2534,28 +2726,36 @@ Virtual select: arithmetic with param at expression start:
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Param_start_expr_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let id =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("id");
-          count = 0;
-        }
-      let scaled multiplier =
-        let _set_scaled p =
-          begin match multiplier with None -> T.set_param_null p | Some v -> T.set_param_Decimal p v end;
-          ()
-        in
-        {
-          set = _set_scaled;
-          read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
-          column = ("" ^ "?" ^ " * price");
-          count = 1;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) ~id callback =
+    module Param_start_expr_col = struct
+      module Cols = struct
+        type t
+        let id : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("id");
+            count = 0;
+          }
+        let scaled multiplier : (_, t) Dynamic_select.t =
+          let _set_scaled p =
+            begin match multiplier with None -> T.set_param_null p | Some v -> T.set_param_Decimal p v end;
+            ()
+          in
+          {
+            set = _set_scaled;
+            read = (fun row idx -> (T.get_column_Decimal_nullable row idx, idx + 1));
+            column = ("" ^ "?" ^ " * price");
+            count = 1;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) ~id callback =
         let set_params stmt =
           let p = T.start_params stmt (1 + col.count) in
           col.set p;
@@ -2568,7 +2768,7 @@ Virtual select: arithmetic with param at expression start:
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) ~id callback acc =
+        let select db (col : (_, t) Dynamic_select.t) ~id callback acc =
           let set_params stmt =
             let p = T.start_params stmt (1 + col.count) in
             col.set p;
@@ -2585,7 +2785,7 @@ Virtual select: arithmetic with param at expression start:
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) ~id callback =
+        let select db (col : (_, t) Dynamic_select.t) ~id callback =
           let set_params stmt =
             let p = T.start_params stmt (1 + col.count) in
             col.set p;
@@ -2631,24 +2831,32 @@ Virtual select: tab-separated columns (non-space whitespace):
   module Sqlgg (T : Sqlgg_traits.M) = struct
   
     module IO = Sqlgg_io.Blocking
-    module Tab_sep_col = struct
-      include Sqlgg_scope.Dynamic(T)
-      let a =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
-          column = ("a");
-          count = 0;
-        }
-      let b =
-        {
-          set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
-          column = ("b");
-          count = 0;
-        }
+    module Row = struct type t = T.row end
+    module Params = struct type t = T.params end
+    module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)
   
-      let select db (col : _ t) callback =
+    module Tab_sep_col = struct
+      module Cols = struct
+        type t
+        let a : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+            column = ("a");
+            count = 0;
+          }
+        let b : (_, t) Dynamic_select.t =
+          {
+            set = (fun _p -> ());
+            read = (fun row idx -> (T.get_column_Text_nullable row idx, idx + 1));
+            column = ("b");
+            count = 0;
+          }
+      end
+      include Cols
+      include Dynamic_select.Ops(Cols)
+  
+      let select db (col : (_, t) Dynamic_select.t) callback =
         let set_params stmt =
           let p = T.start_params stmt (0 + col.count) in
           col.set p;
@@ -2660,7 +2868,7 @@ Virtual select: tab-separated columns (non-space whitespace):
             __sqlgg_r_col)
   
       module Fold = struct
-        let select db (col : _ t) callback acc =
+        let select db (col : (_, t) Dynamic_select.t) callback acc =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;
@@ -2676,7 +2884,7 @@ Virtual select: tab-separated columns (non-space whitespace):
       end (* module Fold *)
   
       module List = struct
-        let select db (col : _ t) callback =
+        let select db (col : (_, t) Dynamic_select.t) callback =
           let set_params stmt =
             let p = T.start_params stmt (0 + col.count) in
             col.set p;

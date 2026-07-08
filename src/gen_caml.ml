@@ -286,7 +286,7 @@ let gen_func_signature ~dynamic_infos ~module_kind ~index stmt =
   let subst = Props.get_all stmt.props "subst" in
   let dynamic_map = List.map (fun di -> (di.param_name, di.module_name)) dynamic_infos in
   let format_input v = match List.assoc_opt v dynamic_map with
-    | Some module_name -> sprintf "(%s : _ %s.t)" v module_name
+    | Some module_name -> sprintf "(%s : (_, %s.t) Dynamic_select.t)" v module_name
     | None -> sprintf "~%s" v
   in
   let inputs = (subst @ names_of_vars stmt.vars) |> List.map format_input |> inline_values in
@@ -749,6 +749,8 @@ type callback_build_state = {
   idx_expr: string option;
 }
 
+let stmt_is_scoped stmt = Props.get stmt.Gen.props "scoped" = Some "true"
+
 let emit_dynamic_select_body ~module_kind ~dynamic_infos stmt =
   let sql_pieces = get_sql stmt in
 
@@ -864,7 +866,7 @@ let emit_dynamic_module_select ~module_kind ~dynamic_infos stmt =
   if not (supports_module_kind module_kind stmt) then () else
   let dynamic_names = List.map (fun di -> di.param_name) dynamic_infos in
   let format_input v =
-    if List.mem v dynamic_names then sprintf "(%s : _ t)" v
+    if List.mem v dynamic_names then sprintf "(%s : (_, t) Dynamic_select.t)" v
     else sprintf "~%s" v
   in
   let inputs = (Props.get_all stmt.props "subst" @ names_of_vars stmt.vars) |> List.map format_input |> inline_values in
@@ -1038,17 +1040,20 @@ let generate_enum_modules stmts =
 let stmt_has_dynamic_select stmt =
   List.exists (function Sql.DynamicSelect _ -> true | _ -> false) stmt.Gen.vars
 
-let stmt_is_scoped stmt = Props.get stmt.Gen.props "scoped" = Some "true"
-
 let stmt_is_scoped_fixed stmt =
   stmt_is_scoped stmt
   && not (stmt_has_dynamic_select stmt)
   && (match stmt.Gen.kind with Stmt.Select _ -> true | _ -> false)
   && List.exists (fun a -> a.Sql.name <> "") (schema_to_attrs stmt.Gen.schema)
 
-let generate_dynamic_select_preamble stmts =
-  if List.exists (fun s -> stmt_has_dynamic_select s && stmt_is_scoped s) stmts then begin
-    output "module Dynamic_select = Sqlgg_scope.Dynamic(T)";
+let generate_scope_preambles stmts =
+  let has_dynamic = List.exists stmt_has_dynamic_select stmts in
+  let has_fixed = List.exists stmt_is_scoped_fixed stmts in
+  if has_dynamic || has_fixed then begin
+    output "module Row = struct type t = T.row end";
+    if has_dynamic then output "module Params = struct type t = T.params end";
+    if has_fixed then output "module Scope = Sqlgg_scope.Make(Row)";
+    if has_dynamic then output "module Dynamic_select = Sqlgg_scope.Dynamic(Row)(Params)";
     empty_line ()
   end
 
@@ -1091,12 +1096,9 @@ let generate_dynamic_select_modules stmts =
       output "module %s = struct" module_name;
       inc_indent ();
 
-      if stmt_is_scoped stmt then begin
-        output "include Dynamic_select";
-        output "module Cols = struct";
-        inc_indent ()
-      end else
-        output "include Sqlgg_scope.Dynamic(T)";
+      output "module Cols = struct";
+      inc_indent ();
+      output "type t";
 
       List.iter2 (fun (field_name, _param_name, all_param_names, _simple_params, args_list, attr, ctor) (_, sql) ->
         let field_name_lower = 
@@ -1116,8 +1118,8 @@ let generate_dynamic_select_modules stmts =
         let set_helper_name = sprintf "_set_%s" field_name_lower in
         
         (match all_param_names with
-        | [] -> output "let %s =" field_name_lower
-        | _ -> output "let %s %s =" field_name_lower (String.concat " " all_param_names));
+        | [] -> output "let %s : (_, t) Dynamic_select.t =" field_name_lower
+        | _ -> output "let %s %s : (_, t) Dynamic_select.t =" field_name_lower (String.concat " " all_param_names));
         inc_indent ();
         
         let set_ref = 
@@ -1144,11 +1146,10 @@ let generate_dynamic_select_modules stmts =
         dec_indent ()
       ) fields field_sqls;
 
-      if stmt_is_scoped stmt then begin
-        dec_indent ();
-        output "end";
-        output "include Cols"
-      end;
+      dec_indent ();
+      output "end";
+      output "include Cols";
+      output "include Dynamic_select.Ops(Cols)";
 
       if single_di then begin
         empty_line ();
@@ -1172,12 +1173,6 @@ let generate_dynamic_select_modules stmts =
     )
   ) stmts
 
-let generate_scope_preamble stmts =
-  if List.exists stmt_is_scoped_fixed stmts then begin
-    output "module Scope = Sqlgg_scope.Make(T)";
-    empty_line ()
-  end
-
 let emit_scoped_selectors stmt =
   let seen = Hashtbl.create 16 in
   List.iteri (fun i attr ->
@@ -1191,7 +1186,7 @@ let emit_scoped_selectors stmt =
       if not (Hashtbl.mem seen field) then begin
         Hashtbl.add seen field ();
         let value = format_get_column ~row:"row" ~idx:(string_of_int i) attr in
-        output "let %s = { Scope.read = (fun row -> %s) }" field value
+        output "let %s : (_, t) Scope.t = { Scope.read = (fun row -> %s) }" field value
       end
   ) (schema_to_attrs stmt.Gen.schema)
 
@@ -1201,7 +1196,7 @@ let emit_scoped_select ~index ~module_kind stmt =
   let inputs = (subst @ names_of_vars stmt.vars) |> List.map (sprintf "~%s") |> inline_values in
   let has_callback = has_row_callback stmt in
   let params = append_func_params ~has_callback ~module_kind inputs in
-  output "let select db (fieldset : _ Scope.t) %s =" params;
+  output "let select db (fieldset : (_, t) Scope.t) %s =" params;
   inc_indent ();
   let sql = emit_sql_with_subst subst stmt in
   let func = select_func_of_kind stmt.kind in
@@ -1229,10 +1224,12 @@ let generate_scoped_modules stmts =
       inc_indent ();
       output "module Cols = struct";
       inc_indent ();
+      output "type t";
       emit_scoped_selectors stmt;
       dec_indent ();
       output "end";
       output "include Cols";
+      output "include Scope.Ops(Cols)";
       empty_line ();
       emit_scoped_select ~index ~module_kind:`Direct stmt;
       [`Fold; `List]
@@ -1279,8 +1276,7 @@ let generate ~gen_io ~migration_names name stmts =
   inc_indent ();
   output "module IO = %s" io;
   generate_enum_modules stmts;
-  generate_dynamic_select_preamble stmts;
-  generate_scope_preamble stmts;
+  generate_scope_preambles stmts;
   generate_dynamic_select_modules stmts;
   generate_scoped_modules stmts;
   empty_line ();
