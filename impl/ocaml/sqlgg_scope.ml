@@ -47,9 +47,10 @@ module Dynamic (Row : sig type t end) (Params : sig type t end) = struct
       let (vf, i1) = f.read row idx in
       let (va, i2) = a.read row i1 in
       (vf va, i2));
-    column = (match f.column, a.column with
+    column = begin match f.column, a.column with
       | "", c | c, "" -> c
-      | c1, c2 -> c1 ^ ", " ^ c2);
+      | c1, c2 -> c1 ^ ", " ^ c2
+      end;
     count = f.count + a.count;
   }
 

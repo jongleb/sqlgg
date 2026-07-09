@@ -9,11 +9,11 @@ cannot be passed to another query's select — it is a compile-time error.
 
 Correct usage compiles:
 
-  $ ocamlfind ocamlc -package sqlgg.traits -I . -c isolation_ok.ml
+  $ ocamlfind ocamlc -package sqlgg.traits -I . -c same_query_compose_ok.ml
 
 A fragment from q1 used with q2 is rejected by the type checker:
 
-  $ ocamlfind ocamlc -package sqlgg.traits -I . -c isolation_bad.ml 2>errors.log
+  $ ocamlfind ocamlc -package sqlgg.traits -I . -c cross_query_frag_bad.ml 2>errors.log
   [2]
   $ grep -q "Q1_col.t" errors.log && grep -q "Q2_col.t" errors.log && echo "rejected: q1 fragment is not a q2 fragment"
   rejected: q1 fragment is not a q2 fragment
