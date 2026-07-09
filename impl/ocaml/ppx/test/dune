@@ -1,9 +1,0 @@
-(executable
- (name test_ppx)
- (preprocess
-  (pps ppx_sqlgg)))
-
-(rule
- (alias runtest)
- (action
-  (run ./test_ppx.exe)))

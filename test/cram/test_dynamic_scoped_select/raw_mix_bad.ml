@@ -1,4 +1,3 @@
-(* MUST NOT compile: a raw selector from q1 passed to q2's select. *)
 module Check (T : Sqlgg_traits.M with
   type Types.Int.t = int64 and
   type Types.Text.t = string and

@@ -1,4 +1,3 @@
-(* MUST NOT compile: the [wide] fragment needs [price], but dscope_q2 does not select it. *)
 module Check (T : Sqlgg_traits.M with
   type Types.Int.t = int64 and
   type Types.Text.t = string and

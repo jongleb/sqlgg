@@ -15,9 +15,6 @@ end
 module Make (Row : sig type t end) = struct
   type ('a, 'q) t = { read : Row.t -> 'a }
 
-  (* The brand parameter is phantom, so without annotations inference would
-     assign each argument its own brand variable and [apply] would happily
-     mix fragments of different queries. The annotations tie them together. *)
   let pure : 'a -> ('a, 'q) t = fun x -> { read = (fun _row -> x) }
   let apply : ('a -> 'b, 'q) t -> ('a, 'q) t -> ('b, 'q) t =
     fun f a -> { read = (fun row -> (f.read row) (a.read row)) }
@@ -37,8 +34,6 @@ module Dynamic (Row : sig type t end) (Params : sig type t end) = struct
     count : int;
   }
 
-  (* Same as in [Make]: the phantom brand must be tied explicitly, otherwise
-     [apply] would accept fragments of different queries. *)
   let pure : 'a -> ('a, 'q) t = fun x -> {
     set = (fun _p -> ());
     read = (fun _row idx -> (x, idx));

@@ -1,7 +1,3 @@
-(* MUST NOT compile: mixing selectors of two queries through the
-   library-level brand-polymorphic [Dynamic_select.apply]. Regression test:
-   without explicit annotations on [pure]/[apply] the phantom brands were
-   inferred independently and this used to typecheck. *)
 module Check (T : Sqlgg_traits.M with
   type Types.Int.t = int64 and
   type Types.Text.t = string) = struct

@@ -1,5 +1,3 @@
-(* MUST NOT compile: a fixed-scoped fragment ([Scope.t]) cannot be passed to a
-   dynamic select, which expects [Dynamic_select.t]. *)
 module Check (T : Sqlgg_traits.M with
   type Types.Int.t = int64 and
   type Types.Text.t = string and

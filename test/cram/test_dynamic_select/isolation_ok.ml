@@ -1,4 +1,3 @@
-(* Positive control: fragments composed inside their own query module compile. *)
 module Check (T : Sqlgg_traits.M with
   type Types.Int.t = int64 and
   type Types.Text.t = string) = struct
