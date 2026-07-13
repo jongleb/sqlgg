@@ -294,22 +294,8 @@ let all_params_to_values l =
 (* rev unique rev -- to preserve ordering with respect to first occurrences *)
 let values_of_params = List.rev $ List.unique ~cmp:(=) $ List.rev $ all_params_to_values
 
-let rec find_param_ids l =
-  List.concat @@
-  List.map
-    (function
-      | Sql.Single (p, _) | SingleIn (p, _) -> [ p.id ]
-      | Choice (id,_) -> [ id ]
-      | OptionActionChoice (id, _, _, _) -> [id]
-      | ChoiceIn { param; vars; _ } -> find_param_ids vars @ [param]
-      | SharedVarsGroup (vars, _) -> find_param_ids vars
-      | TupleList (id, _) -> [ id ]
-      | DynamicSelect (id, _) -> [ id ]
-      | DynamicSelectJoin _ -> [])
-    l
-
 let names_of_vars l =
-  find_param_ids l |>
+  Sql.find_param_ids l |>
   List.mapi make_param_name |>
   List.unique ~cmp:String.equal
 

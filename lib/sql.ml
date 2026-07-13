@@ -649,6 +649,19 @@ let var_pos = function
   | SharedVarsGroup (_, id) -> fst id.pos
   | DynamicSelectJoin { pos = (j1, _); _ } -> j1
 
+let rec find_param_ids l =
+  List.concat_map
+    (function
+      | Single (p, _) | SingleIn (p, _) -> [ p.id ]
+      | Choice (id, _) -> [ id ]
+      | OptionActionChoice (id, _, _, _) -> [ id ]
+      | ChoiceIn { param; vars; _ } -> find_param_ids vars @ [ param ]
+      | SharedVarsGroup (vars, _) -> find_param_ids vars
+      | TupleList (id, _) -> [ id ]
+      | DynamicSelect (id, _) -> [ id ]
+      | DynamicSelectJoin _ -> [])
+    l
+
 type alter_pos = [ `After of string | `Default | `First ] [@@deriving show {with_path=false}]
 
 type direction = [ `Fixed | `Param of param_id ] [@@deriving show]

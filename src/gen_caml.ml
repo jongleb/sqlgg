@@ -851,18 +851,19 @@ let emit_dynamic_select_body ~module_kind ~dynamic_infos ~in_module stmt =
   in
 
   let find_di_by_pid pid = List.find (fun di -> di.param_id = pid) dynamic_infos in
+  let is_di pid = List.exists (fun di -> di.param_id = pid) dynamic_infos in
 
   let rec build_parts acc pending_comma = function
     | [] -> List.rev acc
     | Gen.Static s :: rest ->
-      let s_trimmed = String.trim s in
-      let ends_with_comma = String.length s_trimmed > 0 && s_trimmed.[String.length s_trimmed - 1] = ',' in
-      if ends_with_comma then
-        let s_no_comma = String.sub s_trimmed 0 (String.length s_trimmed - 1) in
-        build_parts (if s_no_comma = "" then acc else quote s_no_comma :: acc) true rest
-      else
-        build_parts (quote s :: acc) false rest
-    | Gen.Dynamic (pid, _) :: rest ->
+      let piece, pending =
+        match String.rindex_opt s ',' with
+        | Some i when String.(trim (slice ~first:(i + 1) s)) = "" -> String.slice ~last:i s, true
+        | _ -> s, false
+      in
+      let acc = if pending && String.trim piece = "" then acc else quote piece :: acc in
+      build_parts acc pending rest
+    | Gen.Dynamic (pid, _) :: rest when is_di pid ->
       let di = find_di_by_pid pid in
       let dyn_expr =
         if pending_comma then
@@ -887,7 +888,10 @@ let emit_dynamic_select_body ~module_kind ~dynamic_infos ~in_module stmt =
           body_expr
       in
       build_parts (expr :: acc) pending_comma rest
-    | _ :: rest -> build_parts acc pending_comma rest
+    | (Gen.Dynamic _ | Gen.SubstIn _ | Gen.DynamicIn _ | Gen.SubstTuple _) as piece :: rest ->
+      let expr = make_sql ~join_ctors [piece] in
+      let acc = if pending_comma then expr :: quote "," :: acc else expr :: acc in
+      build_parts acc false rest
   in
   let sql_parts = build_parts [] false sql_pieces in
   let sql_expr = String.concat " ^ " sql_parts in

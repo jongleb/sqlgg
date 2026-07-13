@@ -3390,3 +3390,70 @@ harmless pair:
   > SELECT 1 WHERE FALSE AND @b { None { TRUE } | Some { (FALSE OR TRUE) } };
   > EOF
       T.select_one_maybe db ("SELECT 1 WHERE FALSE AND " ^ (match b with `None -> " ( TRUE ) " | `Some -> " ( (FALSE OR TRUE) ) ")) set_params get_row
+
+Shared choice with identical branches is allowed:
+  $ sqlgg -gen caml -params unnamed -no-header - <<'EOF' 2>&1 | grep -F 'WHERE a =' | head -1
+  > CREATE TABLE t (a INT, b INT);
+  > SELECT * FROM t WHERE a = @x { A { 1 } | B { 2 } } AND b = @x { A { 10 } | B { 20 } };
+  > EOF
+      T.select db ("SELECT * FROM t WHERE a = " ^ (match x with `A -> " ( 1 ) " | `B -> " ( 2 ) ") ^ " AND b = " ^ (match x with `A -> " ( 10 ) " | `B -> " ( 20 ) ")) set_params invoke_callback
+
+Shared choice with a param inside a branch:
+  $ sqlgg -gen caml -params unnamed -no-header - <<'EOF' 2>&1 | grep -F 'T.start_params' | head -1
+  > CREATE TABLE t (a INT, b INT);
+  > SELECT * FROM t WHERE a = @x { Const { 1 } | Param { @v } } AND b = @x { Const { 1 } | Param { @v } };
+  > EOF
+        let p = T.start_params stmt (0 + (match x with `Const -> 0 | `Param _ -> 1) + (match x with `Const -> 0 | `Param _ -> 1)) in
+
+Shared choice with different branches is rejected:
+  $ sqlgg -gen caml -params unnamed -no-header - <<'EOF' 2>&1 | tail -2
+  > CREATE TABLE t (a INT, b INT);
+  > SELECT * FROM t WHERE a = @x { A { 1 } | B { 2 } } AND b = @x { C { 10 } | D { 20 } };
+  > EOF
+  At : @x { C { 10 } | D { 20 } }
+  Fatal error: exception Failure("choice x is used several times with different branches")
+
+Shared choice across a CTE and the main query:
+  $ sqlgg -gen caml -params unnamed -no-header - <<'EOF' 2>&1 | grep -F 'T.select db' | head -1
+  > CREATE TABLE t (id INT, status INT);
+  > WITH cte AS (SELECT id FROM t WHERE @f { ByStatus { status = @s } | All { TRUE } }) SELECT id FROM cte WHERE @f { ByStatus { id > @s } | All { TRUE } };
+  > EOF
+      T.select db ("WITH cte AS (SELECT id FROM t WHERE " ^ (match f with `ByStatus _ -> " ( status = ? ) " | `All -> " ( TRUE ) ") ^ ") SELECT id FROM cte WHERE " ^ (match f with `ByStatus _ -> " ( id > ? ) " | `All -> " ( TRUE ) ")) set_params invoke_callback
+
+Shared choice occurrences may bind different param names in branches:
+  $ sqlgg -gen caml -params unnamed -no-header - <<'EOF' 2>&1 | grep -E '\| `ByStatus \(' | sort -u
+  > CREATE TABLE t (id INT, status INT);
+  > WITH cte AS (SELECT id FROM t WHERE @f { ByStatus { status = @s } | All { TRUE } }) SELECT id FROM cte WHERE @f { ByStatus { id > @min } | All { TRUE } };
+  > EOF
+          | `ByStatus (min) ->
+          | `ByStatus (s) ->
+        | `ByStatus (min) ->
+        | `ByStatus (s) ->
+
+Shared choice with differently named params of incompatible types is rejected:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1 | tail -1
+  > CREATE TABLE t (id INT, name TEXT);
+  > SELECT id FROM t WHERE @f { P { id = @a } | N { TRUE } } AND @f { P { name = @b } | N { TRUE } };
+  > EOF
+  Fatal error: exception Failure("incompatible types for parameter \"b\" : Text and Int")
+
+Shared choice with a different number of branches is rejected:
+  $ sqlgg -gen caml -no-header - <<'EOF' 2>&1 | tail -1
+  > CREATE TABLE t (a INT, b INT);
+  > SELECT * FROM t WHERE a = @x { A { 1 } | B { 2 } } AND b = @x { A { 1 } | B { 2 } | C { 3 } };
+  > EOF
+  Fatal error: exception Failure("choice x is used several times with different branches")
+
+Shared choice with a param in one occurrence and a constant in the other is rejected:
+  $ sqlgg -gen caml -no-header - <<'EOF' 2>&1 | tail -1
+  > CREATE TABLE t (a INT, b INT);
+  > SELECT * FROM t WHERE a = @x { A { @p } | B { 2 } } AND b = @x { A { 1 } | B { 2 } };
+  > EOF
+  Fatal error: exception Failure("choice x is used several times with different branches")
+
+Shared choice with a scalar param in one occurrence and an IN-list in the other is rejected:
+  $ sqlgg -gen caml -no-header - <<'EOF' 2>&1 | tail -1
+  > CREATE TABLE t (a INT, b INT);
+  > SELECT * FROM t WHERE @x { P { a = @v } | N { TRUE } } AND @x { P { b IN @v } | N { TRUE } };
+  > EOF
+  Fatal error: exception Failure("choice x is used several times with different branches")
