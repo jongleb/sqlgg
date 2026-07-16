@@ -1896,10 +1896,11 @@ end = struct
     | Some n -> n
     | None -> let n = { name; state = Root None } in Hashtbl.add t name n; n
 
+  (* one node per variable, so nodes are compared physically *)
   let rec root n =
     match n.state with
     | Root typ -> n, typ
-    | Link p -> let (r, _) as res = root p in if r != p then n.state <- Link r; res
+    | Link p -> let (r, _) as res = root p in (* relink directly to root so next lookups are one step *) if r != p then n.state <- Link r; res
 
   let unify name t1 t2 =
     match Type.common_type t1 t2 with
@@ -1915,7 +1916,7 @@ end = struct
   let alias t n1 n2 =
     let (r1, _) = root (node t n1) in
     let (r2, t2) = root (node t n2) in
-    if r1 != r2 then begin
+    if r1 != r2 then begin (* physically same root = already aliased *)
       Option.may (note t r1.name) t2;
       r2.state <- Link r1
     end

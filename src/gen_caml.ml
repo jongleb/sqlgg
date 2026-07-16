@@ -150,13 +150,22 @@ type scoped_field = {
 module L = struct
   open Type
 
-  let as_lang_type t =
-    type_name @@
-    match t with
-    | { t = Blob; nullability } | { t = StringLiteral _; nullability } -> { t = Text; nullability }
-    | { t = FloatingLiteral _; nullability } -> { t = Float; nullability }
-    | { t = Decimal _; nullability } -> { t = Decimal { precision = None; scale = None }; nullability }
-    | t -> t
+  let as_lang_type = function
+  | { t = Blob; nullability } -> type_name { t = Text; nullability }
+  | { t = StringLiteral _; nullability } -> type_name { t = Text; nullability }
+  | { t = FloatingLiteral _; nullability } -> type_name { t = Float; nullability }
+  | { t = Decimal _; nullability; } -> type_name { t = Decimal { precision = None; scale = None }; nullability } 
+  | { t = Int; _ }
+  | { t = Text; _ }
+  | { t = Float; _ }
+  | { t = Bool; _ }
+  | { t = Datetime; _ }
+  | { t = Union _; _ }
+  | { t = Json; _ }
+  | { t = Json_path; _ }
+  | { t = One_or_all; _ }
+  | { t = UInt64; _ }
+  | { t = Any; _ } as t -> type_name t
 
   let as_runtime_repr_name = function
   | { t = Blob; _ }
@@ -276,12 +285,13 @@ let supports_module_kind module_kind stmt =
   | `Single -> is_single_row_select stmt
   | `Direct -> true
 
-let emit_module ?(annotate = false) name body =
+let emit_module_gen ~footer name body =
   output "module %s = struct" name;
   indented body;
-  if annotate then output "end (* module %s *)" name else output "end"
+  output "%s" (footer name)
 
-let emit_module_annotated = emit_module ~annotate:true
+let emit_module = emit_module_gen ~footer:(fun _ -> "end")
+let emit_module_annotated = emit_module_gen ~footer:(sprintf "end (* module %s *)")
 
 let emit_module_kind_variants stmt emit =
   [`Fold; `List] |> List.iter (fun module_kind ->
@@ -890,7 +900,15 @@ let emit_dynamic_module_select ~module_kind ~dynamic_infos stmt =
     emit_func_header ~name:"select" ~extra_params:""
       ~has_callback:(has_row_callback stmt) ~format_input ~module_kind stmt
   in
-  emit_dynamic_select_body ~module_kind ~dynamic_infos ~in_module:true stmt
+  emit_dynamic_select_body ~module_kind ~dynamic_infos ~in_module:true stmt;
+  match module_kind, stmt.schema with
+  | `List, [Sql.Dynamic _] ->
+    empty_line ();
+    let inputs = Props.get_all stmt.props "subst" @ names_of_vars stmt.vars in
+    let def = inputs |> List.map format_input |> inline_values in
+    let call = inputs |> List.map (fun v -> if List.mem v dynamic_names then v else "~" ^ v) |> inline_values in
+    output "let select_cols db %s = select db %s (fun x -> x)" def call
+  | _ -> ()
 
 let emit_sql_with_subst subst stmt =
   let sql = make_sql ~join_ctors:(join_ctors_of_vars stmt.Gen.vars) @@ get_sql stmt in

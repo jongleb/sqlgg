@@ -87,6 +87,8 @@ WHERE i.id > ?")
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~min_id = select db col ~min_id (fun x -> x)
     end (* module List *)
 
   end

@@ -72,6 +72,8 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~uid = select db col ~uid (fun x -> x)
     end (* module List *)
 
   end
@@ -147,6 +149,8 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~uid = select db col ~uid (fun x -> x)
     end (* module List *)
 
   end
@@ -222,6 +226,8 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~uid = select db col ~uid (fun x -> x)
     end (* module List *)
 
   end
@@ -294,6 +300,8 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) = select db col (fun x -> x)
     end (* module List *)
 
   end

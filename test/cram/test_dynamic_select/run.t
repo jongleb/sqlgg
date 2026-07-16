@@ -498,6 +498,8 @@ Test DynamicSelect edge: single column:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -591,6 +593,8 @@ DynamicSelect: SELECT * remains static select:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -693,6 +697,8 @@ DynamicSelect: SELECT * with expression in same list:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -795,6 +801,8 @@ DynamicSelect: auto names for expressions without alias:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -879,6 +887,8 @@ Test DynamicSelect edge: expression at first position:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -972,6 +982,8 @@ Test DynamicSelect edge: literal only:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -1092,6 +1104,8 @@ Test DynamicSelect edge: many columns:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -1194,6 +1208,8 @@ Test DynamicSelect edge: no space after commas:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -1287,6 +1303,8 @@ Test DynamicSelect edge: minimal spacing:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -1371,6 +1389,8 @@ Test DynamicSelect edge: column without alias gets auto name:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -1493,6 +1513,8 @@ Test DynamicSelect with dynamic_select flag:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) ~t = select db col ~t (fun x -> x)
       end (* module List *)
   
     end
@@ -1604,6 +1626,8 @@ Test DynamicSelect with two dynamic columns:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -1706,6 +1730,8 @@ Test DynamicSelect with Verbatim branches:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -1799,6 +1825,8 @@ Test DynamicSelect at beginning of SELECT:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -1892,6 +1920,8 @@ Test DynamicSelect disabled in subquery (fallback to Choice):
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -2167,6 +2197,8 @@ Test DynamicSelect comprehensive list:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -2273,6 +2305,8 @@ Virtual select: param as bare column expression (spacing at ctor boundary):
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) ~id = select db col ~id (fun x -> x)
       end (* module List *)
   
     end
@@ -2374,6 +2408,8 @@ Virtual select: consecutive params as columns:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -2492,6 +2528,8 @@ Virtual select: mixed columns and params without spaces after commas:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) ~id = select db col ~id (fun x -> x)
       end (* module List *)
   
     end
@@ -2585,6 +2623,8 @@ Virtual select: subquery expression as dynamic column:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -2678,6 +2718,8 @@ Virtual select: CASE WHEN as dynamic column:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -2771,6 +2813,8 @@ Virtual select: function call with multiple args as column:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end
@@ -2871,6 +2915,8 @@ Virtual select: arithmetic with param at expression start:
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) ~id = select db col ~id (fun x -> x)
       end (* module List *)
   
     end
@@ -2971,6 +3017,8 @@ Virtual select: tab-separated columns (non-space whitespace):
             __sqlgg_r_col) :: !r_acc))
           (fun () -> IO.return (List.rev !r_acc))
   
+  
+        let select_cols db (col : _ t) = select db col (fun x -> x)
       end (* module List *)
   
     end

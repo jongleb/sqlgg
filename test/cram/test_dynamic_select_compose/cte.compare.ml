@@ -78,6 +78,8 @@ SELECT " ^ col.column ^ " FROM filtered WHERE id > ?")
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db ~st (col : _ t) ~lo = select db ~st col ~lo (fun x -> x)
     end (* module List *)
 
   end
@@ -159,6 +161,8 @@ SELECT " ^ col.column ^ " FROM filtered WHERE id > ?")
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db ~ids ~nm (col : _ t) ~lo = select db ~ids ~nm col ~lo (fun x -> x)
     end (* module List *)
 
   end
@@ -249,6 +253,8 @@ SELECT " ^ col.column ^ " FROM filtered ORDER BY " ^ ((match sort with `I -> " (
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db ~f (col : _ t) ~sort = select db ~f col ~sort (fun x -> x)
     end (* module List *)
 
   end
@@ -339,6 +345,8 @@ SELECT " ^ col.column ^ " FROM filtered WHERE " ^ ((match pairs with [] -> "FALS
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db ~st (col : _ t) ~pairs = select db ~st col ~pairs (fun x -> x)
     end (* module List *)
 
   end
@@ -444,6 +452,8 @@ SELECT " ^ col.column ^ " FROM filtered WHERE " ^ ((match f with `All -> " ( TRU
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~f = select db col ~f (fun x -> x)
     end (* module List *)
 
   end
@@ -535,6 +545,8 @@ SELECT " ^ col.column ^ " FROM recent")
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db ~st (col : _ t) = select db ~st col (fun x -> x)
     end (* module List *)
 
   end
@@ -613,6 +625,8 @@ WHERE id IN (SELECT id FROM t WHERE status = ? AND " ^ ((match names with [] -> 
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~st ~names = select db col ~st ~names (fun x -> x)
     end (* module List *)
 
   end

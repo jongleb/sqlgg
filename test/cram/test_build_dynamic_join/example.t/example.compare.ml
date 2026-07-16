@@ -159,6 +159,8 @@ WHERE u.org_id = ? AND u.deleted = FALSE")
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~org = select db col ~org (fun x -> x)
     end (* module List *)
 
   end

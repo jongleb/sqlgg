@@ -139,6 +139,8 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~min_stock = select db col ~min_stock (fun x -> x)
     end (* module List *)
 
   end

@@ -72,6 +72,8 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~ids ~nm = select db col ~ids ~nm (fun x -> x)
     end (* module List *)
 
   end
@@ -144,6 +146,8 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~pairs = select db col ~pairs (fun x -> x)
     end (* module List *)
 
   end
@@ -231,6 +235,8 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~v = select db col ~v (fun x -> x)
     end (* module List *)
 
   end
@@ -303,6 +309,8 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~sort = select db col ~sort (fun x -> x)
     end (* module List *)
 
   end
@@ -375,6 +383,8 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~sort = select db col ~sort (fun x -> x)
     end (* module List *)
 
   end
@@ -462,6 +472,8 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~f = select db col ~f (fun x -> x)
     end (* module List *)
 
   end
@@ -570,6 +582,8 @@ WHERE " ^ ((match f with `All -> " ( TRUE ) " | `ById _ -> " ( id = ? ) ")) ^ "\
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~f = select db col ~f (fun x -> x)
     end (* module List *)
 
   end
@@ -705,6 +719,8 @@ ORDER BY " ^ ((match sort with `I -> " ( id ) " | `N -> " ( name ) ")))
           __sqlgg_r_col) :: !r_acc))
         (fun () -> IO.return (List.rev !r_acc))
 
+
+      let select_cols db (col : _ t) ~ids ~pairs ~nm ~f ~sort = select db col ~ids ~pairs ~nm ~f ~sort (fun x -> x)
     end (* module List *)
 
   end
