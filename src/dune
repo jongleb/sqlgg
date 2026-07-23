@@ -20,7 +20,7 @@
     sqlgg
     unix
   )
-  (preprocess (pps ppx_deriving.std))
+  (preprocess (pps ppx_deriving.std ppx_enumerate ppx_deriving_variant_string))
 )
 
 (rule
