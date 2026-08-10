@@ -1557,7 +1557,7 @@ let test_type_mapping_params _ =
   assert_params_with_meta stmt [
     (named "param_1" Datetime, []);
     (named "param_2" (Decimal { precision = Some 10; scale = Some 2; }), ["module", "Module3"]);
-    (named "param_3" (Decimal { precision = Some 10; scale = Some 2; }), []);
+    (named "param_3" (Decimal { precision = Some 10; scale = Some 2; }), ["module", "Module3"]);
     (named "param_4" 
       (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["status_a"; "status_b"; "status_c"]); is_closed = true })), 
       ["module", "Module6"]);
@@ -1743,6 +1743,182 @@ let test_meta_insert_update _ =
     (named "param2" Text, []);  (* no meta from col_2 *)
     (named "param3" Int, ["module", "Module1"]);
   ]
+
+let test_meta_loss_schema =
+  let enum_t = Type.(Union { ctors = (Enum_kind.Ctors.of_list ["active"; "inactive"; "banned"]); is_closed = true }) in
+  [
+  tt {|
+    CREATE TABLE test47 (
+      -- [sqlgg] module=T47Id
+      id INT PRIMARY KEY,
+      -- [sqlgg] module=T47Status
+      status ENUM('active', 'inactive', 'banned') NOT NULL,
+      -- [sqlgg] module=T47Name
+      name TEXT NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    CREATE TABLE test48 (
+      id INT PRIMARY KEY,
+      -- [sqlgg] module=T48Status
+      status ENUM('active', 'inactive', 'banned') NOT NULL
+    )
+  |} [] [];
+
+  tt "SELECT status FROM test47"
+    [attr' ~extra:[NotNull] ~meta:["module", "T47Status"] "status" enum_t] [];
+
+  tt "SELECT MAX(status) AS max_status FROM test47"
+    [attr' ~nullability:Nullable ~meta:["module", "T47Status"] "max_status" enum_t] [];
+
+  tt "SELECT IFNULL(status, 'active') AS s FROM test47"
+    [attr' ~meta:["module", "T47Status"] "s" enum_t] [];
+
+  tt "SELECT CASE WHEN id = 1 THEN status ELSE status END AS s FROM test47"
+    [attr' ~meta:["module", "T47Status"] "s" enum_t] [];
+
+  tt "SELECT CASE WHEN id = 1 THEN status ELSE 'active' END AS s FROM test47"
+    [attr' "s" enum_t] [];
+
+  tt "SELECT NULLIF(status, 'active') AS s FROM test47"
+    [attr' ~nullability:Nullable ~meta:["module", "T47Status"] "s" enum_t] [];
+
+  tt "SELECT status FROM test48 UNION SELECT status FROM test47"
+    [attr' ~extra:[NotNull] "status" enum_t] [];
+
+  tt "SELECT status FROM test47 UNION ALL SELECT status FROM test47"
+    [attr' ~extra:[NotNull] ~meta:["module", "T47Status"] "status" enum_t] [];
+]
+
+let test_meta_loss_params =
+  let enum_t = Type.(Union { ctors = (Enum_kind.Ctors.of_list ["active"; "inactive"; "banned"]); is_closed = true }) in
+  let check name sql expected = name >:: (fun () -> assert_params_with_meta (parse sql) expected) in
+  [
+  tt {|
+    CREATE TABLE test49 (
+      -- [sqlgg] module=T49Id
+      id INT PRIMARY KEY,
+      -- [sqlgg] module=T49Status
+      status ENUM('active', 'inactive', 'banned') NOT NULL,
+      -- [sqlgg] module=T49Name
+      name TEXT NOT NULL
+    )
+  |} [] [];
+
+  check "direct assignment"
+    "UPDATE test49 SET status = @status WHERE id = @id"
+    [
+      (named "status" enum_t, ["module", "T49Status"]);
+      (named "id" Int, ["module", "T49Id"]);
+    ];
+
+  check "param inside function in assignment"
+    "UPDATE test49 SET status = IFNULL(@status, status) WHERE id = @id"
+    [
+      (named "status" enum_t, ["module", "T49Status"]);
+      (named "id" Int, ["module", "T49Id"]);
+    ];
+
+  check "enum BETWEEN params"
+    "SELECT id FROM test49 WHERE status BETWEEN @low AND @high"
+    [
+      (named "low" enum_t, ["module", "T49Status"]);
+      (named "high" enum_t, ["module", "T49Status"]);
+    ];
+
+  check "column wrapped into transforming function"
+    "SELECT id FROM test49 WHERE LOWER(name) = @name"
+    [
+      (named "name" Text, []);
+    ];
+
+  check "param inside arithmetic expression"
+    "SELECT status FROM test49 WHERE id = @id + 1"
+    [
+      (named "id" Int, []);
+    ];
+
+  check "column inside null-handling function"
+    "SELECT id FROM test49 WHERE IFNULL(status, 'active') = @status"
+    [
+      (named "status" enum_t, ["module", "T49Status"]);
+    ];
+]
+
+let test_meta_loss_query =
+  let open_enum_t = Type.(Union { ctors = (Enum_kind.Ctors.of_list ["one"; "two"; "three"]); is_closed = false }) in
+  let closed_enum_t = Type.(Union { ctors = (Enum_kind.Ctors.of_list ["one"; "two"; "three"]); is_closed = true }) in
+  [
+  tt {|
+    CREATE TABLE test51 (
+      id INT PRIMARY KEY,
+      parent_id INT NOT NULL,
+      -- [sqlgg] module=T51Level
+      col_a ENUM('one', 'two', 'three') NOT NULL,
+      -- [sqlgg] module=T51Time
+      col_b DATETIME NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    WITH t1 AS (
+      SELECT
+        IFNULL(LAG(col_a) OVER (PARTITION BY parent_id ORDER BY col_b, id), 'one') AS prev_a,
+        col_a AS cur_a
+      FROM test51
+    )
+    SELECT prev_a, cur_a FROM t1
+  |} [
+    attr' ~meta:["module", "T51Level"] "prev_a" closed_enum_t;
+    attr' ~extra:[NotNull] ~meta:["module", "T51Level"] "cur_a" closed_enum_t;
+  ] [];
+
+  tt {|
+    WITH RECURSIVE d AS (
+      SELECT DATE(IFNULL(MIN(col_b), NOW())) AS date_ FROM test51
+      UNION ALL
+      SELECT DATE_ADD(date_, INTERVAL 1 DAY) FROM d WHERE date_ < DATE(NOW())
+    ),
+    t1 AS (
+      SELECT
+        IFNULL(LAG(col_a) OVER (PARTITION BY parent_id ORDER BY col_b, id), 'one') AS prev_a,
+        col_a AS cur_a
+      FROM test51
+    ),
+    t2 AS (
+      SELECT prev_a, cur_a, COUNT(1) AS cnt FROM t1 GROUP BY prev_a, cur_a
+    ),
+    dim AS (SELECT 'one' AS lvl UNION ALL SELECT 'two' UNION ALL SELECT 'three')
+    SELECT
+      d.date_,
+      d1.lvl AS from_a,
+      d2.lvl AS to_a,
+      IFNULL(t2.cnt, 0) AS cnt
+    FROM d
+    CROSS JOIN dim d1
+    CROSS JOIN dim d2
+    LEFT JOIN t2 ON d1.lvl = t2.prev_a AND d2.lvl = t2.cur_a
+    WHERE d1.lvl != d2.lvl
+  |} [
+    attr' "date_" Datetime;
+    attr' ~meta:["module", "T51Level"] "from_a" open_enum_t;
+    attr' ~meta:["module", "T51Level"] "to_a" open_enum_t;
+    attr' "cnt" Int;
+  ] [];
+
+  (* equality holding in only one branch of OR says nothing about the domain *)
+  tt {|
+    WITH
+      t1 AS (SELECT col_a AS cur_a FROM test51),
+      dim AS (SELECT 'one' AS lvl UNION ALL SELECT 'two' UNION ALL SELECT 'three')
+    SELECT dim.lvl AS lvl
+    FROM dim
+    LEFT JOIN t1 ON dim.lvl = t1.cur_a OR t1.cur_a = 'one'
+  |} [
+    attr' "lvl" open_enum_t;
+  ] [];
+]
 
 let test_multi_functions = [
   tt "CREATE TABLE test_multi (id INT, txt1 TEXT, txt2 TEXT NULL, txt3 TEXT NOT NULL)" [] [];
@@ -2393,6 +2569,9 @@ let run () =
     "test_case_enum" >::: test_case_enum;
     "test_type_mapping_params" >:: test_type_mapping_params;
     "test_meta_insert_update" >:: test_meta_insert_update;
+    "test_meta_loss_schema" >::: test_meta_loss_schema;
+    "test_meta_loss_params" >::: test_meta_loss_params;
+    "test_meta_loss_query" >::: test_meta_loss_query;
     "test_multi_functions" >::: test_multi_functions;
     "test_on_conflict_do_update" >::: test_on_conflict_do_update;
     "test_enum_with_in_and_between" >::: test_enum_with_in_and_between;

@@ -35,6 +35,9 @@ type env = {
   is_update: bool;
   insert_resolved_types: (string, Type.t) Hashtbl.t; (* for INSERT .. VALUES *)
   scope: query_scope;
+  (* both reset by eval_nested *)
+  not_null_keys: (table_name list * string) list; (* from WHERE/HAVING *)
+  join_equalities: (col_name * col_name) list; (* JOIN ON equalities share meta *)
 }
 
 (* Merge global tables with ctes during resolving sources in SELECT .. FROM sources, JOIN *)
@@ -77,6 +80,8 @@ let empty_env = { query_has_grouping = false;
   is_update = false;
   insert_resolved_types = Hashtbl.create 16;
   scope = Top_level;
+  not_null_keys = [];
+  join_equalities = [];
 }
 
 let flat_map f l = List.flatten (List.map f l)
@@ -184,18 +189,45 @@ let resolve_column_opt ~env col =
   | attr -> Some attr
   | exception (Schema.Error _ | Failure _) -> None
 
-let rec merge_meta_into_params ~shallow meta expr =
+let column_meta ~env col =
+  let own col =
+    match resolve_column_opt ~env col with
+    | Some result -> result.attr.meta
+    | None -> Meta.empty ()
+  in
+  let meta = own col in
+  if not (Meta.is_empty meta) then meta
+  else
+    (* columns joined on equality hold values of the same domain, hence share metadata *)
+    env.join_equalities
+    |> List.filter_map (fun (a, b) ->
+      if equal_col_name a col then Some b
+      else if equal_col_name b col then Some a
+      else None)
+    |> List.map own
+    |> List.filter (fun meta -> not (Meta.is_empty meta))
+    |> Meta.common
+
+(* metadata of the enclosing column reaches every param holding a value of the same domain,
+   ie every param in a Sql.passthrough_sub_exprs position *)
+let rec merge_meta_into_params meta expr =
+  let merge = merge_meta_into_params meta in
   match expr with
   | Param (p, m) -> Param (p, Meta.merge_right meta m)
   | Inparam (p, m) -> Inparam (p, Meta.merge_right meta m)
-  | OptionActions ({ choice; _ } as o) ->
-    OptionActions { o with choice = merge_meta_into_params ~shallow meta choice }
-  | e when shallow -> e
-  | e -> map_sub_exprs (merge_meta_into_params ~shallow meta) e
+  | Choices (n, l) -> Choices (n, List.map (fun (n, e) -> n, Option.map merge e) l)
+  | InChoice (n, k, e) -> InChoice (n, k, merge e)
+  | OptionActions ({ choice; _ } as o) -> OptionActions { o with choice = merge choice }
+  | Fun ({ kind = (Agg Self | Null_handling _); parameters; _ } as fn) ->
+    Fun { fn with parameters = List.map merge parameters }
+  | Case ({ branches; else_; _ } as c) ->
+    Case { c with
+           branches = List.map (fun (b : Sql.case_branch) -> { b with then_ = merge b.then_ }) branches;
+           else_ = Option.map merge else_ }
+  | Value _ | Column _ | Of_values _ | SelectExpr _ | InTupleList _ | Fun _ -> expr
 
-let set_param_meta ~env col e = 
-  let m' = (resolve_column ~env col).attr.meta in
-  merge_meta_into_params ~shallow:true m' e
+let set_param_meta ~env col e =
+  merge_meta_into_params (resolve_column ~env col).attr.meta e
 
 let resolve_column_assignments ~env l =
   let open Schema.Source in 
@@ -232,7 +264,7 @@ let resolve_column_assignments ~env l =
       let l_with_meta = List.map (fun (n,e) -> n, Option.map (set_param_meta ~env col) e) l in
       Choices (n, List.map (fun (n,e) -> n, Option.map (equality typ) e) l_with_meta)
     | RegularExpr (OptionActions ch) ->
-      OptionActions { ch with choice = (equality typ) ch.choice }  (* FIXME hack, should propagate properly *)
+      OptionActions { ch with choice = (equality typ) (set_param_meta ~env col ch.choice) }  (* FIXME hack, should propagate properly *)
     | RegularExpr expr -> equality typ (set_param_meta ~env col expr)
     | WithDefaultParam (e, pos) -> with_default @@ OptionActions { choice = equality typ (set_param_meta ~env col e); pos; kind = SetDefault }
     | AssignDefault -> with_default @@ (Value typ)
@@ -256,20 +288,34 @@ let rec bool_choice_id = function
   | OptionActions _ -> None
   | e -> List.find_map bool_choice_id (sub_exprs e)
 
-let extract_meta_from_col ~env expr = 
-  let rec aux = function 
-    (* col_name = @param *)
-    | Sql.Fun ({ parameters = ([Column a; b]); kind = Comparison _; _ } as fn)
-    (* col_name IN @param *)
-    | Fun ({ parameters = ([Column a; (Inparam _) as b]); _ } as fn) -> 
-      Fun { fn with parameters = [Column a; set_param_meta ~env a.collated b] }
-    | Sql.Fun ({ parameters = ([b; Column a]); kind = Comparison _; _ } as fn)
-    (* col_name IN @param *)
-    | Fun ({ parameters = ([(Inparam _) as b; Column a;]); _ } as fn) -> 
-      Fun { fn with parameters = [set_param_meta ~env a.collated b; Column a;] }
+(** propagate metadata of the compared columns onto the params they are compared with *)
+let extract_meta_from_col ~env expr =
+  (* metadata of the columns whose values can reach [e], those carrying none are ignored *)
+  let rec col_metas acc e =
+    match e with
+    | Sql.Column c ->
+      let meta = column_meta ~env c.collated in
+      if Meta.is_empty meta then acc else meta :: acc
+    | e -> List.fold_left col_metas acc (passthrough_sub_exprs e)
+  in
+  (* boolean functions comparing all of their arguments against each other, ie comparison
+     operators, IN and BETWEEN - every argument holds a value of the same domain.
+     Their type says it: one and the same type variable for every argument. *)
+  let compares_all_arguments = function
+    | Comparison _ -> true
+    | F (Type.Typ { t = Bool; _ }, ((Type.Var i :: _) as args)) ->
+      List.for_all (function Type.Var j -> Int.equal j i | Type.Typ _ -> false) args
+    | _ -> false
+  in
+  let rec aux e =
+    match e with
+    | Sql.Fun ({ kind; parameters; _ } as fn) when compares_all_arguments kind ->
+      let metas = List.map (col_metas []) parameters in
+      let meta_of_others i = Meta.common (List.concat (List.filteri (fun j _ -> not (Int.equal j i)) metas)) in
+      Fun { fn with parameters = List.mapi (fun i p -> merge_meta_into_params (meta_of_others i) (aux p)) parameters }
     | e -> map_sub_exprs aux e
   in
-  aux expr    
+  aux expr
 
 let dynamic_allowed env =
   !Config.dynamic_select &&
@@ -983,29 +1029,24 @@ and resolve_types env expr =
       end;
       raise exn
 
-and infer_schema ~not_null_keys env columns =
+and infer_schema env columns =
 (*   let all = tables |> List.map snd |> List.flatten in *)
   let rec propagate_meta ~env = function
-    | Column col -> 
-      let result = resolve_column ~env col.collated in 
-      result.attr.meta
-    (* aggregated columns, ie: max, min *)
-    | Fun { kind = Agg Self; parameters = [e]; _ } -> propagate_meta ~env e
-     (* null handling functions that preserve metadata from first argument *)
-    | Fun { kind = Null_handling (Coalesce _ | If_null); parameters = e :: _; _ } -> propagate_meta ~env e
-    (* Or for subselect which always requests only one column, TODO: consider CTE in subselect, perhaps a rare occurrence *)
+    | Column col -> column_meta ~env col.collated
+    (* null handling functions preserve metadata of their first argument, ie: IFNULL(col, 'default') *)
+    | Fun { kind = Null_handling _; parameters = e :: _; _ } -> propagate_meta ~env e
+    (* subselect as a value always requests only one column, TODO: consider CTE in subselect, perhaps a rare occurrence *)
     | SelectExpr ({ select_complete = { select = ({columns = [{ value = Expr ({ value; _ }, _); _ }]; from; _}, _); _ }; _ }, _) ->
       let (env,_,_) = eval_nested { env with scope = Subquery } from in
       propagate_meta ~env value
-    | Case _
-    | Value _
-    (* TODO: implement for custom props *)
-    | Param _ | Inparam _ | Choices _| InChoice _
-    | Fun _ | SelectExpr _ | InTupleList _ | Of_values _
-    | OptionActions _ -> Meta.empty ()
+    (* aggregates (ie: max, min), CASE branches, choices - metadata survives only when all of them agree *)
+    | e -> Meta.common (List.map (propagate_meta ~env) (passthrough_sub_exprs e))
   in
   let refine_column (col : table_name Schema.Source.Attr.t) =
-    if List.mem (col.sources, col.attr.name) not_null_keys
+    let is_not_null_key (sources, name) =
+      String.equal name col.attr.name && List.equal equal_table_name sources col.sources
+    in
+    if List.exists is_not_null_key env.not_null_keys
     then Schema.Source.Attr.map_attr (fun attr -> { attr with domain = Type.make_strict attr.domain }) col
     else col
   in
@@ -1019,7 +1060,9 @@ and infer_schema ~not_null_keys env columns =
           col alias
       in
       let resolve_expr = function
-        | Column c -> resolve_column ~env c.collated
+        | Column c ->
+          resolve_column ~env c.collated
+          |> Schema.Source.Attr.map_attr (fun attr -> { attr with meta = column_meta ~env c.collated })
         | e ->
           let _, t = resolve_types env e in
           { Schema.Source.Attr.attr = unnamed_attribute ~meta:(propagate_meta ~env e) (get_or_failwith t);
@@ -1078,9 +1121,18 @@ and get_params_l env l = flat_map (get_params env) l
 and do_join (env,params) { From.src; kind; cond; _ } =
   let schema = Schema.Join.join kind cond env.schema src.rsrc_schema in
   let env = { env with schema } in
-  let p = match cond with
-  | Default | Natural | Using _ -> []
-  | On e -> get_params { env with set_tyvar_strict = true } e (* TODO should use final schema (same as tables)? *)
+  let env, p = match cond with
+  | Default | Natural | Using _ -> env, []
+  | On e ->
+    (* only equalities that surely hold, ie conjunctions, tell that both columns share a domain *)
+    let rec collect acc = function
+      | Sql.Fun { kind = Logical And; parameters; _ } -> List.fold_left collect acc parameters
+      | Fun { kind = Comparison (Comp_equal | Not_distinct_op); parameters = [Column a; Column b]; _ } ->
+        (a.collated, b.collated) :: acc
+      | _ -> acc
+    in
+    let env = { env with join_equalities = collect env.join_equalities e } in
+    env, get_params { env with set_tyvar_strict = true } e (* TODO should use final schema (same as tables)? *)
   in
   env, params @ src.rsrc_params @ p
 
@@ -1157,7 +1209,7 @@ and ensure_res_expr = function
 and eval_nested env nested =
   (* nested selects generate new fresh schema in scope, cannot refer to outer schema,
     but can refer to attributes of tables through `tables` *)
-  let env = { env with schema = [] } in
+  let env = { env with schema = []; not_null_keys = []; join_equalities = [] } in
   (* FIXME resolved table schema depends on join (nullability with left), this is resolving too early *)
   match nested with
   | Some (t,l) ->
@@ -1268,9 +1320,9 @@ and eval_select ~order env { columns; from; where; group; having; } =
   (* Extract IS NOT NULL predicates from WHERE and HAVING *)
   let not_null_keys_where = extract_not_null_column_keys env where in
   let not_null_keys_having = extract_not_null_column_keys env having in
-  let not_null_keys = not_null_keys_where @ not_null_keys_having in
+  let env = { env with not_null_keys = not_null_keys_where @ not_null_keys_having } in
   let projection = make_dynamic_select ~env columns in
-  let final_schema = infer_schema ~not_null_keys env projection in
+  let final_schema = infer_schema env projection in
   let final_schema =
     match child_scope with
     | From_passthrough -> final_schema @ From.dynamic_columns resolved_from
@@ -1338,7 +1390,7 @@ and resolve_source env (x, alias) =
     { rsrc_schema = s; rsrc_params = p; rsrc_tables = tables; rsrc_dynamic = dyn; rsrc_physical_table = None }
   | `Nested from ->
     let (env,p,resolved_from) = eval_nested env (Some from) in
-    let s = infer_schema ~not_null_keys:[] env [dummy_loc All] in
+    let s = infer_schema env [dummy_loc All] in
     if alias <> None then failwith "No alias allowed on nested tables";
     let s = List.map (function 
       | AttrWithSources attr -> attr
@@ -1494,7 +1546,7 @@ let annotate_select select attrs =
       | [], [] -> List.rev acc
       | ({ value = (All | AllOf _); _ }) :: _, _ -> failwith "Asterisk not supported"
       | { value = Expr (loc, name); pos = col_pos } :: cols, a :: attrs ->
-        let e = merge_meta_into_params ~shallow:false a.meta loc.value in
+        let e = merge_meta_into_params a.meta loc.value in
         let t = a.domain in
         loop ({ value = Expr ({ loc with value = Fun { fn_name = "insert_select"; kind = (F (Typ t, [Typ t])); parameters = [e]; is_over_clause = false} }, name); pos = col_pos } :: acc) cols attrs
       | _, [] | [], _ -> failwith "Select cardinality doesn't match Insert"

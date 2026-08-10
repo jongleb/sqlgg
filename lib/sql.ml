@@ -299,8 +299,7 @@ module Meta = struct
   
   let of_list list = List.fold_left (fun map (k, v) -> StringMap.add k v map) StringMap.empty list
   
-  let empty () = StringMap.empty
-  
+  let is_empty = StringMap.is_empty
   let find_opt k map = StringMap.find_opt map k
   
   let mem k map = StringMap.mem map k
@@ -329,6 +328,11 @@ module Meta = struct
       | None, Some v -> Some v
       | None, None -> None
     ) t1 t2
+
+  (* metadata shared by all of the values, nothing when they disagree *)
+  let common = function
+    | [] -> empty ()
+    | m :: rest -> if List.for_all (equal m) rest then m else empty ()
 
   let get_is_non_nullifiable meta = Option.default "false" (find_opt meta "non_nullifiable") = "true" 
 end
@@ -484,7 +488,7 @@ struct
     List.combine t1 t2
     |> List.mapi begin fun i (a1,a2) ->
       match Type.supertype a1.attr.domain a2.attr.domain with
-      | Some t -> Attr.map_attr (fun attr -> { attr with domain = t }) a1
+      | Some t -> Attr.map_attr (fun attr -> { attr with domain = t; meta = Meta.common [attr.meta; a2.attr.meta] }) a1
       | None -> raise (Error (List.map (fun i -> i.attr) t1, sprintf "Attributes do not match : %s of type %s and %s of type %s"
         (show_name i a1.attr) (Type.show a1.attr.domain)
         (show_name i a2.attr) (Type.show a2.attr.domain)))
@@ -521,7 +525,7 @@ struct
 
 end
 
-type table_name = { db : string option; tn : string } [@@deriving show]
+type table_name = { db : string option; tn : string } [@@deriving eq, show]
 let show_table_name { db; tn } = match db with Some db -> sprintf "%s.%s" db tn | None -> tn
 let make_table_name ?db tn = { db; tn }
 type schema = Schema.t [@@deriving show]
@@ -662,7 +666,7 @@ type limit_t = [ `Limit | `Offset ]
 type col_name = {
   cname : string; (** column name *)
   tname : table_name option;
-} [@@deriving show]
+} [@@deriving eq, show]
 type logical_op = And | Or | Xor [@@deriving show]
 type comparison_op = Comp_equal | Comp_num_cmp | Comp_num_eq | Not_distinct_op | Is_null | Is_not_null [@@deriving eq, show]
 type null_handling_fn_kind = Coalesce of Type.tyvar * Type.tyvar | Null_if | If_null [@@deriving show]
@@ -801,6 +805,19 @@ let map_sub_exprs f = function
       branches = List.map (fun (b : case_branch) -> { when_ = f b.when_; then_ = f b.then_ }) branches;
       else_ = Option.map f else_;
     }
+
+(* Sub-expressions whose value passes through unchanged and so becomes the value of the
+   expression itself - they hold values of the same domain, and hence the same metadata,
+   unlike eg arguments of an arithmetic function. *)
+let passthrough_sub_exprs = function
+  | Value _ | Param _ | Inparam _ | Column _ | Of_values _ | SelectExpr _ | InTupleList _ -> []
+  | Choices (_, l) -> List.filter_map snd l
+  | InChoice (_, _, e) -> [e]
+  | OptionActions { choice; _ } -> [choice]
+  | Fun { kind = (Agg Self | Null_handling _); parameters; _ } -> parameters
+  | Fun _ -> []
+  | Case { branches; else_; _ } ->
+    List.map (fun (b : case_branch) -> b.then_) branches @ option_list else_
 
 let rec expr_exists p e = p e || List.exists (expr_exists p) (sub_exprs e)
 
