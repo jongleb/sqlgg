@@ -329,7 +329,6 @@ module Meta = struct
       | None, None -> None
     ) t1 t2
 
-  (* metadata shared by all of the values, nothing when they disagree *)
   let common = function
     | [] -> empty ()
     | m :: rest -> if List.for_all (equal m) rest then m else empty ()
@@ -488,7 +487,15 @@ struct
     List.combine t1 t2
     |> List.mapi begin fun i (a1,a2) ->
       match Type.supertype a1.attr.domain a2.attr.domain with
-      | Some t -> Attr.map_attr (fun attr -> { attr with domain = t; meta = Meta.common [attr.meta; a2.attr.meta] }) a1
+      | Some t ->
+        (* an untyped NULL placeholder branch carries no domain, so it cannot disagree about metadata *)
+        let meta =
+          match a1.attr.domain.t, a2.attr.domain.t with
+          | Type.Any, _ -> a2.attr.meta
+          | _, Type.Any -> a1.attr.meta
+          | _ -> Meta.common [a1.attr.meta; a2.attr.meta]
+        in
+        Attr.map_attr (fun attr -> { attr with domain = t; meta }) a1
       | None -> raise (Error (List.map (fun i -> i.attr) t1, sprintf "Attributes do not match : %s of type %s and %s of type %s"
         (show_name i a1.attr) (Type.show a1.attr.domain)
         (show_name i a2.attr) (Type.show a2.attr.domain)))
@@ -806,9 +813,6 @@ let map_sub_exprs f = function
       else_ = Option.map f else_;
     }
 
-(* Sub-expressions whose value passes through unchanged and so becomes the value of the
-   expression itself - they hold values of the same domain, and hence the same metadata,
-   unlike eg arguments of an arithmetic function. *)
 let passthrough_sub_exprs = function
   | Value _ | Param _ | Inparam _ | Column _ | Of_values _ | SelectExpr _ | InTupleList _ -> []
   | Choices (_, l) -> List.filter_map snd l

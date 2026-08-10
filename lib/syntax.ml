@@ -198,7 +198,6 @@ let column_meta ~env col =
   let meta = own col in
   if not (Meta.is_empty meta) then meta
   else
-    (* columns joined on equality hold values of the same domain, hence share metadata *)
     env.join_equalities
     |> List.filter_map (fun (a, b) ->
       if equal_col_name a col then Some b
@@ -208,8 +207,6 @@ let column_meta ~env col =
     |> List.filter (fun meta -> not (Meta.is_empty meta))
     |> Meta.common
 
-(* metadata of the enclosing column reaches every param holding a value of the same domain,
-   ie every param in a Sql.passthrough_sub_exprs position *)
 let rec merge_meta_into_params meta expr =
   let merge = merge_meta_into_params meta in
   match expr with
@@ -288,9 +285,7 @@ let rec bool_choice_id = function
   | OptionActions _ -> None
   | e -> List.find_map bool_choice_id (sub_exprs e)
 
-(** propagate metadata of the compared columns onto the params they are compared with *)
 let extract_meta_from_col ~env expr =
-  (* metadata of the columns whose values can reach [e], those carrying none are ignored *)
   let rec col_metas acc e =
     match e with
     | Sql.Column c ->
@@ -298,9 +293,6 @@ let extract_meta_from_col ~env expr =
       if Meta.is_empty meta then acc else meta :: acc
     | e -> List.fold_left col_metas acc (passthrough_sub_exprs e)
   in
-  (* boolean functions comparing all of their arguments against each other, ie comparison
-     operators, IN and BETWEEN - every argument holds a value of the same domain.
-     Their type says it: one and the same type variable for every argument. *)
   let compares_all_arguments = function
     | Comparison _ -> true
     | F (Type.Typ { t = Bool; _ }, ((Type.Var i :: _) as args)) ->
@@ -1033,14 +1025,18 @@ and infer_schema env columns =
 (*   let all = tables |> List.map snd |> List.flatten in *)
   let rec propagate_meta ~env = function
     | Column col -> column_meta ~env col.collated
-    (* null handling functions preserve metadata of their first argument, ie: IFNULL(col, 'default') *)
+     (* null handling functions that preserve metadata from first argument *)
     | Fun { kind = Null_handling _; parameters = e :: _; _ } -> propagate_meta ~env e
-    (* subselect as a value always requests only one column, TODO: consider CTE in subselect, perhaps a rare occurrence *)
+    (* Or for subselect which always requests only one column, TODO: consider CTE in subselect, perhaps a rare occurrence *)
     | SelectExpr ({ select_complete = { select = ({columns = [{ value = Expr ({ value; _ }, _); _ }]; from; _}, _); _ }; _ }, _) ->
       let (env,_,_) = eval_nested { env with scope = Subquery } from in
       propagate_meta ~env value
-    (* aggregates (ie: max, min), CASE branches, choices - metadata survives only when all of them agree *)
-    | e -> Meta.common (List.map (propagate_meta ~env) (passthrough_sub_exprs e))
+    | e ->
+      (* an untyped NULL branch carries no domain, so it cannot disagree about metadata *)
+      passthrough_sub_exprs e
+      |> List.filter (function Value { collated = { t = Type.Any; _ }; _ } -> false | _ -> true)
+      |> List.map (propagate_meta ~env)
+      |> Meta.common
   in
   let refine_column (col : table_name Schema.Source.Attr.t) =
     let is_not_null_key (sources, name) =
@@ -1124,7 +1120,6 @@ and do_join (env,params) { From.src; kind; cond; _ } =
   let env, p = match cond with
   | Default | Natural | Using _ -> env, []
   | On e ->
-    (* only equalities that surely hold, ie conjunctions, tell that both columns share a domain *)
     let rec collect acc = function
       | Sql.Fun { kind = Logical And; parameters; _ } -> List.fold_left collect acc parameters
       | Fun { kind = Comparison (Comp_equal | Not_distinct_op); parameters = [Column a; Column b]; _ } ->

@@ -1907,7 +1907,6 @@ let test_meta_loss_query =
     attr' "cnt" Int;
   ] [];
 
-  (* equality holding in only one branch of OR says nothing about the domain *)
   tt {|
     WITH
       t1 AS (SELECT col_a AS cur_a FROM test51),
@@ -1918,6 +1917,43 @@ let test_meta_loss_query =
   |} [
     attr' "lvl" open_enum_t;
   ] [];
+]
+
+let test_meta_union_null_placeholder = [
+  tt {|
+    CREATE TABLE left_rows (
+      -- [sqlgg] module=Left_id
+      id BIGINT NOT NULL,
+      -- [sqlgg] module=Owner_id
+      owner_id BIGINT NULL,
+      -- [sqlgg] module=Payload
+      payload JSON NULL
+    )
+  |} [] [];
+
+  tt {|
+    CREATE TABLE right_rows (
+      -- [sqlgg] module=Right_id
+      id BIGINT NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    SELECT l.id AS left_id, l.owner_id, l.payload, NULL AS right_id FROM left_rows l
+    UNION ALL
+    SELECT NULL AS left_id, NULL AS owner_id, NULL AS payload, r.id AS right_id FROM right_rows r
+  |} [
+    attr' ~nullability:Nullable ~extra:[NotNull] ~meta:["module", "Left_id"] "left_id" Int;
+    attr' ~nullability:Nullable ~extra:[Null] ~meta:["module", "Owner_id"] "owner_id" Int;
+    attr' ~nullability:Nullable ~extra:[Null] ~meta:["module", "Payload"] "payload" Json;
+    attr' ~nullability:Nullable ~meta:["module", "Right_id"] "right_id" Int;
+  ] [];
+
+  tt "SELECT id AS x FROM left_rows UNION ALL SELECT id AS x FROM right_rows"
+    [ attr' ~extra:[NotNull] "x" Int ] [];
+
+  tt "SELECT CASE WHEN id = 1 THEN owner_id ELSE NULL END AS s FROM left_rows"
+    [ attr' ~nullability:Nullable ~meta:["module", "Owner_id"] "s" Int ] [];
 ]
 
 let test_multi_functions = [
@@ -2572,6 +2608,7 @@ let run () =
     "test_meta_loss_schema" >::: test_meta_loss_schema;
     "test_meta_loss_params" >::: test_meta_loss_params;
     "test_meta_loss_query" >::: test_meta_loss_query;
+    "test_meta_union_null_placeholder" >::: test_meta_union_null_placeholder;
     "test_multi_functions" >::: test_multi_functions;
     "test_on_conflict_do_update" >::: test_on_conflict_do_update;
     "test_enum_with_in_and_between" >::: test_enum_with_in_and_between;
