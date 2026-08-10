@@ -101,6 +101,17 @@ struct
 
   let is_any { t; nullability = _ } = equal_kind t Any
 
+  let is_value_of x ~domain =
+    match x.t, domain.t with
+    | Any, _ -> true
+    | StringLiteral l, Union { ctors; is_closed = true } -> Enum_kind.Ctors.mem l ctors
+    | _ -> false
+
+  let is_subdomain_of x ~domain =
+    match x.t, domain.t with
+    | Union a, Union b -> Enum_kind.Ctors.subset a.ctors b.ctors
+    | _ -> false
+
   let is_one_or_all s = List.mem (String.lowercase_ascii s) ["one"; "all"]
 
   let check_exact_exact_number value { precision; scale } =
@@ -300,8 +311,8 @@ module Meta = struct
   let of_list list = List.fold_left (fun map (k, v) -> StringMap.add k v map) StringMap.empty list
   
   let empty () = StringMap.empty
-  
-  let find_opt k map = StringMap.find_opt map k
+  let is_empty = StringMap.is_empty
+  let find_opt map key = StringMap.find_opt key map
   
   let mem k map = StringMap.mem map k
   let pp fmt t =
@@ -329,6 +340,17 @@ module Meta = struct
       | None, Some v -> Some v
       | None, None -> None
     ) t1 t2
+
+  let common x y =
+    match x, y with
+    | None, m | m, None -> m
+    | Some a, Some b ->
+      Some (StringMap.filter (fun k v -> Option.map_default (String.equal v) false (find_opt b k)) a)
+
+  let common_all = List.fold_left common None
+  let of_option = Option.default (empty ())
+  let shared metas =
+    of_option (common_all (List.map (fun m -> if is_empty m then None else Some m) metas))
 
   let get_is_non_nullifiable meta = Option.default "false" (find_opt meta "non_nullifiable") = "true" 
 end
@@ -484,7 +506,10 @@ struct
     List.combine t1 t2
     |> List.mapi begin fun i (a1,a2) ->
       match Type.supertype a1.attr.domain a2.attr.domain with
-      | Some t -> Attr.map_attr (fun attr -> { attr with domain = t }) a1
+      | Some t ->
+        let own_meta a b = if Type.is_value_of a.domain ~domain:b.domain then None else Some a.meta in
+        let meta = Meta.of_option (Meta.common (own_meta a1.attr a2.attr) (own_meta a2.attr a1.attr)) in
+        Attr.map_attr (fun attr -> { attr with domain = t; meta }) a1
       | None -> raise (Error (List.map (fun i -> i.attr) t1, sprintf "Attributes do not match : %s of type %s and %s of type %s"
         (show_name i a1.attr) (Type.show a1.attr.domain)
         (show_name i a2.attr) (Type.show a2.attr.domain)))
@@ -521,7 +546,7 @@ struct
 
 end
 
-type table_name = { db : string option; tn : string } [@@deriving show]
+type table_name = { db : string option; tn : string } [@@deriving eq, show]
 let show_table_name { db; tn } = match db with Some db -> sprintf "%s.%s" db tn | None -> tn
 let make_table_name ?db tn = { db; tn }
 type schema = Schema.t [@@deriving show]
@@ -662,7 +687,7 @@ type limit_t = [ `Limit | `Offset ]
 type col_name = {
   cname : string; (** column name *)
   tname : table_name option;
-} [@@deriving show]
+} [@@deriving eq, show]
 type logical_op = And | Or | Xor [@@deriving show]
 type comparison_op = Comp_equal | Comp_num_cmp | Comp_num_eq | Not_distinct_op | Is_null | Is_not_null [@@deriving eq, show]
 type null_handling_fn_kind = Coalesce of Type.tyvar * Type.tyvar | Null_if | If_null [@@deriving show]
@@ -761,6 +786,36 @@ and column_kind =
 
 type columns = column list [@@deriving show]
 
+let comparison_signature op =
+  let open Type in
+  match op with
+  | Is_null | Is_not_null -> Typ (strict Bool), [Var 0]
+  | Not_distinct_op -> Typ (strict Bool), [Var 0; Var 0]
+  | Comp_equal | Comp_num_cmp | Comp_text_cmp | Comp_num_eq -> Typ (depends Bool), [Var 0; Var 0]
+
+let null_handling_signature nulls arity =
+  let open Type in
+  match nulls with
+  | If_null | Null_if -> Var 0, [Var 0; Var 0]
+  | Coalesce (ret, each) -> ret, List.make arity each
+
+let agg_self_signature = Type.(Var 0, [Var 0])
+
+let signature kind arity =
+  match kind with
+  | F (ret, args) -> Some (ret, args)
+  | Comparison op -> Some (comparison_signature op)
+  | Null_handling nulls -> Some (null_handling_signature nulls arity)
+  | Agg Self -> Some agg_self_signature
+  | Col_assign { ret_t; col_t; arg_t } -> Some (ret_t, [col_t; arg_t])
+  | Agg _ | Logical _ | Negation | Ret _ | Multi _ -> None
+
+let is_result_arg kind arity =
+  match signature kind arity with
+  | Some (Type.Var ret, args) ->
+    (fun i -> Option.map_default (function Type.Var v -> Int.equal v ret | Type.Typ _ -> false) false (List.nth_opt args i))
+  | Some (Type.Typ _, _) | None -> (fun _ -> false)
+
 let source_fun_kind_to_infer = function
   | Ret t -> Ret (Source_type.to_infer_type t)
   | Agg (Self | Count | Avg | With_order _) 
@@ -801,6 +856,17 @@ let map_sub_exprs f = function
       branches = List.map (fun (b : case_branch) -> { when_ = f b.when_; then_ = f b.then_ }) branches;
       else_ = Option.map f else_;
     }
+
+let tail_exprs = function
+  | Value _ | Param _ | Inparam _ | Column _ | Of_values _ | SelectExpr _ | InTupleList _ -> []
+  | Choices (_, l) -> List.filter_map snd l
+  | InChoice (_, _, e) -> [e]
+  | OptionActions { choice; _ } -> [choice]
+  | Fun { kind; parameters; _ } ->
+    let is_result_arg = is_result_arg kind (List.length parameters) in
+    List.filteri (fun i _ -> is_result_arg i) parameters
+  | Case { branches; else_; _ } ->
+    List.map (fun (b : case_branch) -> b.then_) branches @ option_list else_
 
 let rec expr_exists p e = p e || List.exists (expr_exists p) (sub_exprs e)
 
@@ -1041,8 +1107,8 @@ let pp_func pp f =
   | F (ret, args) -> fprintf pp "%s -> %s" (String.concat " -> " @@ List.map Type.string_of_tyvar args) (Type.string_of_tyvar ret)
   | Col_assign { ret_t=ret; col_t; arg_t } -> aux (F (ret, [col_t; arg_t]))
   | Null_handling (Coalesce (ret, each_arg)) -> fprintf pp "{ %s }+ -> %s" (Type.string_of_tyvar each_arg) (Type.string_of_tyvar ret)
-  | Null_handling _ -> fprintf pp "'a -> 'a -> 'a"
-  | Comparison _ -> fprintf pp "'a -> 'a -> %s" (Type.show_kind Bool)
+  | Null_handling nulls -> let ret, args = null_handling_signature nulls 2 in aux (F (ret, args))
+  | Comparison op -> let ret, args = comparison_signature op in aux (F (ret, args))
   | Logical _ -> fprintf pp "'a -> 'a -> %s" (Type.show_kind Bool)
   | Negation -> fprintf pp "'a -> %s" (Type.show_kind Bool)
   | Multi { ret; fixed_args; repeating_pattern } ->
