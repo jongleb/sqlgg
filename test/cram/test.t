@@ -1871,6 +1871,902 @@ Test UINT64 in type spec:
   
   end (* module Sqlgg *)
 
+Enum generation without custom module (should generate open variants):
+  $ sqlgg -gen caml_io -params unnamed -gen caml -no-header -dialect=mysql - <<'EOF'
+  > CREATE TABLE t_enum1 (status ENUM('a','b') NOT NULL);
+  > SELECT status FROM t_enum1;
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+      module Enum_0 = T.Make_enum(struct
+        type t = [`A | `B]
+        let inj = function | "a" -> `A | "b" -> `B | s -> failwith (Printf.sprintf "Invalid enum value: %s" s)
+        let proj = function  | `A -> "a"| `B -> "b"
+      end)
+  
+    let create_t_enum1 db  =
+      T.execute db ("CREATE TABLE t_enum1 (status ENUM('a','b') NOT NULL)") T.no_params
+  
+    let select_1 db  callback =
+      let invoke_callback stmt =
+        callback
+          ~status:(Enum_0.get_column stmt 0)
+      in
+      T.select db ("SELECT status FROM t_enum1") T.no_params invoke_callback
+  
+    module Fold = struct
+      let select_1 db  callback acc =
+        let invoke_callback stmt =
+          callback
+            ~status:(Enum_0.get_column stmt 0)
+        in
+        let r_acc = ref acc in
+        IO.(>>=) (T.select db ("SELECT status FROM t_enum1") T.no_params (fun x -> r_acc := invoke_callback x !r_acc))
+        (fun () -> IO.return !r_acc)
+  
+    end (* module Fold *)
+    
+    module List = struct
+      let select_1 db  callback =
+        let invoke_callback stmt =
+          callback
+            ~status:(Enum_0.get_column stmt 0)
+        in
+        let r_acc = ref [] in
+        IO.(>>=) (T.select db ("SELECT status FROM t_enum1") T.no_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+        (fun () -> IO.return (List.rev !r_acc))
+  
+    end (* module List *)
+  end (* module Sqlgg *)
+  $ echo $?
+  0
+
+  $ sqlgg -gen caml_io -params unnamed -gen caml -no-header -dialect=mysql - <<'EOF'
+  > CREATE TABLE t_enum1 (status ENUM('a','b') NOT NULL);
+  > SELECT status FROM t_enum1;
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+      module Enum_0 = T.Make_enum(struct
+        type t = [`A | `B]
+        let inj = function | "a" -> `A | "b" -> `B | s -> failwith (Printf.sprintf "Invalid enum value: %s" s)
+        let proj = function  | `A -> "a"| `B -> "b"
+      end)
+  
+    let create_t_enum1 db  =
+      T.execute db ("CREATE TABLE t_enum1 (status ENUM('a','b') NOT NULL)") T.no_params
+  
+    let select_1 db  callback =
+      let invoke_callback stmt =
+        callback
+          ~status:(Enum_0.get_column stmt 0)
+      in
+      T.select db ("SELECT status FROM t_enum1") T.no_params invoke_callback
+  
+    module Fold = struct
+      let select_1 db  callback acc =
+        let invoke_callback stmt =
+          callback
+            ~status:(Enum_0.get_column stmt 0)
+        in
+        let r_acc = ref acc in
+        IO.(>>=) (T.select db ("SELECT status FROM t_enum1") T.no_params (fun x -> r_acc := invoke_callback x !r_acc))
+        (fun () -> IO.return !r_acc)
+  
+    end (* module Fold *)
+    
+    module List = struct
+      let select_1 db  callback =
+        let invoke_callback stmt =
+          callback
+            ~status:(Enum_0.get_column stmt 0)
+        in
+        let r_acc = ref [] in
+        IO.(>>=) (T.select db ("SELECT status FROM t_enum1") T.no_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+        (fun () -> IO.return (List.rev !r_acc))
+  
+    end (* module List *)
+  end (* module Sqlgg *)
+  $ echo $?
+  0
+
+Enum generation with custom module (should not generate open variants, should use Custom):
+  $ sqlgg -gen caml_io -params unnamed -gen caml -no-header -dialect=mysql - <<'EOF'
+  > CREATE TABLE t_enum2 (
+  >   -- [sqlgg] module=Custom
+  >   status ENUM('a','b') NOT NULL
+  > );
+  > SELECT status FROM t_enum2;
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_t_enum2 db  =
+      T.execute db ("CREATE TABLE t_enum2 (\n\
+      status ENUM('a','b') NOT NULL\n\
+  )") T.no_params
+  
+    let select_1 db  callback =
+      let invoke_callback stmt =
+        callback
+          ~status:(Custom.get_column (T.get_column_string stmt 0))
+      in
+      T.select db ("SELECT status FROM t_enum2") T.no_params invoke_callback
+  
+    module Fold = struct
+      let select_1 db  callback acc =
+        let invoke_callback stmt =
+          callback
+            ~status:(Custom.get_column (T.get_column_string stmt 0))
+        in
+        let r_acc = ref acc in
+        IO.(>>=) (T.select db ("SELECT status FROM t_enum2") T.no_params (fun x -> r_acc := invoke_callback x !r_acc))
+        (fun () -> IO.return !r_acc)
+  
+    end (* module Fold *)
+    
+    module List = struct
+      let select_1 db  callback =
+        let invoke_callback stmt =
+          callback
+            ~status:(Custom.get_column (T.get_column_string stmt 0))
+        in
+        let r_acc = ref [] in
+        IO.(>>=) (T.select db ("SELECT status FROM t_enum2") T.no_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+        (fun () -> IO.return (List.rev !r_acc))
+  
+    end (* module List *)
+  end (* module Sqlgg *)
+  $ echo $?
+  0
+
+  $ sqlgg -gen caml_io -params unnamed -gen caml -no-header -dialect=mysql - <<'EOF'
+  > CREATE TABLE t_enum2 (
+  >   -- [sqlgg] module=Custom
+  >   status ENUM('a','b') NOT NULL
+  > );
+  > SELECT status FROM t_enum2;
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_t_enum2 db  =
+      T.execute db ("CREATE TABLE t_enum2 (\n\
+      status ENUM('a','b') NOT NULL\n\
+  )") T.no_params
+  
+    let select_1 db  callback =
+      let invoke_callback stmt =
+        callback
+          ~status:(Custom.get_column (T.get_column_string stmt 0))
+      in
+      T.select db ("SELECT status FROM t_enum2") T.no_params invoke_callback
+  
+    module Fold = struct
+      let select_1 db  callback acc =
+        let invoke_callback stmt =
+          callback
+            ~status:(Custom.get_column (T.get_column_string stmt 0))
+        in
+        let r_acc = ref acc in
+        IO.(>>=) (T.select db ("SELECT status FROM t_enum2") T.no_params (fun x -> r_acc := invoke_callback x !r_acc))
+        (fun () -> IO.return !r_acc)
+  
+    end (* module Fold *)
+    
+    module List = struct
+      let select_1 db  callback =
+        let invoke_callback stmt =
+          callback
+            ~status:(Custom.get_column (T.get_column_string stmt 0))
+        in
+        let r_acc = ref [] in
+        IO.(>>=) (T.select db ("SELECT status FROM t_enum2") T.no_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+        (fun () -> IO.return (List.rev !r_acc))
+  
+    end (* module List *)
+  end (* module Sqlgg *)
+  $ echo $?
+  0
+
+
+Enum mixed: one enum without module (generate 1 Enum_), one with module (skip):
+  $ sqlgg -gen caml_io -params unnamed -gen caml -no-header -dialect=mysql - <<'EOF'
+  > CREATE TABLE t_enum_mix (
+  >   col_a ENUM('a','b') NOT NULL,
+  >   -- [sqlgg] module=Custom
+  >   col_b ENUM('x','y') NOT NULL
+  > );
+  > SELECT col_a, col_b FROM t_enum_mix;
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+      module Enum_0 = T.Make_enum(struct
+        type t = [`A | `B]
+        let inj = function | "a" -> `A | "b" -> `B | s -> failwith (Printf.sprintf "Invalid enum value: %s" s)
+        let proj = function  | `A -> "a"| `B -> "b"
+      end)
+  
+    let create_t_enum_mix db  =
+      T.execute db ("CREATE TABLE t_enum_mix (\n\
+    col_a ENUM('a','b') NOT NULL,\n\
+      col_b ENUM('x','y') NOT NULL\n\
+  )") T.no_params
+  
+    let select_1 db  callback =
+      let invoke_callback stmt =
+        callback
+          ~col_a:(Enum_0.get_column stmt 0)
+          ~col_b:(Custom.get_column (T.get_column_string stmt 1))
+      in
+      T.select db ("SELECT col_a, col_b FROM t_enum_mix") T.no_params invoke_callback
+  
+    module Fold = struct
+      let select_1 db  callback acc =
+        let invoke_callback stmt =
+          callback
+            ~col_a:(Enum_0.get_column stmt 0)
+            ~col_b:(Custom.get_column (T.get_column_string stmt 1))
+        in
+        let r_acc = ref acc in
+        IO.(>>=) (T.select db ("SELECT col_a, col_b FROM t_enum_mix") T.no_params (fun x -> r_acc := invoke_callback x !r_acc))
+        (fun () -> IO.return !r_acc)
+  
+    end (* module Fold *)
+    
+    module List = struct
+      let select_1 db  callback =
+        let invoke_callback stmt =
+          callback
+            ~col_a:(Enum_0.get_column stmt 0)
+            ~col_b:(Custom.get_column (T.get_column_string stmt 1))
+        in
+        let r_acc = ref [] in
+        IO.(>>=) (T.select db ("SELECT col_a, col_b FROM t_enum_mix") T.no_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+        (fun () -> IO.return (List.rev !r_acc))
+  
+    end (* module List *)
+  end (* module Sqlgg *)
+
+Enum only with custom module, including WHERE IN tuple param (should generate 0 Enum_):
+  $ sqlgg -gen caml_io -params unnamed -gen caml -no-header -dialect=mysql - <<'EOF'
+  > CREATE TABLE t_enum_tuple (
+  >   -- [sqlgg] module=Custom
+  >   col_b ENUM('x','y') NOT NULL
+  > );
+  > SELECT col_b FROM t_enum_tuple WHERE col_b IN @vals;
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_t_enum_tuple db  =
+      T.execute db ("CREATE TABLE t_enum_tuple (\n\
+      col_b ENUM('x','y') NOT NULL\n\
+  )") T.no_params
+  
+    let select_1 db ~vals callback =
+      let invoke_callback stmt =
+        callback
+          ~col_b:(Custom.get_column (T.get_column_string stmt 0))
+      in
+      let set_params stmt =
+        let p = T.start_params stmt (0 + (match vals with [] -> 0 | _ :: _ -> 0)) in
+        T.finish_params p
+      in
+      T.select db ("SELECT col_b FROM t_enum_tuple WHERE " ^ (match vals with [] -> "FALSE" | _ :: _ -> "col_b IN " ^  "(" ^ String.concat ", " (List.map (fun v -> T.Types.Text.string_to_literal (Custom.set_param v)) vals) ^ ")")) set_params invoke_callback
+  
+    module Fold = struct
+      let select_1 db ~vals callback acc =
+        let invoke_callback stmt =
+          callback
+            ~col_b:(Custom.get_column (T.get_column_string stmt 0))
+        in
+        let set_params stmt =
+          let p = T.start_params stmt (0 + (match vals with [] -> 0 | _ :: _ -> 0)) in
+          T.finish_params p
+        in
+        let r_acc = ref acc in
+        IO.(>>=) (T.select db ("SELECT col_b FROM t_enum_tuple WHERE " ^ (match vals with [] -> "FALSE" | _ :: _ -> "col_b IN " ^  "(" ^ String.concat ", " (List.map (fun v -> T.Types.Text.string_to_literal (Custom.set_param v)) vals) ^ ")")) set_params (fun x -> r_acc := invoke_callback x !r_acc))
+        (fun () -> IO.return !r_acc)
+  
+    end (* module Fold *)
+    
+    module List = struct
+      let select_1 db ~vals callback =
+        let invoke_callback stmt =
+          callback
+            ~col_b:(Custom.get_column (T.get_column_string stmt 0))
+        in
+        let set_params stmt =
+          let p = T.start_params stmt (0 + (match vals with [] -> 0 | _ :: _ -> 0)) in
+          T.finish_params p
+        in
+        let r_acc = ref [] in
+        IO.(>>=) (T.select db ("SELECT col_b FROM t_enum_tuple WHERE " ^ (match vals with [] -> "FALSE" | _ :: _ -> "col_b IN " ^  "(" ^ String.concat ", " (List.map (fun v -> T.Types.Text.string_to_literal (Custom.set_param v)) vals) ^ ")")) set_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+        (fun () -> IO.return (List.rev !r_acc))
+  
+    end (* module List *)
+  end (* module Sqlgg *)
+
+Test meta propagation: IFNULL with ENUM column should propagate metadata to result:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE test_ifnull_enum (
+  >   -- [sqlgg] module=Priority
+  >   priority ENUM('low','medium','high') NULL
+  > );
+  > SELECT IFNULL(priority, 'medium') FROM test_ifnull_enum;
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_test_ifnull_enum db  =
+      T.execute db ("CREATE TABLE test_ifnull_enum (\n\
+      priority ENUM('low','medium','high') NULL\n\
+  )") T.no_params
+  
+    let select_1 db  callback =
+      let invoke_callback stmt =
+        callback
+          ~r:(Priority.get_column (T.get_column_string stmt 0))
+      in
+      T.select db ("SELECT IFNULL(priority, 'medium') FROM test_ifnull_enum") T.no_params invoke_callback
+  
+    module Fold = struct
+      let select_1 db  callback acc =
+        let invoke_callback stmt =
+          callback
+            ~r:(Priority.get_column (T.get_column_string stmt 0))
+        in
+        let r_acc = ref acc in
+        IO.(>>=) (T.select db ("SELECT IFNULL(priority, 'medium') FROM test_ifnull_enum") T.no_params (fun x -> r_acc := invoke_callback x !r_acc))
+        (fun () -> IO.return !r_acc)
+  
+    end (* module Fold *)
+    
+    module List = struct
+      let select_1 db  callback =
+        let invoke_callback stmt =
+          callback
+            ~r:(Priority.get_column (T.get_column_string stmt 0))
+        in
+        let r_acc = ref [] in
+        IO.(>>=) (T.select db ("SELECT IFNULL(priority, 'medium') FROM test_ifnull_enum") T.no_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+        (fun () -> IO.return (List.rev !r_acc))
+  
+    end (* module List *)
+  end (* module Sqlgg *)
+
+Test meta propagation: INSERT with Choices should propagate ENUM metadata to choice branches:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE test_insert_choices (
+  >   -- [sqlgg] module=MyStatus
+  >   status ENUM('pending','completed') NOT NULL
+  > );
+  > INSERT INTO test_insert_choices SET status = @x { Set { @val } | Default { 'pending' } };
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_test_insert_choices db  =
+      T.execute db ("CREATE TABLE test_insert_choices (\n\
+      status ENUM('pending','completed') NOT NULL\n\
+  )") T.no_params
+  
+    let insert_test_insert_choices_1 db ~x =
+      let set_params stmt =
+        let p = T.start_params stmt (0 + (match x with `Set _ -> 1 | `Default -> 0)) in
+        begin match x with
+        | `Default -> ()
+        | `Set (val) ->
+          T.set_param_string p (MyStatus.set_param val);
+        end;
+        T.finish_params p
+      in
+      T.execute db ("INSERT INTO test_insert_choices SET status = " ^ (match x with `Set _ -> " ( ? ) " | `Default -> " ( 'pending' ) ")) set_params
+  
+  end (* module Sqlgg *)
+
+Test FloatingLiteral:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > SELECT 1.2
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let select_0 db  =
+      let get_row stmt =
+        (T.get_column_Float stmt 0)
+      in
+      T.select_one db ("SELECT 1.2\n\
+  ") T.no_params get_row
+  
+    module Single = struct
+      let select_0 db  callback =
+        let invoke_callback stmt =
+          callback
+            ~r:(T.get_column_Float stmt 0)
+        in
+        T.select_one db ("SELECT 1.2\n\
+  ") T.no_params invoke_callback
+  
+    end (* module Single *)
+  end (* module Sqlgg *)
+
+Test numeric literals and decimal types:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE shop_items (
+  >  id INT PRIMARY KEY,
+  >  pending_price DECIMAL(12,3)
+  > );
+  > SELECT * FROM shop_items si
+  > WHERE si.pending_price <=> NULLIF(CAST(@pending_price + 0.0 AS DECIMAL(12, 3)), CAST(-1 AS DECIMAL));
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_shop_items db  =
+      T.execute db ("CREATE TABLE shop_items (\n\
+   id INT PRIMARY KEY,\n\
+   pending_price DECIMAL(12,3)\n\
+  )") T.no_params
+  
+    let select_1 db ~pending_price callback =
+      let invoke_callback stmt =
+        callback
+          ~id:(T.get_column_Int stmt 0)
+          ~pending_price:(T.get_column_Decimal_nullable stmt 1)
+      in
+      let set_params stmt =
+        let p = T.start_params stmt (1) in
+        T.set_param_Float p pending_price;
+        T.finish_params p
+      in
+      T.select db ("SELECT * FROM shop_items si\n\
+  WHERE si.pending_price <=> NULLIF(CAST(? + 0.0 AS DECIMAL(12, 3)), CAST(-1 AS DECIMAL))") set_params invoke_callback
+  
+    module Fold = struct
+      let select_1 db ~pending_price callback acc =
+        let invoke_callback stmt =
+          callback
+            ~id:(T.get_column_Int stmt 0)
+            ~pending_price:(T.get_column_Decimal_nullable stmt 1)
+        in
+        let set_params stmt =
+          let p = T.start_params stmt (1) in
+          T.set_param_Float p pending_price;
+          T.finish_params p
+        in
+        let r_acc = ref acc in
+        IO.(>>=) (T.select db ("SELECT * FROM shop_items si\n\
+  WHERE si.pending_price <=> NULLIF(CAST(? + 0.0 AS DECIMAL(12, 3)), CAST(-1 AS DECIMAL))") set_params (fun x -> r_acc := invoke_callback x !r_acc))
+        (fun () -> IO.return !r_acc)
+  
+    end (* module Fold *)
+    
+    module List = struct
+      let select_1 db ~pending_price callback =
+        let invoke_callback stmt =
+          callback
+            ~id:(T.get_column_Int stmt 0)
+            ~pending_price:(T.get_column_Decimal_nullable stmt 1)
+        in
+        let set_params stmt =
+          let p = T.start_params stmt (1) in
+          T.set_param_Float p pending_price;
+          T.finish_params p
+        in
+        let r_acc = ref [] in
+        IO.(>>=) (T.select db ("SELECT * FROM shop_items si\n\
+  WHERE si.pending_price <=> NULLIF(CAST(? + 0.0 AS DECIMAL(12, 3)), CAST(-1 AS DECIMAL))") set_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+        (fun () -> IO.return (List.rev !r_acc))
+  
+    end (* module List *)
+  end (* module Sqlgg *)
+
+Test numeric literal to float:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE items (price FLOAT);
+  > INSERT INTO items VALUES (99.99);
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_items db  =
+      T.execute db ("CREATE TABLE items (price FLOAT)") T.no_params
+  
+    let insert_items_1 db  =
+      T.execute db ("INSERT INTO items VALUES (99.99)") T.no_params
+  
+  end (* module Sqlgg *)
+
+Test numeric literal to decimal - valid:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE items (price DECIMAL(5,2));
+  > INSERT INTO items VALUES (99.99);
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_items db  =
+      T.execute db ("CREATE TABLE items (price DECIMAL(5,2))") T.no_params
+  
+    let insert_items_1 db  =
+      T.execute db ("INSERT INTO items VALUES (99.99)") T.no_params
+  
+  end (* module Sqlgg *)
+
+Test numeric literal to decimal - invalid (too large):
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE items (price DECIMAL(5,2));
+  > INSERT INTO items VALUES (9999.99);
+  > EOF
+  Failed : INSERT INTO items VALUES (9999.99)
+  Fatal error: exception Failure("types Decimal(5,2)? and FloatingLiteral (9999.99) for 'a do not match in 'a -> 'a -> 'a applied to (Decimal(5,2)?, FloatingLiteral (9999.99))")
+  [2]
+
+Test numeric literal to decimal - invalid (too many decimals):
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE items (price DECIMAL(5,2));
+  > INSERT INTO items VALUES (99.999);
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_items db  =
+      T.execute db ("CREATE TABLE items (price DECIMAL(5,2))") T.no_params
+  
+    let insert_items_1 db  =
+      T.execute db ("INSERT INTO items VALUES (99.999)") T.no_params
+  
+  end (* module Sqlgg *)
+
+Test numeric literal to decimal - invalid (too many decimals):
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE items (price DECIMAL(5,2));
+  > INSERT INTO items VALUES (99999.999);
+  > EOF
+  Failed : INSERT INTO items VALUES (99999.999)
+  Fatal error: exception Failure("types Decimal(5,2)? and FloatingLiteral (100000) for 'a do not match in 'a -> 'a -> 'a applied to (Decimal(5,2)?, FloatingLiteral (100000))")
+  [2]
+
+Test decimal to float - allowed:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE items (price DECIMAL(10,2), price_float FLOAT);
+  > SELECT * FROM items WHERE price_float = price;
+  > EOF
+  Failed : SELECT * FROM items WHERE price_float = price
+  Fatal error: exception Failure("types Float? and Decimal(10,2)? for 'a do not match in 'a -> 'a -> Bool?? applied to (Float?, Decimal(10,2)?)")
+  [2]
+
+Test decimal to float - allowed:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE items (price DECIMAL(10,2), price_float FLOAT);
+  > SELECT * FROM items WHERE price_float = CAST(price AS FLOAT);
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_items db  =
+      T.execute db ("CREATE TABLE items (price DECIMAL(10,2), price_float FLOAT)") T.no_params
+  
+    let select_1 db  callback =
+      let invoke_callback stmt =
+        callback
+          ~price:(T.get_column_Decimal_nullable stmt 0)
+          ~price_float:(T.get_column_Float_nullable stmt 1)
+      in
+      T.select db ("SELECT * FROM items WHERE price_float = CAST(price AS FLOAT)") T.no_params invoke_callback
+  
+    module Fold = struct
+      let select_1 db  callback acc =
+        let invoke_callback stmt =
+          callback
+            ~price:(T.get_column_Decimal_nullable stmt 0)
+            ~price_float:(T.get_column_Float_nullable stmt 1)
+        in
+        let r_acc = ref acc in
+        IO.(>>=) (T.select db ("SELECT * FROM items WHERE price_float = CAST(price AS FLOAT)") T.no_params (fun x -> r_acc := invoke_callback x !r_acc))
+        (fun () -> IO.return !r_acc)
+  
+    end (* module Fold *)
+    
+    module List = struct
+      let select_1 db  callback =
+        let invoke_callback stmt =
+          callback
+            ~price:(T.get_column_Decimal_nullable stmt 0)
+            ~price_float:(T.get_column_Float_nullable stmt 1)
+        in
+        let r_acc = ref [] in
+        IO.(>>=) (T.select db ("SELECT * FROM items WHERE price_float = CAST(price AS FLOAT)") T.no_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+        (fun () -> IO.return (List.rev !r_acc))
+  
+    end (* module List *)
+  end (* module Sqlgg *)
+
+Test int to decimal - allowed:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE items (price DECIMAL(10,2));
+  > INSERT INTO items VALUES (100);
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_items db  =
+      T.execute db ("CREATE TABLE items (price DECIMAL(10,2))") T.no_params
+  
+    let insert_items_1 db  =
+      T.execute db ("INSERT INTO items VALUES (100)") T.no_params
+  
+  end (* module Sqlgg *)
+
+Test decimal arithmetic preserves scale:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE t1 (col1 DECIMAL(10,2));
+  > CREATE TABLE t2 (col2 DECIMAL(12,3));
+  > SELECT col1 + col2 as total FROM t1, t2;
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_t1 db  =
+      T.execute db ("CREATE TABLE t1 (col1 DECIMAL(10,2))") T.no_params
+  
+    let create_t2 db  =
+      T.execute db ("CREATE TABLE t2 (col2 DECIMAL(12,3))") T.no_params
+  
+    let select_2 db  callback =
+      let invoke_callback stmt =
+        callback
+          ~total:(T.get_column_Decimal_nullable stmt 0)
+      in
+      T.select db ("SELECT col1 + col2 as total FROM t1, t2") T.no_params invoke_callback
+  
+    module Fold = struct
+      let select_2 db  callback acc =
+        let invoke_callback stmt =
+          callback
+            ~total:(T.get_column_Decimal_nullable stmt 0)
+        in
+        let r_acc = ref acc in
+        IO.(>>=) (T.select db ("SELECT col1 + col2 as total FROM t1, t2") T.no_params (fun x -> r_acc := invoke_callback x !r_acc))
+        (fun () -> IO.return !r_acc)
+  
+    end (* module Fold *)
+    
+    module List = struct
+      let select_2 db  callback =
+        let invoke_callback stmt =
+          callback
+            ~total:(T.get_column_Decimal_nullable stmt 0)
+        in
+        let r_acc = ref [] in
+        IO.(>>=) (T.select db ("SELECT col1 + col2 as total FROM t1, t2") T.no_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+        (fun () -> IO.return (List.rev !r_acc))
+  
+    end (* module List *)
+  end (* module Sqlgg *)
+
+Test parameter with decimal cast:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE items (price DECIMAL(12,3));
+  > SELECT * FROM items WHERE price <=> CAST(@price AS DECIMAL(12,3));
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_items db  =
+      T.execute db ("CREATE TABLE items (price DECIMAL(12,3))") T.no_params
+  
+    let select_1 db ~price callback =
+      let invoke_callback stmt =
+        callback
+          ~price:(T.get_column_Decimal_nullable stmt 0)
+      in
+      let set_params stmt =
+        let p = T.start_params stmt (1) in
+        T.set_param_Any p price;
+        T.finish_params p
+      in
+      T.select db ("SELECT * FROM items WHERE price <=> CAST(? AS DECIMAL(12,3))") set_params invoke_callback
+  
+    module Fold = struct
+      let select_1 db ~price callback acc =
+        let invoke_callback stmt =
+          callback
+            ~price:(T.get_column_Decimal_nullable stmt 0)
+        in
+        let set_params stmt =
+          let p = T.start_params stmt (1) in
+          T.set_param_Any p price;
+          T.finish_params p
+        in
+        let r_acc = ref acc in
+        IO.(>>=) (T.select db ("SELECT * FROM items WHERE price <=> CAST(? AS DECIMAL(12,3))") set_params (fun x -> r_acc := invoke_callback x !r_acc))
+        (fun () -> IO.return !r_acc)
+  
+    end (* module Fold *)
+    
+    module List = struct
+      let select_1 db ~price callback =
+        let invoke_callback stmt =
+          callback
+            ~price:(T.get_column_Decimal_nullable stmt 0)
+        in
+        let set_params stmt =
+          let p = T.start_params stmt (1) in
+          T.set_param_Any p price;
+          T.finish_params p
+        in
+        let r_acc = ref [] in
+        IO.(>>=) (T.select db ("SELECT * FROM items WHERE price <=> CAST(? AS DECIMAL(12,3))") set_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+        (fun () -> IO.return (List.rev !r_acc))
+  
+    end (* module List *)
+  end (* module Sqlgg *)
+
+Test REPLACE function for string substitution:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE table_24_10_2025 (col_1 TEXT, col_2 TEXT);
+  > UPDATE table_24_10_2025 SET col_1 = REPLACE(col_1, ',', ' ') WHERE col_2 = 'test';
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_table_24_10_2025 db  =
+      T.execute db ("CREATE TABLE table_24_10_2025 (col_1 TEXT, col_2 TEXT)") T.no_params
+  
+    let update_table_24_10_2025_1 db  =
+      T.execute db ("UPDATE table_24_10_2025 SET col_1 = REPLACE(col_1, ',', ' ') WHERE col_2 = 'test'") T.no_params
+  
+  end (* module Sqlgg *)
+
+Test REPLACE function with INSERT REPLACE in same query:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE table_24_10_2025 (col_1 TEXT PRIMARY KEY, col_2 TEXT);
+  > REPLACE INTO table_24_10_2025 (col_1, col_2) VALUES (REPLACE(@value, ',', ' '), 'data');
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_table_24_10_2025 db  =
+      T.execute db ("CREATE TABLE table_24_10_2025 (col_1 TEXT PRIMARY KEY, col_2 TEXT)") T.no_params
+  
+    let insert_table_24_10_2025_1 db ~value =
+      let set_params stmt =
+        let p = T.start_params stmt (1) in
+        T.set_param_Text p value;
+        T.finish_params p
+      in
+      T.execute db ("REPLACE INTO table_24_10_2025 (col_1, col_2) VALUES (REPLACE(?, ',', ' '), 'data')") set_params
+  
+  end (* module Sqlgg *)
+
+Test BIGINT(20) UNSIGNED with module annotation:
+  $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
+  > CREATE TABLE test_table (
+  > -- [sqlgg] module=TestModule
+  >   id BIGINT(20) UNSIGNED NOT NULL,
+  >   counter INT(10) UNSIGNED NOT NULL,
+  >   counter2 BIGINT(10) UNSIGNED NOT NULL DEFAULT 0,
+  >   name TEXT
+  > );
+  > SELECT id, counter, counter2, name FROM test_table WHERE id = @id;
+  > INSERT INTO test_table (id, counter, counter2, name) VALUES (@id, @counter, @counter2, @name);
+  > UPDATE test_table SET counter = @counter, counter2 = @counter2, name = @name WHERE id = @id;
+  > EOF
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_test_table db  =
+      T.execute db ("CREATE TABLE test_table (\n\
+    id BIGINT(20) UNSIGNED NOT NULL,\n\
+    counter INT(10) UNSIGNED NOT NULL,\n\
+    counter2 BIGINT(10) UNSIGNED NOT NULL DEFAULT 0,\n\
+    name TEXT\n\
+  )") T.no_params
+  
+    let select_1 db ~id callback =
+      let invoke_callback stmt =
+        callback
+          ~id:(TestModule.get_column (T.get_column_uint64 stmt 0))
+          ~counter:(T.get_column_Int stmt 1)
+          ~counter2:(T.get_column_UInt64 stmt 2)
+          ~name:(T.get_column_Text_nullable stmt 3)
+      in
+      let set_params stmt =
+        let p = T.start_params stmt (1) in
+        T.set_param_uint64 p (TestModule.set_param id);
+        T.finish_params p
+      in
+      T.select db ("SELECT id, counter, counter2, name FROM test_table WHERE id = ?") set_params invoke_callback
+  
+    let insert_test_table_2 db ~id ~counter ~counter2 ~name =
+      let set_params stmt =
+        let p = T.start_params stmt (4) in
+        T.set_param_uint64 p (TestModule.set_param id);
+        T.set_param_Int p counter;
+        T.set_param_UInt64 p counter2;
+        begin match name with None -> T.set_param_null p | Some v -> T.set_param_Text p v end;
+        T.finish_params p
+      in
+      T.execute db ("INSERT INTO test_table (id, counter, counter2, name) VALUES (?, ?, ?, ?)") set_params
+  
+    let update_test_table_3 db ~counter ~counter2 ~name ~id =
+      let set_params stmt =
+        let p = T.start_params stmt (4) in
+        T.set_param_Int p counter;
+        T.set_param_UInt64 p counter2;
+        begin match name with None -> T.set_param_null p | Some v -> T.set_param_Text p v end;
+        T.set_param_uint64 p (TestModule.set_param id);
+        T.finish_params p
+      in
+      T.execute db ("UPDATE test_table SET counter = ?, counter2 = ?, name = ? WHERE id = ?") set_params
+  
+    module Fold = struct
+      let select_1 db ~id callback acc =
+        let invoke_callback stmt =
+          callback
+            ~id:(TestModule.get_column (T.get_column_uint64 stmt 0))
+            ~counter:(T.get_column_Int stmt 1)
+            ~counter2:(T.get_column_UInt64 stmt 2)
+            ~name:(T.get_column_Text_nullable stmt 3)
+        in
+        let set_params stmt =
+          let p = T.start_params stmt (1) in
+          T.set_param_uint64 p (TestModule.set_param id);
+          T.finish_params p
+        in
+        let r_acc = ref acc in
+        IO.(>>=) (T.select db ("SELECT id, counter, counter2, name FROM test_table WHERE id = ?") set_params (fun x -> r_acc := invoke_callback x !r_acc))
+        (fun () -> IO.return !r_acc)
+  
+    end (* module Fold *)
+    
+    module List = struct
+      let select_1 db ~id callback =
+        let invoke_callback stmt =
+          callback
+            ~id:(TestModule.get_column (T.get_column_uint64 stmt 0))
+            ~counter:(T.get_column_Int stmt 1)
+            ~counter2:(T.get_column_UInt64 stmt 2)
+            ~name:(T.get_column_Text_nullable stmt 3)
+        in
+        let set_params stmt =
+          let p = T.start_params stmt (1) in
+          T.set_param_uint64 p (TestModule.set_param id);
+          T.finish_params p
+        in
+        let r_acc = ref [] in
+        IO.(>>=) (T.select db ("SELECT id, counter, counter2, name FROM test_table WHERE id = ?") set_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+        (fun () -> IO.return (List.rev !r_acc))
+  
+    end (* module List *)
+  end (* module Sqlgg *)
+
 Test GROUP_CONCAT with multiple expressions and JSON_ARRAYAGG:
   $ sqlgg -gen caml -no-header -dialect=mysql - <<'EOF' 2>&1
   > CREATE TABLE orders (

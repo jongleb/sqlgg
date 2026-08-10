@@ -190,7 +190,7 @@ type deferred = {
 include
   struct
     let _ = fun (_ : deferred) -> ()
-    let deferred_of_cols ~reply_count:sqlgg__conv_reply_count
+    let deferred_of_cols ~reply_count:sqlgg__conv_reply_count 
       (sqlgg__cols :
         <
           id: (int64, 'sqlgg__brand, 'sqlgg__row, 'sqlgg__params)
@@ -228,7 +228,7 @@ include
                                                              Sqlgg_scope.col   ;..
                       > 
     let deferred_with_default_of_cols ?reply_count:(sqlgg__conv_reply_count=
-      Int64.to_int)
+      Int64.to_int) 
       (sqlgg__cols :
         <
           id: (int64, 'sqlgg__brand, 'sqlgg__row, 'sqlgg__params)
@@ -593,7 +593,7 @@ type opaque_conversions =
 include
   struct
     let _ = fun (_ : opaque_conversions) -> ()
-    let opaque_conversions_of_cols ~tag:sqlgg__conv_tag
+    let opaque_conversions_of_cols ~tag:sqlgg__conv_tag 
       (sqlgg__cols :
         <
           id: (int64, 'sqlgg__brand, 'sqlgg__row, 'sqlgg__params)
