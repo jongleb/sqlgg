@@ -2917,7 +2917,8 @@ Test DynamicSelect with Verbatim branches:
   > SELECT id, @col { active { 'active' } | inactive { 'inactive' } | custom { status } } FROM users;
   > EOF
   Failed with_verbatim: SELECT id, @col { active { 'active' } | inactive { 'inactive' } | custom { status } } FROM users
-  Fatal error: exception Failure("no common subtype for all choice branches")
+  At : @col { active { 'active' } | inactive { 'inactive' } | custom { status } }
+  Fatal error: exception Failure("dynamic_select reserves the name col for the column picker, rename choice col")
   [2]
 
 Test DynamicSelect at beginning of SELECT:
@@ -3209,7 +3210,8 @@ Test DynamicSelect with Verbatim branches:
   > SELECT id, @col { active { 'active' } | inactive { 'inactive' } | custom { status } } FROM users;
   > EOF
   Failed with_verbatim: SELECT id, @col { active { 'active' } | inactive { 'inactive' } | custom { status } } FROM users
-  Fatal error: exception Failure("no common subtype for all choice branches")
+  At : @col { active { 'active' } | inactive { 'inactive' } | custom { status } }
+  Fatal error: exception Failure("dynamic_select reserves the name col for the column picker, rename choice col")
   [2]
 
 Test DynamicSelect at beginning of SELECT:
