@@ -1557,7 +1557,7 @@ let test_type_mapping_params _ =
   assert_params_with_meta stmt [
     (named "param_1" Datetime, []);
     (named "param_2" (Decimal { precision = Some 10; scale = Some 2; }), ["module", "Module3"]);
-    (named "param_3" (Decimal { precision = Some 10; scale = Some 2; }), []);
+    (named "param_3" (Decimal { precision = Some 10; scale = Some 2; }), ["module", "Module3"]);
     (named "param_4" 
       (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["status_a"; "status_b"; "status_c"]); is_closed = true })), 
       ["module", "Module6"]);
@@ -1743,6 +1743,379 @@ let test_meta_insert_update _ =
     (named "param2" Text, []);  (* no meta from col_2 *)
     (named "param3" Int, ["module", "Module1"]);
   ]
+
+let test_meta_loss_schema =
+  let enum_t = Type.(Union { ctors = (Enum_kind.Ctors.of_list ["active"; "inactive"; "banned"]); is_closed = true }) in
+  [
+  tt {|
+    CREATE TABLE test47 (
+      -- [sqlgg] module=T47Id
+      id INT PRIMARY KEY,
+      -- [sqlgg] module=T47Status
+      status ENUM('active', 'inactive', 'banned') NOT NULL,
+      -- [sqlgg] module=T47Name
+      name TEXT NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    CREATE TABLE test48 (
+      id INT PRIMARY KEY,
+      -- [sqlgg] module=T48Status
+      status ENUM('active', 'inactive', 'banned') NOT NULL
+    )
+  |} [] [];
+
+  tt "SELECT status FROM test47"
+    [attr' ~extra:[NotNull] ~meta:["module", "T47Status"] "status" enum_t] [];
+
+  tt "SELECT MAX(status) AS max_status FROM test47"
+    [attr' ~nullability:Nullable ~meta:["module", "T47Status"] "max_status" enum_t] [];
+
+  tt "SELECT IFNULL(status, 'active') AS s FROM test47"
+    [attr' ~meta:["module", "T47Status"] "s" enum_t] [];
+
+  tt "SELECT CASE WHEN id = 1 THEN status ELSE status END AS s FROM test47"
+    [attr' ~meta:["module", "T47Status"] "s" enum_t] [];
+
+  tt "SELECT CASE WHEN id = 1 THEN status ELSE 'active' END AS s FROM test47"
+    [attr' ~meta:["module", "T47Status"] "s" enum_t] [];
+
+  tt "SELECT CASE WHEN id = 1 THEN id ELSE 0 END AS s FROM test47"
+    [attr' "s" Int] [];
+
+  tt "SELECT NULLIF(status, 'active') AS s FROM test47"
+    [attr' ~nullability:Nullable ~meta:["module", "T47Status"] "s" enum_t] [];
+
+  tt "SELECT status FROM test48 UNION SELECT status FROM test47"
+    [attr' ~extra:[NotNull] "status" enum_t] [];
+
+  tt "SELECT status FROM test47 UNION ALL SELECT status FROM test47"
+    [attr' ~extra:[NotNull] ~meta:["module", "T47Status"] "status" enum_t] [];
+]
+
+let test_meta_loss_params =
+  let enum_t = Type.(Union { ctors = (Enum_kind.Ctors.of_list ["active"; "inactive"; "banned"]); is_closed = true }) in
+  let check name sql expected = name >:: (fun () -> assert_params_with_meta (parse sql) expected) in
+  [
+  tt {|
+    CREATE TABLE test49 (
+      -- [sqlgg] module=T49Id
+      id INT PRIMARY KEY,
+      -- [sqlgg] module=T49Status
+      status ENUM('active', 'inactive', 'banned') NOT NULL,
+      -- [sqlgg] module=T49Name
+      name TEXT NOT NULL
+    )
+  |} [] [];
+
+  check "direct assignment"
+    "UPDATE test49 SET status = @status WHERE id = @id"
+    [
+      (named "status" enum_t, ["module", "T49Status"]);
+      (named "id" Int, ["module", "T49Id"]);
+    ];
+
+  check "param inside function in assignment"
+    "UPDATE test49 SET status = IFNULL(@status, status) WHERE id = @id"
+    [
+      (named "status" enum_t, ["module", "T49Status"]);
+      (named "id" Int, ["module", "T49Id"]);
+    ];
+
+  check "enum BETWEEN params"
+    "SELECT id FROM test49 WHERE status BETWEEN @low AND @high"
+    [
+      (named "low" enum_t, ["module", "T49Status"]);
+      (named "high" enum_t, ["module", "T49Status"]);
+    ];
+
+  check "column wrapped into transforming function"
+    "SELECT id FROM test49 WHERE LOWER(name) = @name"
+    [
+      (named "name" Text, []);
+    ];
+
+  check "param inside arithmetic expression"
+    "SELECT status FROM test49 WHERE id = @id + 1"
+    [
+      (named "id" Int, []);
+    ];
+
+  check "column inside null-handling function"
+    "SELECT id FROM test49 WHERE IFNULL(status, 'active') = @status"
+    [
+      (named "status" enum_t, ["module", "T49Status"]);
+    ];
+]
+
+let test_meta_loss_query =
+  let open_enum_t = Type.(Union { ctors = (Enum_kind.Ctors.of_list ["one"; "two"; "three"]); is_closed = false }) in
+  let closed_enum_t = Type.(Union { ctors = (Enum_kind.Ctors.of_list ["one"; "two"; "three"]); is_closed = true }) in
+  [
+  tt {|
+    CREATE TABLE test51 (
+      id INT PRIMARY KEY,
+      parent_id INT NOT NULL,
+      -- [sqlgg] module=T51Level
+      col_a ENUM('one', 'two', 'three') NOT NULL,
+      -- [sqlgg] module=T51Time
+      col_b DATETIME NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    WITH t1 AS (
+      SELECT
+        IFNULL(LAG(col_a) OVER (PARTITION BY parent_id ORDER BY col_b, id), 'one') AS prev_a,
+        col_a AS cur_a
+      FROM test51
+    )
+    SELECT prev_a, cur_a FROM t1
+  |} [
+    attr' ~meta:["module", "T51Level"] "prev_a" closed_enum_t;
+    attr' ~extra:[NotNull] ~meta:["module", "T51Level"] "cur_a" closed_enum_t;
+  ] [];
+
+  tt {|
+    WITH RECURSIVE d AS (
+      SELECT DATE(IFNULL(MIN(col_b), NOW())) AS date_ FROM test51
+      UNION ALL
+      SELECT DATE_ADD(date_, INTERVAL 1 DAY) FROM d WHERE date_ < DATE(NOW())
+    ),
+    t1 AS (
+      SELECT
+        IFNULL(LAG(col_a) OVER (PARTITION BY parent_id ORDER BY col_b, id), 'one') AS prev_a,
+        col_a AS cur_a
+      FROM test51
+    ),
+    t2 AS (
+      SELECT prev_a, cur_a, COUNT(1) AS cnt FROM t1 GROUP BY prev_a, cur_a
+    ),
+    dim AS (SELECT 'one' AS lvl UNION ALL SELECT 'two' UNION ALL SELECT 'three')
+    SELECT
+      d.date_,
+      d1.lvl AS from_a,
+      d2.lvl AS to_a,
+      IFNULL(t2.cnt, 0) AS cnt
+    FROM d
+    CROSS JOIN dim d1
+    CROSS JOIN dim d2
+    LEFT JOIN t2 ON d1.lvl = t2.prev_a AND d2.lvl = t2.cur_a
+    WHERE d1.lvl != d2.lvl
+  |} [
+    attr' "date_" Datetime;
+    attr' ~meta:["module", "T51Level"] "from_a" open_enum_t;
+    attr' ~meta:["module", "T51Level"] "to_a" open_enum_t;
+    attr' "cnt" Int;
+  ] [];
+
+  tt {|
+    CREATE TABLE test52 (
+      -- [sqlgg] module=T52Price
+      price DECIMAL(10,2) NOT NULL
+    )
+  |} [] [];
+
+  tt "SELECT (WITH c AS (SELECT price FROM test52) SELECT price FROM c) AS s FROM test52"
+    [attr' ~nullability:Nullable ~meta:["module", "T52Price"] "s"
+       Type.(Decimal { precision = Some 10; scale = Some 2 })] [];
+
+  tt {|
+    WITH
+      t1 AS (SELECT col_a AS cur_a FROM test51),
+      dim AS (SELECT 'one' AS lvl UNION ALL SELECT 'two' UNION ALL SELECT 'three')
+    SELECT dim.lvl AS lvl
+    FROM dim
+    LEFT JOIN t1 ON dim.lvl = t1.cur_a OR t1.cur_a = 'one'
+  |} [
+    attr' "lvl" open_enum_t;
+  ] [];
+]
+
+let test_meta_lattice =
+  let metas =
+    let singles = List.concat_map (fun k -> List.map (fun v -> [k, v]) ["a"; "b"]) ["k1"; "k2"] in
+    let pairs = List.concat_map (fun a -> List.filter_map (fun b ->
+      if String.equal (fst (List.hd a)) (fst (List.hd b)) then None else Some (a @ b)) singles) singles in
+    List.map Meta.of_list ([] :: singles @ pairs)
+  in
+  let elements = None :: List.map (fun m -> Some m) metas in
+  let bottom = Some (Meta.empty ()) in
+  let eq a b =
+    match a, b with
+    | None, None -> true
+    | Some a, Some b -> Meta.equal a b
+    | None, Some _ | Some _, None -> false
+  in
+  let show = function None -> "top" | Some m -> Format.asprintf "%a" Meta.pp m in
+  let each f = List.iter f elements in
+  let pairs f = each (fun a -> each (fun b -> f a b)) in
+  let triples f = each (fun a -> each (fun b -> each (fun c -> f a b c))) in
+  let unions =
+    List.map (fun l -> Type.(strict (Union { ctors = Enum_kind.Ctors.of_list l; is_closed = true })))
+      [ ["a"]; ["b"]; ["a"; "b"]; ["a"; "b"; "c"] ]
+  in
+  let each_union f = List.iter f unions in
+  [
+  "common is commutative" >:: (fun () -> pairs (fun a b ->
+    assert_bool (sprintf "%s %s" (show a) (show b)) (eq (Meta.common a b) (Meta.common b a))));
+
+  "common is associative" >:: (fun () -> triples (fun a b c ->
+    assert_bool (sprintf "%s %s %s" (show a) (show b) (show c))
+      (eq (Meta.common (Meta.common a b) c) (Meta.common a (Meta.common b c)))));
+
+  "common is idempotent" >:: (fun () -> each (fun a ->
+    assert_bool (show a) (eq (Meta.common a a) a)));
+
+  "nothing claimed is neutral" >:: (fun () -> each (fun a ->
+    assert_bool (show a) (eq (Meta.common None a) a)));
+
+  "disagreement absorbs" >:: (fun () -> each (fun a ->
+    assert_bool (show a) (eq (Meta.common bottom a) bottom)));
+
+  "common is a lower bound" >:: (fun () -> pairs (fun a b ->
+    let m = Meta.common a b in
+    assert_bool (sprintf "%s %s" (show a) (show b))
+      (eq (Meta.common m a) m && eq (Meta.common m b) m)));
+
+  "common_all folds common" >:: (fun () -> triples (fun a b c ->
+    assert_bool (sprintf "%s %s %s" (show a) (show b) (show c))
+      (eq (Meta.common_all [a; b; c]) (Meta.common a (Meta.common b c)))));
+
+  "silence is not disagreement" >:: (fun () ->
+    List.iter (fun a -> List.iter (fun b ->
+      assert_bool "shared ignores empty"
+        (Meta.equal (Meta.shared [Meta.empty (); a; b]) (Meta.shared [a; b]))) metas) metas);
+
+  "a domain contains itself" >:: (fun () -> each_union (fun t ->
+    assert_bool (Type.show t) (Type.is_subdomain_of t ~domain:t)));
+
+  "containment is transitive" >:: (fun () -> each_union (fun a -> each_union (fun b -> each_union (fun c ->
+    if Type.is_subdomain_of a ~domain:b && Type.is_subdomain_of b ~domain:c then
+      assert_bool (sprintf "%s %s %s" (Type.show a) (Type.show b) (Type.show c))
+        (Type.is_subdomain_of a ~domain:c)))));
+]
+
+let test_meta_join_equality = [
+  tt {|
+    CREATE TABLE orders (
+      -- [sqlgg] module=Order_id
+      id BIGINT NOT NULL,
+      -- [sqlgg] module=Created_at
+      created_at DATETIME NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    CREATE TABLE events (
+      order_id BIGINT NOT NULL,
+      updated_at DATETIME NOT NULL
+    )
+  |} [] [];
+
+  tt "SELECT events.order_id FROM orders JOIN events ON orders.id = events.order_id"
+    [attr' ~extra:[NotNull] ~meta:["module", "Order_id"] "order_id" Int] [];
+
+  tt "SELECT events.updated_at FROM orders JOIN events ON orders.created_at = events.updated_at"
+    [attr' ~extra:[NotNull] ~meta:["module", "Created_at"] "updated_at" Datetime] [];
+
+  tt {|
+    SELECT events.order_id FROM orders JOIN events ON orders.id = events.order_id OR events.order_id = 0
+  |} [attr' ~extra:[NotNull] "order_id" Int] [];
+]
+
+let test_meta_union_null_placeholder = [
+  tt {|
+    CREATE TABLE left_rows (
+      -- [sqlgg] module=Left_id
+      id BIGINT NOT NULL,
+      -- [sqlgg] module=Owner_id
+      owner_id BIGINT NULL,
+      -- [sqlgg] module=Payload
+      payload JSON NULL
+    )
+  |} [] [];
+
+  tt {|
+    CREATE TABLE right_rows (
+      -- [sqlgg] module=Right_id
+      id BIGINT NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    SELECT l.id AS left_id, l.owner_id, l.payload, NULL AS right_id FROM left_rows l
+    UNION ALL
+    SELECT NULL AS left_id, NULL AS owner_id, NULL AS payload, r.id AS right_id FROM right_rows r
+  |} [
+    attr' ~nullability:Nullable ~extra:[NotNull] ~meta:["module", "Left_id"] "left_id" Int;
+    attr' ~nullability:Nullable ~extra:[Null] ~meta:["module", "Owner_id"] "owner_id" Int;
+    attr' ~nullability:Nullable ~extra:[Null] ~meta:["module", "Payload"] "payload" Json;
+    attr' ~nullability:Nullable ~meta:["module", "Right_id"] "right_id" Int;
+  ] [];
+
+  tt "SELECT id AS x FROM left_rows UNION ALL SELECT id AS x FROM right_rows"
+    [ attr' ~extra:[NotNull] "x" Int ] [];
+
+  tt "SELECT CASE WHEN id = 1 THEN owner_id ELSE NULL END AS s FROM left_rows"
+    [ attr' ~nullability:Nullable ~meta:["module", "Owner_id"] "s" Int ] [];
+]
+
+let test_meta_union_enum_literal =
+  let status_t = Type.(Union { ctors = (Enum_kind.Ctors.of_list ["draft"; "published"; "failed"]); is_closed = true }) in
+  [
+  tt {|
+    CREATE TABLE rows_with_status (
+      -- [sqlgg] module=Row_status
+      status ENUM('draft', 'published', 'failed') NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    CREATE TABLE rows_text (
+      label TEXT NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    CREATE TABLE rows_status_a (
+      -- [sqlgg] module=Status_a
+      status ENUM('draft', 'published') NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    CREATE TABLE rows_status_b (
+      -- [sqlgg] module=Status_b
+      status ENUM('draft', 'published') NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    SELECT status AS row_status FROM rows_with_status
+    UNION ALL
+    SELECT 'published' AS row_status
+  |} [ attr' ~extra:[NotNull] ~meta:["module", "Row_status"] "row_status" status_t ] [];
+
+  tt {|
+    SELECT 'published' AS row_status
+    UNION ALL
+    SELECT status AS row_status FROM rows_with_status
+  |} [ attr' ~meta:["module", "Row_status"] "row_status" (Type.StringLiteral "published") ] [];
+
+  wrong {|
+    SELECT status AS x FROM rows_with_status
+    UNION ALL
+    SELECT label AS x FROM rows_text
+  |};
+
+  tt {|
+    SELECT status FROM rows_status_a
+    UNION ALL
+    SELECT status FROM rows_status_b
+  |} [ attr' ~extra:[NotNull] "status" Type.(Union { ctors = (Enum_kind.Ctors.of_list ["draft"; "published"]); is_closed = true }) ] [];
+]
 
 let test_multi_functions = [
   tt "CREATE TABLE test_multi (id INT, txt1 TEXT, txt2 TEXT NULL, txt3 TEXT NOT NULL)" [] [];
@@ -2393,6 +2766,13 @@ let run () =
     "test_case_enum" >::: test_case_enum;
     "test_type_mapping_params" >:: test_type_mapping_params;
     "test_meta_insert_update" >:: test_meta_insert_update;
+    "test_meta_loss_schema" >::: test_meta_loss_schema;
+    "test_meta_loss_params" >::: test_meta_loss_params;
+    "test_meta_loss_query" >::: test_meta_loss_query;
+    "test_meta_lattice" >::: test_meta_lattice;
+    "test_meta_join_equality" >::: test_meta_join_equality;
+    "test_meta_union_null_placeholder" >::: test_meta_union_null_placeholder;
+    "test_meta_union_enum_literal" >::: test_meta_union_enum_literal;
     "test_multi_functions" >::: test_multi_functions;
     "test_on_conflict_do_update" >::: test_on_conflict_do_update;
     "test_enum_with_in_and_between" >::: test_enum_with_in_and_between;
