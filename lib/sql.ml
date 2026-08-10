@@ -101,6 +101,11 @@ struct
 
   let is_any { t; nullability = _ } = equal_kind t Any
 
+  let is_enum_value_of x y =
+    match x.t, y.t with
+    | StringLiteral l, Union { ctors; _ } -> Enum_kind.Ctors.mem l ctors
+    | _ -> false
+
   let is_one_or_all s = List.mem (String.lowercase_ascii s) ["one"; "all"]
 
   let check_exact_exact_number value { precision; scale } =
@@ -333,6 +338,8 @@ module Meta = struct
     | [] -> empty ()
     | m :: rest -> if List.for_all (equal m) rest then m else empty ()
 
+  let common_known metas = common (List.filter (fun m -> not (is_empty m)) metas)
+
   let get_is_non_nullifiable meta = Option.default "false" (find_opt meta "non_nullifiable") = "true" 
 end
 
@@ -488,13 +495,12 @@ struct
     |> List.mapi begin fun i (a1,a2) ->
       match Type.supertype a1.attr.domain a2.attr.domain with
       | Some t ->
-        (* an untyped NULL placeholder branch carries no domain, so it cannot disagree about metadata *)
-        let meta =
-          match a1.attr.domain.t, a2.attr.domain.t with
-          | Type.Any, _ -> a2.attr.meta
-          | _, Type.Any -> a1.attr.meta
-          | _ -> Meta.common [a1.attr.meta; a2.attr.meta]
+        (* a branch holding no domain of its own - an untyped NULL, or a literal that is just a value
+           of the other branch's enum - cannot disagree about metadata *)
+        let own_meta (a : attr) (b : attr) =
+          if Type.is_any a.domain || Type.is_enum_value_of a.domain b.domain then None else Some a.meta
         in
+        let meta = Meta.common (List.filter_map (fun (a, b) -> own_meta a b) [a1.attr, a2.attr; a2.attr, a1.attr]) in
         Attr.map_attr (fun attr -> { attr with domain = t; meta }) a1
       | None -> raise (Error (List.map (fun i -> i.attr) t1, sprintf "Attributes do not match : %s of type %s and %s of type %s"
         (show_name i a1.attr) (Type.show a1.attr.domain)

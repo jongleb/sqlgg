@@ -1956,6 +1956,62 @@ let test_meta_union_null_placeholder = [
     [ attr' ~nullability:Nullable ~meta:["module", "Owner_id"] "s" Int ] [];
 ]
 
+let test_meta_union_enum_literal =
+  let status_t = Type.(Union { ctors = (Enum_kind.Ctors.of_list ["draft"; "published"; "failed"]); is_closed = true }) in
+  [
+  tt {|
+    CREATE TABLE rows_with_status (
+      -- [sqlgg] module=Row_status
+      status ENUM('draft', 'published', 'failed') NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    CREATE TABLE rows_text (
+      label TEXT NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    CREATE TABLE rows_status_a (
+      -- [sqlgg] module=Status_a
+      status ENUM('draft', 'published') NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    CREATE TABLE rows_status_b (
+      -- [sqlgg] module=Status_b
+      status ENUM('draft', 'published') NOT NULL
+    )
+  |} [] [];
+
+  tt {|
+    SELECT status AS row_status FROM rows_with_status
+    UNION ALL
+    SELECT 'published' AS row_status
+  |} [ attr' ~extra:[NotNull] ~meta:["module", "Row_status"] "row_status" status_t ] [];
+
+  (* domain stays the literal here - pre-existing Type.supertype behaviour, meta must survive anyway *)
+  tt {|
+    SELECT 'published' AS row_status
+    UNION ALL
+    SELECT status AS row_status FROM rows_with_status
+  |} [ attr' ~meta:["module", "Row_status"] "row_status" (Type.StringLiteral "published") ] [];
+
+  wrong {|
+    SELECT status AS x FROM rows_with_status
+    UNION ALL
+    SELECT label AS x FROM rows_text
+  |};
+
+  tt {|
+    SELECT status FROM rows_status_a
+    UNION ALL
+    SELECT status FROM rows_status_b
+  |} [ attr' ~extra:[NotNull] "status" Type.(Union { ctors = (Enum_kind.Ctors.of_list ["draft"; "published"]); is_closed = true }) ] [];
+]
+
 let test_multi_functions = [
   tt "CREATE TABLE test_multi (id INT, txt1 TEXT, txt2 TEXT NULL, txt3 TEXT NOT NULL)" [] [];
   
@@ -2609,6 +2665,7 @@ let run () =
     "test_meta_loss_params" >::: test_meta_loss_params;
     "test_meta_loss_query" >::: test_meta_loss_query;
     "test_meta_union_null_placeholder" >::: test_meta_union_null_placeholder;
+    "test_meta_union_enum_literal" >::: test_meta_union_enum_literal;
     "test_multi_functions" >::: test_multi_functions;
     "test_on_conflict_do_update" >::: test_on_conflict_do_update;
     "test_enum_with_in_and_between" >::: test_enum_with_in_and_between;

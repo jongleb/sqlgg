@@ -204,8 +204,7 @@ let column_meta ~env col =
       else if equal_col_name b col then Some a
       else None)
     |> List.map own
-    |> List.filter (fun meta -> not (Meta.is_empty meta))
-    |> Meta.common
+    |> Meta.common_known
 
 let rec merge_meta_into_params meta expr =
   let merge = merge_meta_into_params meta in
@@ -288,9 +287,7 @@ let rec bool_choice_id = function
 let extract_meta_from_col ~env expr =
   let rec col_metas acc e =
     match e with
-    | Sql.Column c ->
-      let meta = column_meta ~env c.collated in
-      if Meta.is_empty meta then acc else meta :: acc
+    | Sql.Column c -> column_meta ~env c.collated :: acc
     | e -> List.fold_left col_metas acc (passthrough_sub_exprs e)
   in
   let compares_all_arguments = function
@@ -303,7 +300,7 @@ let extract_meta_from_col ~env expr =
     match e with
     | Sql.Fun ({ kind; parameters; _ } as fn) when compares_all_arguments kind ->
       let metas = List.map (col_metas []) parameters in
-      let meta_of_others i = Meta.common (List.concat (List.filteri (fun j _ -> not (Int.equal j i)) metas)) in
+      let meta_of_others i = Meta.common_known (List.concat (List.filteri (fun j _ -> not (Int.equal j i)) metas)) in
       Fun { fn with parameters = List.mapi (fun i p -> merge_meta_into_params (meta_of_others i) (aux p)) parameters }
     | e -> map_sub_exprs aux e
   in
@@ -1034,7 +1031,7 @@ and infer_schema env columns =
     | e ->
       (* an untyped NULL branch carries no domain, so it cannot disagree about metadata *)
       passthrough_sub_exprs e
-      |> List.filter (function Value { collated = { t = Type.Any; _ }; _ } -> false | _ -> true)
+      |> List.filter (function Value v -> not (Type.is_any v.collated) | _ -> true)
       |> List.map (propagate_meta ~env)
       |> Meta.common
   in
