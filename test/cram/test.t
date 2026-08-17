@@ -1521,7 +1521,7 @@ Test GROUP_CONCAT with ORDER BY expressions and join:
     let select_2 db ~order_kind ~par callback =
       let invoke_callback stmt =
         callback
-          ~table_no:(T.get_column_Int_nullable stmt 0)
+          ~table_no:(T.get_column_Int stmt 0)
           ~dates_from_t1:(T.get_column_Text_nullable stmt 1)
           ~dates_from_t2:(T.get_column_Text_nullable stmt 2)
           ~dates_from_t2_2:(T.get_column_Text_nullable stmt 3)
@@ -1554,7 +1554,7 @@ Test GROUP_CONCAT with ORDER BY expressions and join:
       let select_2 db ~order_kind ~par callback acc =
         let invoke_callback stmt =
           callback
-            ~table_no:(T.get_column_Int_nullable stmt 0)
+            ~table_no:(T.get_column_Int stmt 0)
             ~dates_from_t1:(T.get_column_Text_nullable stmt 1)
             ~dates_from_t2:(T.get_column_Text_nullable stmt 2)
             ~dates_from_t2_2:(T.get_column_Text_nullable stmt 3)
@@ -1591,7 +1591,7 @@ Test GROUP_CONCAT with ORDER BY expressions and join:
       let select_2 db ~order_kind ~par callback =
         let invoke_callback stmt =
           callback
-            ~table_no:(T.get_column_Int_nullable stmt 0)
+            ~table_no:(T.get_column_Int stmt 0)
             ~dates_from_t1:(T.get_column_Text_nullable stmt 1)
             ~dates_from_t2:(T.get_column_Text_nullable stmt 2)
             ~dates_from_t2_2:(T.get_column_Text_nullable stmt 3)
