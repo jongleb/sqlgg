@@ -717,6 +717,10 @@ and 't func =
   | Comparison of comparison_op
   | Logical of logical_op
   | Negation
+  | Arith of 't (* 'a -> 'a -> t, NULL anywhere gives NULL *)
+  | Membership (* 'a -> { 'a }+ -> bool, IN *)
+  | Range (* 'a -> 'a -> 'a -> bool, BETWEEN *)
+  | Like of { escaped: bool } (* text -> text -> bool, [escaped] is the LIKE .. ESCAPE .. form *)
   | Ret of 't (* _ -> t *) (* TODO eliminate *)
   | F of Type.tyvar * Type.tyvar list
   | Col_assign of { ret_t: Type.tyvar; col_t: Type.tyvar; arg_t: Type.tyvar; }
@@ -800,17 +804,35 @@ let signature kind arity =
     | Col_assign { ret_t; col_t; arg_t } -> Some (ret_t, [col_t; arg_t])
     | Multi { ret; fixed_args; repeating_pattern } ->
       Option.map (fun args -> ret, args) (multi_args ~fixed_args ~repeating_pattern arity)
-    | Agg _ | Logical _ | Negation | Ret _ -> None
+    | Membership | Range -> Some Type.(Typ (depends Bool), List.make arity (Var 0))
+    | Like { escaped } ->
+      (* LIKE .. ESCAPE .. wraps the LIKE it escapes, so its first argument is that boolean *)
+      Some Type.(Typ (depends Bool), [Typ (depends (if escaped then Bool else Text)); Typ (depends Text)])
+    | Agg _ | Logical _ | Negation | Ret _ | Arith _ -> None
   in
   match sign with
   | Some (_, args) when not (Int.equal (List.length args) arity) -> None
   | Some _ | None as sign -> sign
 
+(** The arguments a function is strict in: a NULL there makes the whole call NULL.
+    Conservative - a kind absent from the first two cases is simply assumed to be
+    strict in nothing. *)
+let strict_args kind parameters =
+  match kind with
+  | Comparison (Comp_equal | Comp_num_cmp | Comp_text_cmp | Comp_num_eq)
+  | Negation | Arith _ | Like _ -> parameters
+  (* `x IN (..)` and `x BETWEEN a AND b` can still be FALSE with a NULL on the right *)
+  | Membership | Range -> List.take 1 parameters
+  | Comparison (Not_distinct_op | Is_null | Is_not_null)
+  | Agg _ | Null_handling _ | Logical _ | Ret _ | F _ | Col_assign _ | Multi _ -> []
+
 let source_fun_kind_to_infer = function
   | Ret t -> Ret (Source_type.to_infer_type t)
+  | Arith t -> Arith (Source_type.to_infer_type t)
   | Agg (Self | Count | Avg | With_order _) 
   | Null_handling _ | Comparison _
   | Logical _ | Negation | F _ 
+  | Membership | Range | Like _
   | Col_assign _ | Multi _ as fn -> fn
 
 let expr_to_string = show_expr
@@ -819,7 +841,8 @@ let map_kind_exprs f = function
   | Agg (With_order ({ order; _ } as wo)) ->
     Agg (With_order { wo with order = List.map (fun (e, dir) -> f e, dir) order })
   | Agg (Self | Count | Avg) | Null_handling _ | Comparison _
-  | Logical _ | Negation | Ret _ | F _ | Col_assign _ | Multi _ as kind -> kind
+  | Logical _ | Negation | Ret _ | F _ | Col_assign _ | Multi _
+  | Arith _ | Membership | Range | Like _ as kind -> kind
 
 let sub_exprs = function
   | Value _ | Param _ | Inparam _ | Column _ | Of_values _ | SelectExpr _ -> []
@@ -1087,6 +1110,11 @@ let pp_func pp f =
   | Agg (With_order { with_order_kind = Group_concat; _ }) -> fprintf pp "|'a| -> text"
   | Agg (With_order { with_order_kind = Json_arrayagg; _ }) -> fprintf pp "|'a| -> json"
   | Ret ret -> fprintf pp "_ -> %s" (Type.show ret)
+  | Arith ret -> fprintf pp "'a -> 'a -> %s" (Type.show ret)
+  | Membership -> fprintf pp "'a -> { 'a }+ -> %s" (Type.show_kind Bool)
+  | Range -> fprintf pp "'a -> 'a -> 'a -> %s" (Type.show_kind Bool)
+  | Like { escaped } ->
+    fprintf pp "%s -> %s -> %s" (Type.show_kind (if escaped then Bool else Text)) (Type.show_kind Text) (Type.show_kind Bool)
   | F (ret, args) -> fprintf pp "%s -> %s" (String.concat " -> " @@ List.map Type.string_of_tyvar args) (Type.string_of_tyvar ret)
   | Col_assign { ret_t=ret; col_t; arg_t } -> aux (F (ret, [col_t; arg_t]))
   | Null_handling (Coalesce (ret, each_arg)) -> fprintf pp "{ %s }+ -> %s" (Type.string_of_tyvar each_arg) (Type.string_of_tyvar ret)
@@ -1108,7 +1136,8 @@ let string_of_func = Format.asprintf "%a" pp_func
 
 let is_grouping = function
   | Agg _ -> true
-  | Col_assign _ | Ret _ | F _ | Multi _ | Null_handling _  | Comparison _ | Negation | Logical _ -> false
+  | Col_assign _ | Ret _ | F _ | Multi _ | Null_handling _  | Comparison _ | Negation | Logical _
+  | Arith _ | Membership | Range | Like _ -> false
 
 module Function : sig
 

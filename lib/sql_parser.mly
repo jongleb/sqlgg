@@ -18,7 +18,6 @@
     in
     List.filter_map param l, List.mem (`Limit,`Const 1) l
 
-  let poly name ret parameters = Fun { fn_name = name; kind = (F (Typ ret, List.map (fun _ -> Var 0) parameters)); parameters; is_over_clause = false }
 %}
 
 %token <int> INTEGER
@@ -490,14 +489,14 @@ attr_name: cname=ident { { cname; tname=None} }
 
 distinct_from: DISTINCT FROM { }
 
-like_expr: e1=expr mnot(like) e2=expr %prec LIKE { Fun { fn_name = "like"; kind = (fixed Bool [Text; Text]); parameters = [e1;e2]; is_over_clause = false } }
+like_expr: e1=expr mnot(like) e2=expr %prec LIKE { Fun { fn_name = "like"; kind = Like { escaped = false }; parameters = [e1;e2]; is_over_clause = false } }
 
 expr:
-      e1=expr numeric_bin_op e2=expr %prec PLUS { Fun { fn_name = "numeric_bin_op"; kind = (Ret (Source_type.depends Any)); parameters = [e1;e2]; is_over_clause = false } } (* TODO default Int *)
-    | MOD LPAREN e1=expr COMMA e2=expr RPAREN { Fun { fn_name = "mod"; kind = (Ret (Source_type.depends Any)); parameters = [e1;e2]; is_over_clause = false } } (* mysql special *)
-    | e1=expr NUM_DIV_OP e2=expr %prec PLUS { Fun { fn_name = "num_div"; kind = (Ret (Source_type.depends Float)); parameters = [e1;e2]; is_over_clause = false } }
-    | e1=expr TEXT_DIST_OP e2=expr { Fun { fn_name = "text_dist"; kind = (Ret (Source_type.depends Float)); parameters = [e1;e2]; is_over_clause = false } }
-    | e1=expr DIV e2=expr %prec PLUS { Fun { fn_name = "div"; kind = (Ret (Source_type.depends Int)); parameters = [e1;e2]; is_over_clause = false } }
+      e1=expr numeric_bin_op e2=expr %prec PLUS { Fun { fn_name = "numeric_bin_op"; kind = (Arith (Source_type.depends Any)); parameters = [e1;e2]; is_over_clause = false } } (* TODO default Int *)
+    | MOD LPAREN e1=expr COMMA e2=expr RPAREN { Fun { fn_name = "mod"; kind = (Arith (Source_type.depends Any)); parameters = [e1;e2]; is_over_clause = false } } (* mysql special *)
+    | e1=expr NUM_DIV_OP e2=expr %prec PLUS { Fun { fn_name = "num_div"; kind = (Arith (Source_type.depends Float)); parameters = [e1;e2]; is_over_clause = false } }
+    | e1=expr TEXT_DIST_OP e2=expr { Fun { fn_name = "text_dist"; kind = (Arith (Source_type.depends Float)); parameters = [e1;e2]; is_over_clause = false } }
+    | e1=expr DIV e2=expr %prec PLUS { Fun { fn_name = "div"; kind = (Arith (Source_type.depends Int)); parameters = [e1;e2]; is_over_clause = false } }
     | e1=expr bool_op=boolean_bin_op e2=expr %prec AND { Fun { fn_name = "boolean_bin_op"; kind = (Logical bool_op); parameters = [e1;e2]; is_over_clause = false } }
     | e1=expr comp_op=comparison_op anyall? e2=expr %prec EQUAL { Fun { fn_name = "comparison"; kind = Comparison comp_op; parameters = [e1; e2]; is_over_clause = false } }
     | e1=expr CONCAT_OP e2=expr { Fun { fn_name = "concat"; kind = (fixed Text [Text;Text]); parameters = [e1;e2]; is_over_clause = false } }
@@ -510,7 +509,7 @@ expr:
       {
         match esc with
         | None -> e
-        | Some esc -> Fun { fn_name = "like_escape"; kind = (fixed Bool [Bool; Text]); parameters = [e;esc]; is_over_clause = false }
+        | Some esc -> Fun { fn_name = "like_escape"; kind = Like { escaped = true }; parameters = [e;esc]; is_over_clause = false }
       }
     | f=unary_op e=expr { f e }
     | MINUS e=expr %prec UNARY_MINUS { e }
@@ -520,12 +519,13 @@ expr:
     | VALUES LPAREN n=ident RPAREN { Of_values n }
     | v=literal_value | v=datetime_value { v }
     | INTERVAL_UNIT { Value (make_collated ~collated:(strict Datetime) ()) }
-    | e1=expr mnot(IN) l=sequence(expr) { poly "in" (depends Bool) (e1::l) }
-    | e1=expr mnot(IN) LPAREN select=select_stmt RPAREN { poly "in_select" (depends Bool) [e1; SelectExpr (select, `AsValue)] }
+    | e1=expr mnot(IN) l=sequence(expr) { Fun { fn_name = "in"; kind = Membership; parameters = e1::l; is_over_clause = false } }
+    | e1=expr mnot(IN) LPAREN select=select_stmt RPAREN { Fun { fn_name = "in_select"; kind = Membership; parameters = [e1; SelectExpr (select, `AsValue)]; is_over_clause = false } }
     | e1=expr IN table=table_name { Tables.check table; e1 }
     | e1=expr k=in_or_not_in p=param
       {
-        let e = poly "in_param" (depends Bool) [ e1; Inparam (make_param ~id:p ~typ:(Source_type.depends Any), Meta.empty()) ] in
+        let arg = Inparam (make_param ~id:p ~typ:(Source_type.depends Any), Meta.empty()) in
+        let e = Fun { fn_name = "in_param"; kind = Membership; parameters = [e1; arg]; is_over_clause = false } in
         InChoice (make_located ~value:p.value ~pos:($startofs, $endofs), k, e )
       }
     | LPAREN exprs=commas(expr) RPAREN k=in_or_not_in p=param
@@ -562,7 +562,7 @@ expr:
     | e=expr IS NOT NULL { Fun { fn_name = "is_not_null"; kind = Comparison Is_not_null; parameters = [e]; is_over_clause = false } }
     | e=expr IS NULL { Fun { fn_name = "is_null"; kind = Comparison Is_null; parameters = [e]; is_over_clause = false } }
     | e1=expr IS NOT? distinct_from? e2=expr { Fun { fn_name = "is_distinct"; kind = Comparison Not_distinct_op; parameters = [e1; e2]; is_over_clause = false } }
-    | e=expr mnot(BETWEEN) a=expr AND b=expr { poly "between" (depends Bool) [e;a;b] }
+    | e=expr mnot(BETWEEN) a=expr AND b=expr { Fun { fn_name = "between"; kind = Range; parameters = [e;a;b]; is_over_clause = false } }
     | mnot(EXISTS) LPAREN select=select_stmt RPAREN { Fun { fn_name = "exists"; kind = (F (Typ (strict Bool), [Typ (depends Any)])); parameters = [SelectExpr (select,`Exists)]; is_over_clause = false } }
     | CASE initial_expr=expr? branches_list=nonempty_list(case_branch) else_expr=preceded(ELSE,expr)? END
       {

@@ -60,6 +60,14 @@ module Attr_refinement = struct
 
   let not_null attr = { empty with not_null = Qualified_attr.Set.singleton attr }
 
+  (* drop what was proven about the columns [keep] rejects *)
+  let restrict_not_null keep t = { t with not_null = Qualified_attr.Set.filter keep t.not_null }
+
+  (* everything [t] uncovered, but only the nullability [from] is entitled to *)
+  let with_not_null_of ~from t = { t with not_null = from.not_null }
+
+  let meta_only t = with_not_null_of ~from:empty t
+
   let inherit_meta ~constrains (col : table_name Schema.Source.Attr.t) ~(referenced : table_name Schema.Source.Attr.t) =
     let inherited = Meta.of_domain referenced.attr.meta in
     let carries =
@@ -71,14 +79,16 @@ module Attr_refinement = struct
     | false, true -> { empty with meta = Qualified_attr.Map.singleton (Qualified_attr.of_attr col) inherited }
     | _ -> empty
 
-  let apply t a =
-    let key = Qualified_attr.of_attr a in
-    let from_query = Option.default (Meta.empty ()) (Qualified_attr.Map.find_opt key t.meta) in
-    let not_null = Qualified_attr.Set.mem key t.not_null in
-    Schema.Source.Attr.map_attr (fun attr ->
-      { attr with
-        meta = Meta.merge_right from_query attr.meta;
-        domain = if not_null then Type.make_strict attr.domain else attr.domain }) a
+  let refine_nullability t a =
+    if Qualified_attr.Set.mem (Qualified_attr.of_attr a) t.not_null
+    then Schema.Source.Attr.map_attr (fun attr -> { attr with domain = Type.make_strict attr.domain }) a
+    else a
+
+  let refine_meta t a =
+    let uncovered = Option.default (Meta.empty ()) (Qualified_attr.Map.find_opt (Qualified_attr.of_attr a) t.meta) in
+    Schema.Source.Attr.map_attr (fun attr -> { attr with meta = Meta.merge_right uncovered attr.meta }) a
+
+  let apply t a = refine_nullability t (refine_meta t a)
 end
 
 type env = {
@@ -250,7 +260,7 @@ let _print_env env =
   Schema.print @@ Schema.Source.to_schema env.schema;
   Tables.print stderr env.tables
 
-let update_schema_with_aliases all_schema final_schema = 
+let update_schema_with_aliases all_schema final_schema =
   let applied = all_schema |> List.filter (fun s1 -> List.for_all Schema.Source.Attr.(fun s2 -> s2.attr.name <> s1.attr.name) final_schema) in  
   applied @ final_schema
 
@@ -629,34 +639,74 @@ let propagate_meta ~meta_of =
 
 let push_meta ~meta_of ctx e = snd (propagate_meta ~meta_of e) ctx
 
+(** Refine what a boolean condition says about its columns, in Kleene's three-valued logic.
+
+    [req e true] (resp. [false]) collects the columns that must be non-NULL for [e] to
+    come out TRUE (resp. FALSE) rather than UNKNOWN, so a row that got past a WHERE or
+    an inner ON witnesses every column in [req e true].  [nn e] does the same for [e]
+    being defined at all, threading through the arguments each function is strict in.
+    Negation merely swaps the two polarities, which is what makes De Morgan's laws hold
+    here by construction instead of by enumeration. *)
 let narrow_columns ~env ~constrains e =
-  let not_null col =
+  let open Attr_refinement in
+  let strict col =
     match resolve_column_opt ~env col with
-    | Some a when constrains a -> Attr_refinement.not_null (Qualified_attr.of_attr a)
-    | Some _ | None -> Attr_refinement.empty
+    | Some a when constrains a -> not_null (Qualified_attr.of_attr a)
+    | Some _ | None -> empty
   in
-  let rec narrow satisfied = function
-    | Sql.Fun { kind = Comparison (Is_null | Is_not_null as op); parameters = [Column c]; _ }
-      when Bool.equal satisfied (equal_comparison_op op Is_not_null) -> not_null c.collated
-    | Fun { kind = Comparison (Comp_equal | Not_distinct_op); parameters = [Column a; Column b]; _ } when satisfied ->
+  (* a satisfied equality between two columns lets each side borrow the other's domain *)
+  let borrowed = function
+    | Sql.Fun { kind = Comparison (Comp_equal | Not_distinct_op); parameters = [Column a; Column b]; _ } ->
       begin match resolve_column_opt ~env a.collated, resolve_column_opt ~env b.collated with
       | Some a, Some b ->
-        let inherit_meta = Attr_refinement.inherit_meta ~constrains in
-        Attr_refinement.add (inherit_meta a ~referenced:b) (inherit_meta b ~referenced:a)
-      | None, _ | _, None -> Attr_refinement.empty
+        let borrow = inherit_meta ~constrains in
+        add (borrow a ~referenced:b) (borrow b ~referenced:a)
+      | None, _ | _, None -> empty
       end
-    | Fun { kind = Negation; parameters = [e]; _ } -> narrow (not satisfied) e
-    | Fun { kind = Logical (And | Or as op); parameters; _ } ->
-      let keep = if Bool.equal satisfied (equal_logical_op op And) then Attr_refinement.keep_all else Attr_refinement.keep_shared in
-      keep (List.map (narrow satisfied) parameters)
-    | InChoice (_, _, e) | OptionActions { choice = e; _ } -> narrow satisfied e
-    | Choices (_, l) -> Attr_refinement.keep_shared (List.map (fun (_, e) -> Option.map_default (narrow satisfied) Attr_refinement.empty e) l)
-    | Case { branches; else_ = Some e; _ } ->
-      Attr_refinement.keep_shared (narrow satisfied e :: List.map (fun (b : Sql.case_branch) -> narrow satisfied b.then_) branches)
-    | Value _ | Param _ | Inparam _ | Column _ | Of_values _ | SelectExpr _
-    | InTupleList _ | Case { else_ = None; _ } | Fun _ -> Attr_refinement.empty
+    | _ -> empty
   in
-  narrow true e
+  let rec nn = function
+    | Sql.Column col -> strict col.collated
+    (* defined as soon as any one argument is, so only what all of them ask for *)
+    | Fun { kind = Null_handling (Coalesce _ | If_null); parameters; _ } -> keep_shared (List.map nn parameters)
+    | Fun { kind; parameters; _ } -> keep_all (List.map nn (Sql.strict_args kind parameters))
+    | Case c -> paths ~result:nn c
+    | Value _ | Param _ | Inparam _ | Choices _ | InChoice _ | InTupleList _
+    | SelectExpr _ | OptionActions _ | Of_values _ -> empty
+
+  and req e tv = add (if tv then borrowed e else empty) @@
+    match e with
+    (* AND is TRUE only once every conjunct is, and FALSE as soon as one of them is;
+       OR is the mirror image, so a single [equal] settles all four cases *)
+    | Sql.Fun { kind = Logical (And | Or as op); parameters; _ } ->
+      let combine = if Bool.equal tv (equal_logical_op op And) then keep_all else keep_shared in
+      combine (List.map (fun e -> req e tv) parameters)
+    (* either outcome of XOR needs every operand known *)
+    | Fun { kind = Logical Xor; parameters; _ } -> keep_all (List.map defined parameters)
+    | Fun { kind = Negation; parameters = [e]; _ } -> req e (not tv)
+    | Fun { kind = Comparison Is_null; parameters = [e]; _ } -> if tv then empty else nn e
+    | Fun { kind = Comparison Is_not_null; parameters = [e]; _ } -> if tv then nn e else empty
+    | Case c -> paths ~result:(fun e -> req e tv) c
+    (* a dynamic branch may be left out of the query altogether, so it promises
+       nothing unless every alternative promises it too *)
+    | Choices (_, l) -> keep_shared (List.map (fun (_, e) -> Option.map_default (fun e -> req e tv) empty e) l)
+    | InChoice _ | OptionActions _ -> empty
+    | e -> nn e
+
+  and defined e = keep_shared [req e true; req e false]
+
+  (* every way a CASE can reach a value: its guard held, and its result did the rest *)
+  and paths ~result { Sql.case; branches; else_ } =
+    let guard { Sql.when_; _ } =
+      match case with
+      | None -> req when_ true
+      | Some scrutinee -> add (nn scrutinee) (nn when_)
+    in
+    let taken = List.map (fun b -> add (guard b) (result b.Sql.then_)) branches in
+    (* without an ELSE the CASE falls through to NULL, which is no path at all *)
+    keep_shared (match else_ with Some e -> taken @ [ result e ] | None -> taken)
+  in
+  req e true
 
 (** resolve each name reference (Column, Inserted, etc) into ResValue or ResFun of corresponding type *)
 let rec resolve_columns env expr =
@@ -671,7 +721,7 @@ let rec resolve_columns env expr =
     match e with
     | Value x -> ResValue x.collated
     | Column col ->
-      let attr = (resolve_column ~env col.collated).attr in
+      let attr = (Attr_refinement.refine_nullability env.attr_refinement (resolve_column ~env col.collated)).attr in
       let json_null_kind = Meta.find_opt attr.meta "json_null_kind" in
       let text_as_json = Meta.find_opt attr.meta "text_as_json" in
       let domain = match json_null_kind, text_as_json, attr.domain with
@@ -978,6 +1028,15 @@ and assign_types env expr =
         | F (ret, args), _ ->
           let args, ret = convert (ret, args) in
           undepend ret (common_nullability args), args
+        (* [Arith] is [Ret] plus the knowledge that it is strict in its arguments *)
+        | Arith t, _ -> infer_fn (Ret t) types
+        (* likewise these differ from a plain [F] only in strictness, so they type by
+           the very signature [Sql.signature] already publishes for them *)
+        | (Membership | Range | Like _) as func, _ ->
+          begin match Sql.signature func (List.length types) with
+          | Some (ret, args) -> infer_fn (F (ret, args)) types
+          | None -> fail "wrong number of arguments : %s" (show_func ())
+          end
         | Ret t, _ when Type.is_any t -> (* lame *)
           begin match common_supertype types with
           | Some t -> t, List.map (const t) types
@@ -1161,28 +1220,41 @@ and get_params_l env l = flat_map (get_params env) l
 
 and do_join (env,params) { From.src; kind; cond; _ } =
   let joined = Qualified_attr.Set.of_list (List.map Qualified_attr.of_attr src.rsrc_schema) in
-  let constrains col =
-    let from_joined_source = Qualified_attr.Set.mem (Qualified_attr.of_attr col) joined in
+  let side key = if Qualified_attr.Set.mem key joined then `Joined else `Accumulated in
+  (* Which sides of the join its condition really filters, and which ones it may pad with
+     NULLs. An outer join lets the side it preserves through untouched (the condition
+     decides nothing there) and pads the other one; a full join preserves both. *)
+  let filtered, padded =
     match kind with
-    | Inner | Straight -> true
-    | Left -> from_joined_source
-    | Right -> not from_joined_source
-    | Full -> false
+    | Inner | Straight -> [`Accumulated; `Joined], []
+    | Left -> [`Joined], [`Joined]
+    | Right -> [`Accumulated], [`Accumulated]
+    | Full -> [], [`Accumulated; `Joined]
   in
+  let is_filtered col = List.mem (side (Qualified_attr.of_attr col)) filtered in
+  let is_padded key = List.mem (side key) padded in
+  let pads = padded <> [] in
   let common_columns = match cond with
     | Natural | Using _ -> Schema.Join.common_columns cond env.schema src.rsrc_schema
     | On _ | Default -> []
   in
   let schema = Schema.Join.join kind cond env.schema src.rsrc_schema in
   let inherited =
-    List.map (fun (col, referenced) -> Attr_refinement.inherit_meta ~constrains col ~referenced) common_columns
+    List.map (fun (col, referenced) ->
+      Attr_refinement.inherit_meta ~constrains:is_filtered col ~referenced) common_columns
   in
-  let attr_refinement = Attr_refinement.keep_all (env.attr_refinement :: inherited) in
-  let env = { env with schema; attr_refinement } in
+  (* a padded column is nullable again, whatever we had proved about it upstream *)
+  let carried_over =
+    Attr_refinement.restrict_not_null (fun key -> not (is_padded key)) env.attr_refinement in
+  let env = { env with schema; attr_refinement = Attr_refinement.keep_all (carried_over :: inherited) } in
   match cond with
   | Default | Natural | Using _ -> env, params @ src.rsrc_params
   | On e ->
-    let env = { env with attr_refinement = Attr_refinement.add env.attr_refinement (narrow_columns ~env ~constrains e) } in
+    let refined = narrow_columns ~env ~constrains:is_filtered e in
+    (* a join that pads keeps the very rows its condition rejected, so only the domains
+       it uncovered survive, never the nullability *)
+    let refined = if pads then Attr_refinement.meta_only refined else refined in
+    let env = { env with attr_refinement = Attr_refinement.add env.attr_refinement refined } in
     (* TODO should use final schema (same as tables)? *)
     env, params @ src.rsrc_params @ get_params { env with set_tyvar_strict = true } e
 
@@ -1284,8 +1356,26 @@ and eval_select ~order env { columns; from; where; group; having; } =
   let from_env, p2, resolved_from = eval_nested { env with scope = child_scope } from in
   let env = { from_env with scope = env.scope } in
   let env = { env with query_has_grouping = List.length group > 0 } in
-  let env = { env with attr_refinement = Attr_refinement.keep_all (env.attr_refinement ::
-    List.map (Option.map_default (narrow_columns ~env ~constrains:(const true)) Attr_refinement.empty) [ where; having ]) } in
+  let narrow = Option.map_default (narrow_columns ~env ~constrains:(const true)) Attr_refinement.empty in
+  (* HAVING is only reached once the rows are grouped, so it can speak for the grouping
+     keys but not for the columns folded away underneath them *)
+  let narrow_having having =
+    let is_grouping_key =
+      let keys = Qualified_attr.Set.of_list @@ List.filter_map (function
+        | Column col -> Option.map Qualified_attr.of_attr (resolve_column_opt ~env col.collated)
+        | _ -> None) group
+      in
+      fun key -> Qualified_attr.Set.mem key keys
+    in
+    Attr_refinement.restrict_not_null is_grouping_key (narrow having)
+  in
+  let outer = env.attr_refinement in
+  let refined = Attr_refinement.keep_all [ outer; narrow where; narrow_having having ] in
+  (* Everything downstream sees a row that already passed both clauses. WHERE itself does
+     not: it runs against the row as stored, so it must not read back the nullability it is
+     about to justify, though the domains it uncovers do reach the params inside it. *)
+  let where_env = { env with attr_refinement = Attr_refinement.with_not_null_of ~from:outer refined } in
+  let env = { env with attr_refinement = refined } in
   let projection = make_dynamic_select ~env columns in
   let final_schema = infer_schema env projection in
   let final_schema =
@@ -1299,14 +1389,15 @@ and eval_select ~order env { columns; from; where; group; having; } =
   ) final_schema in
   (* use schema without aliases here *)
   let p1 = get_params_of_columns env projection in
-  let env, p3 = if Dialect.Semantic.is_where_aliases_dialect () then 
-    let env = { env with schema = make_unique (Schema.Join.cross env.schema final_schema') } in
-    env, get_params_opt { env with set_tyvar_strict = true; } where
-  else
-    let p3 = get_params_opt { env with set_tyvar_strict = true; 
-       (* Some dialects support aliasing *)
-      schema = List.filter (fun i -> i.Schema.Source.Attr.sources <> []) env.schema; } where in
-    env, p3
+  let env, p3 =
+    let where_params env = get_params_opt { env with set_tyvar_strict = true } where in
+    (* Some dialects support aliasing *)
+    if Dialect.Semantic.is_where_aliases_dialect () then
+      let with_aliases env = { env with schema = make_unique (Schema.Join.cross env.schema final_schema') } in
+      with_aliases env, where_params (with_aliases where_env)
+    else
+      let sourced env = { env with schema = List.filter (fun i -> i.Schema.Source.Attr.sources <> []) env.schema } in
+      env, where_params (sourced where_env)
   in
   (* ORDER BY, HAVING, GROUP BY allow have column without explicit referring to source if it's specified in SELECT *)
   let env = { env with schema = update_schema_with_aliases env.schema final_schema' } in

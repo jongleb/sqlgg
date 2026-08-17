@@ -396,7 +396,7 @@ module Sqlgg (T : Sqlgg_traits.M) = struct
       let id : _ t =
         {
           set = (fun _p -> ());
-          read = (fun row idx -> (T.get_column_Int_nullable row idx, idx + 1));
+          read = (fun row idx -> (T.get_column_Int row idx, idx + 1));
           column = ("u.id");
           count = 0;
           deps = [];
