@@ -5,6 +5,7 @@ open Printf
 open ExtLib
 open Prelude
 open Sql
+open Narrowing
 
 module Config = struct 
   let debug = ref false
@@ -18,76 +19,6 @@ type query_scope =
   | Subquery
   | From_passthrough
 
-module Qualified_attr = struct
-  module T = struct
-    type t = { sources : table_name list; name : string } [@@deriving eq, ord]
-  end
-  include T
-
-  let of_attr (a : table_name Schema.Source.Attr.t) = { sources = a.sources; name = a.attr.name }
-
-  let named = function { name = ""; _ } -> None | key -> Some key
-
-  module Map = Map.Make(T)
-  module Set = Set.Make(T)
-end
-
-module Attr_refinement = struct
-  type t = {
-    not_null : Qualified_attr.Set.t;
-    meta : Meta.t Qualified_attr.Map.t;
-  }
-
-  let empty = { not_null = Qualified_attr.Set.empty; meta = Qualified_attr.Map.empty }
-
-  let add a b = {
-    not_null = Qualified_attr.Set.union a.not_null b.not_null;
-    meta = Qualified_attr.Map.union (fun _ x y -> Some (Meta.merge_right x y)) a.meta b.meta;
-  }
-
-  let keep_all = List.fold_left add empty
-
-  let keep_shared = function
-    | [] -> empty
-    | x :: l ->
-      List.fold_left (fun a b -> {
-        not_null = Qualified_attr.Set.inter a.not_null b.not_null;
-        meta = Qualified_attr.Map.merge (fun _ x y ->
-          match x, y with
-          | Some x, Some y -> Meta.declared (Meta.inter x y)
-          | Some _, None | None, Some _ | None, None -> None) a.meta b.meta;
-      }) x l
-
-  let not_null attr = { empty with not_null = Qualified_attr.Set.singleton attr }
-
-  let restrict_not_null keep t = { t with not_null = Qualified_attr.Set.filter keep t.not_null }
-
-  let with_not_null_of ~from t = { t with not_null = from.not_null }
-
-  let meta_only t = with_not_null_of ~from:empty t
-
-  let inherit_meta ~constrains (col : table_name Schema.Source.Attr.t) ~(referenced : table_name Schema.Source.Attr.t) =
-    let inherited = Meta.of_domain referenced.attr.meta in
-    let carries =
-      match col.attr.domain.t, referenced.attr.domain.t with
-      | Union a, Union b -> Type.Enum_kind.Ctors.subset a.ctors b.ctors
-      | a, b -> constrains col && Type.equal_kind a b
-    in
-    match Meta.is_empty inherited, carries with
-    | false, true -> { empty with meta = Qualified_attr.Map.singleton (Qualified_attr.of_attr col) inherited }
-    | _ -> empty
-
-  let refine_nullability t a =
-    if Qualified_attr.Set.mem (Qualified_attr.of_attr a) t.not_null
-    then Schema.Source.Attr.map_attr (fun attr -> { attr with domain = Type.make_strict attr.domain }) a
-    else a
-
-  let refine_meta t a =
-    let uncovered = Option.default (Meta.empty ()) (Qualified_attr.Map.find_opt (Qualified_attr.of_attr a) t.meta) in
-    Schema.Source.Attr.map_attr (fun attr -> { attr with meta = Meta.merge_right uncovered attr.meta }) a
-
-  let apply t a = refine_nullability t (refine_meta t a)
-end
 
 type env = {
   tables : Tables.table list;
@@ -253,6 +184,11 @@ let resolve_column_opt ~env col =
   | attr -> Some attr
   | exception (Schema.Error _ | Failure _) -> None
 
+(** the attribute an expression names, when it names one at all *)
+let as_column ~env = function
+  | Sql.Column col -> resolve_column_opt ~env col.collated
+  | _ -> None
+
 let _print_env env =
   eprintfn "env: ";
   Schema.print @@ Schema.Source.to_schema env.schema;
@@ -408,12 +344,8 @@ let matches_at_most_one_row ~env table expr =
   let independent_of_table e =
     not (Table_refs.may_refer table (Table_refs.of_expr ~env e))
   in
-  let as_column = function
-    | Sql.Column c -> resolve_column_opt ~env c.collated
-    | _ -> None
-  in
   let bound1 a b =
-    match as_column a with
+    match as_column ~env a with
     | Some attr when belongs attr && independent_of_table b ->
       Some attr.Schema.Source.Attr.attr.name
     | _ -> None
@@ -636,59 +568,6 @@ let propagate_meta ~meta_of =
   aux
 
 let push_meta ~meta_of ctx e = snd (propagate_meta ~meta_of e) ctx
-
-(** columns that a satisfied condition proves non-NULL, in three-valued logic *)
-let narrow_columns ~env ~constrains e =
-  let open Attr_refinement in
-  let strict col =
-    match resolve_column_opt ~env col with
-    | Some a when constrains a -> not_null (Qualified_attr.of_attr a)
-    | Some _ | None -> empty
-  in
-  let borrowed = function
-    | Sql.Fun { kind = Comparison (Comp_equal | Not_distinct_op); parameters = [Column a; Column b]; _ } ->
-      begin match resolve_column_opt ~env a.collated, resolve_column_opt ~env b.collated with
-      | Some a, Some b ->
-        let borrow = inherit_meta ~constrains in
-        add (borrow a ~referenced:b) (borrow b ~referenced:a)
-      | None, _ | _, None -> empty
-      end
-    | _ -> empty
-  in
-  let rec nn = function
-    | Sql.Column col -> strict col.collated
-    | Fun { kind = Null_handling (Coalesce _ | If_null); parameters; _ } -> keep_shared (List.map nn parameters)
-    | Fun { kind; parameters; _ } -> keep_all (List.map nn (Sql.strict_args kind parameters))
-    | Case c -> paths ~result:nn c
-    | Value _ | Param _ | Inparam _ | Choices _ | InChoice _ | InTupleList _
-    | SelectExpr _ | OptionActions _ | Of_values _ -> empty
-
-  and req e tv = add (if tv then borrowed e else empty) @@
-    match e with
-    | Sql.Fun { kind = Logical (And | Or as op); parameters; _ } ->
-      let combine = if Bool.equal tv (equal_logical_op op And) then keep_all else keep_shared in
-      combine (List.map (fun e -> req e tv) parameters)
-    | Fun { kind = Logical Xor; parameters; _ } -> keep_all (List.map defined parameters)
-    | Fun { kind = Negation; parameters = [e]; _ } -> req e (not tv)
-    | Fun { kind = Quantified_comparison { quantifier = `Any; _ }; parameters = x :: _; _ } when tv -> nn x
-    | Fun { kind = Quantified_comparison _; _ } -> empty
-    | Fun { kind = Comparison Is_null; parameters = [e]; _ } -> if tv then empty else nn e
-    | Fun { kind = Comparison Is_not_null; parameters = [e]; _ } -> if tv then nn e else empty
-    | Case c -> paths ~result:(fun e -> req e tv) c
-    | Choices (_, l) -> keep_shared (List.map (fun (_, e) -> Option.map_default (fun e -> req e tv) empty e) l)
-    | InChoice _ | OptionActions _ -> empty
-    | e -> nn e
-
-  and defined e = keep_shared [req e true; req e false]
-
-  and paths ~result { Sql.case; branches; else_ } =
-    let guard { Sql.when_; _ } =
-      Option.map_default (fun scrutinee -> add (nn scrutinee) (nn when_)) (req when_ true) case
-    in
-    let taken = List.map (fun b -> add (guard b) (result b.Sql.then_)) branches in
-    keep_shared (taken @ Option.map_default (fun e -> [ result e ]) [] else_)
-  in
-  req e true
 
 (** resolve each name reference (Column, Inserted, etc) into ResValue or ResFun of corresponding type *)
 let rec resolve_columns env expr =
@@ -1226,7 +1105,7 @@ and do_join (env,params) { From.src; kind; cond; _ } =
   match cond with
   | Default | Natural | Using _ -> env, params @ src.rsrc_params
   | On e ->
-    let refined = narrow_columns ~env ~constrains:is_filtered e in
+    let refined = narrow_columns ~resolve:(resolve_column_opt ~env) ~constrains:is_filtered e in
     let refined = if pads then Attr_refinement.meta_only refined else refined in
     let env = { env with attr_refinement = Attr_refinement.add env.attr_refinement refined } in
     (* TODO should use final schema (same as tables)? *)
@@ -1330,12 +1209,11 @@ and eval_select ~order env { columns; from; where; group; having; } =
   let from_env, p2, resolved_from = eval_nested { env with scope = child_scope } from in
   let env = { from_env with scope = env.scope } in
   let env = { env with query_has_grouping = List.length group > 0 } in
-  let narrow = Option.map_default (narrow_columns ~env ~constrains:(const true)) Attr_refinement.empty in
+  let narrow = Option.map_default (narrow_columns ~resolve:(resolve_column_opt ~env) ~constrains:(const true)) Attr_refinement.empty in
   let narrow_having having =
     let is_grouping_key =
-      let keys = Qualified_attr.Set.of_list @@ List.filter_map (function
-        | Column col -> Option.map Qualified_attr.of_attr (resolve_column_opt ~env col.collated)
-        | _ -> None) group
+      let keys = Qualified_attr.Set.of_list @@
+        List.filter_map (fun e -> Option.map Qualified_attr.of_attr (as_column ~env e)) group
       in
       fun key -> Qualified_attr.Set.mem key keys
     in

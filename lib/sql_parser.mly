@@ -18,8 +18,6 @@
     in
     List.filter_map param l, List.mem (`Limit,`Const 1) l
 
-  let fn ?(over=false) fn_name kind parameters = Fun { fn_name; kind; parameters; is_over_clause = over }
-
   let call name parameters = fn name (Function.lookup name (List.length parameters)) parameters
 
   let arith name ret e1 e2 = fn name (Arith (Source_type.depends ret)) [e1; e2]
@@ -503,7 +501,10 @@ expr:
     | e1=expr NUM_DIV_OP e2=expr %prec PLUS { arith "num_div" Float e1 e2 }
     | e1=expr TEXT_DIST_OP e2=expr { arith "text_dist" Float e1 e2 }
     | e1=expr DIV e2=expr %prec PLUS { arith "div" Int e1 e2 }
-    | e1=expr bool_op=boolean_bin_op e2=expr %prec AND { fn "boolean_bin_op" (Logical bool_op) [e1;e2] }
+    (* one rule per connective so each carries its own precedence, see the MySQL table above *)
+    | e1=expr op=and_op e2=expr %prec AND { fn "boolean_bin_op" (Logical op) [e1;e2] }
+    | e1=expr op=xor_op e2=expr %prec XOR { fn "boolean_bin_op" (Logical op) [e1;e2] }
+    | e1=expr op=or_op e2=expr %prec OR { fn "boolean_bin_op" (Logical op) [e1;e2] }
     | e1=expr op=comparison_op q=anyall? e2=expr %prec EQUAL
       { let kind = Option.map_default (fun quantifier -> Quantified_comparison { op; quantifier }) (Comparison op) q in
         fn "comparison" kind [e1;e2] }
@@ -522,7 +523,7 @@ expr:
     | MINUS e=expr %prec UNARY_MINUS { e }
     | INTERVAL e=expr interval_unit { fn "interval" (fixed Datetime [Int]) [e] }
     | LPAREN e=expr RPAREN { e }
-    | a=attr_name c=collate? { Column (make_collated ?collation:c ~collated:a ()) }
+    | a=attr_name c=collate? { column ?collation:c a }
     | VALUES LPAREN n=ident RPAREN { Of_values n }
     | v=literal_value | v=datetime_value { v }
     | INTERVAL_UNIT { Value (make_collated ~collated:(strict Datetime) ()) }
@@ -653,10 +654,9 @@ comparison_op:
       Comp_num_eq 
     }
 
-boolean_bin_op: 
-    | AND { And }
-    | OR { Or }
-    | XOR { Xor }
+and_op: AND { And }
+xor_op: XOR { Xor }
+or_op: OR { Or }
 
 interval_unit: INTERVAL_UNIT
              | SECOND_MICROSECOND | MINUTE_MICROSECOND | MINUTE_SECOND

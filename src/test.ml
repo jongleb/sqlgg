@@ -2726,16 +2726,16 @@ let test_cardinality =
 let test_cardinality_optimization_validity = 
   let x = [attr' ~nullability:Strict "x" ~extra:[PrimaryKey] Int] in
   let id = [attr' ~nullability:Nullable "id" Int] in
-  let one_x' = [attr' ~nullability:Strict "one_x" Int] in
+  let one_x = [attr' ~nullability:Strict "one_x" Int] in
   [
   tt "CREATE TABLE tc2_1 (x INT PRIMARY KEY)" [] [];
   tt "CREATE TABLE tc2_2 (id INT, one_x INT, FOREIGN KEY (one_x) REFERENCES tc2_1(x))" [] [];
   tt "select * from tc2_1 where x = 1" x [] ~kind:(Select `Zero_one);
-  tt "select * from tc2_2 where one_x = 1" (id @ one_x') [] ~kind:(Select `Nat);
+  tt "select * from tc2_2 where one_x = 1" (id @ one_x) [] ~kind:(Select `Nat);
   (* below should return one row -- tc2_1.x is a primary key, but tc2_2.one_x is not *)
-  tt "select * from tc2_2 join tc2_1 on tc2_2.one_x = tc2_1.x where tc2_1.x = 1" (id @ one_x' @ x) [] ~kind:(Select `Nat);
+  tt "select * from tc2_2 join tc2_1 on tc2_2.one_x = tc2_1.x where tc2_1.x = 1" (id @ one_x @ x) [] ~kind:(Select `Nat);
   (* below should return multiple rows -- tc2_1.x is a primary key, but joining on it allows multiple rows with it to be returned *)
-  tt "select * from tc2_1 join tc2_2 on tc2_1.x = tc2_2.one_x where tc2_1.x = 1" (x @ id @ one_x') [] ~kind:(Select `Nat);
+  tt "select * from tc2_1 join tc2_2 on tc2_1.x = tc2_2.one_x where tc2_1.x = 1" (x @ id @ one_x) [] ~kind:(Select `Nat);
 ]
 
 let test_nullability_narrowing =
@@ -2772,6 +2772,9 @@ let test_nullability_narrowing =
   tt "SELECT a FROM narrow1 WHERE a IN (1, 2)" [s "a"] [];
   tt "SELECT a FROM narrow1 WHERE a NOT IN (1, 2)" [s "a"] [];
   tt "SELECT a FROM narrow1 WHERE a BETWEEN 1 AND 2" [s "a"] [];
+  (* only the head is strict: `1 IN (NULL, 1)` is TRUE, `3 BETWEEN NULL AND 2` is FALSE *)
+  tt "SELECT a, b FROM narrow1 WHERE a IN (b, 1)" [s "a"; n "b"] [];
+  tt "SELECT a, b FROM narrow1 WHERE a BETWEEN b AND 1" [s "a"; n "b"] [];
 
   tt "SELECT a, b FROM narrow1 WHERE CASE WHEN a = 1 THEN b = 2 END" [s "a"; s "b"] [];
   tt "SELECT a, b FROM narrow1 WHERE CASE WHEN a = 1 THEN b = 2 ELSE b = 3 END" [n "a"; s "b"] [];
@@ -3081,6 +3084,242 @@ let test_type_laws = List.map qcheck [
       | None -> true);
 ]
 
+
+
+(* Checks the analysis against a separate three-valued interpreter of SQL: in every row
+   the condition keeps, every column the analysis called non-nullable must really be
+   non-NULL. The other direction is not checked, BETWEEN is deliberately under-refined.
+   Comp_num_cmp stands for <, >, <= and >= alike, so both sides here read it as <.
+   frequency and any_of stay put: their replacements postdate the opam lower bound. *)
+module Narrowing_soundness = struct
+
+  let col = [| "a"; "b"; "c" |]
+
+  let column i = Sql.column { cname = col.(i); tname = None }
+  let call kind parameters = Sql.fn "test" kind parameters
+  let conj a b = call (Logical And) [ a; b ]
+  let disj a b = call (Logical Or) [ a; b ]
+  let neg a = call Negation [ a ]
+  let is_null a = call (Comparison Is_null) [ a ]
+  let is_not_null a = call (Comparison Is_not_null) [ a ]
+  let quantified quantifier x =
+    call (Quantified_comparison { op = Comp_equal; quantifier })
+      [ x; Value (make_collated ~collated:Type.(nullable Int) ()) ]
+
+  let resolve (c : col_name) : table_name Schema.Source.Attr.t option =
+    if Array.exists (String.equal c.cname) col
+    then Some { attr = make_attribute' c.cname Type.(nullable Int); sources = [] }
+    else None
+
+  let n e =
+    (Narrowing.narrow_columns ~resolve ~constrains:(fun _ -> true) e)
+      .Narrowing.Attr_refinement.not_null
+
+  let gen_scalar =
+    let open QCheck.Gen in
+    fix (fun self depth ->
+      let leaf = map column (int_range 0 (Array.length col - 1)) in
+      if depth <= 0 then leaf
+      else frequency [
+        4, leaf;
+        2, map2 (fun a b -> call (Arith (Source_type.depends Any)) [ a; b ])
+             (self (depth - 1)) (self (depth - 1));
+        2, map2 (fun a b -> call (Null_handling (Coalesce (Type.Var 0, Type.Var 0))) [ a; b ])
+             (self (depth - 1)) (self (depth - 1));
+      ]) 2
+
+  let gen_cond =
+    let open QCheck.Gen in
+    let comparison =
+      map3 (fun op a b -> call (Comparison op) [ a; b ])
+        (any_of [ Comp_equal; Comp_num_eq; Comp_num_cmp; Not_distinct_op ]) gen_scalar gen_scalar
+    in
+    fix (fun self depth ->
+      let leaf = frequency [
+        4, comparison;
+        2, map is_not_null gen_scalar;
+        2, map is_null gen_scalar;
+        2, map2 (fun x l -> call Membership (x :: l)) gen_scalar (list_size (int_range 1 2) gen_scalar);
+        1, map3 (fun x lo hi -> call Range [ x; lo; hi ]) gen_scalar gen_scalar gen_scalar;
+        2, map2 (fun q x -> quantified q x) (any_of [ `Any; `All ]) gen_scalar;
+      ] in
+      if depth <= 0 then leaf
+      else frequency [
+        3, leaf;
+        3, map2 conj (self (depth - 1)) (self (depth - 1));
+        3, map2 disj (self (depth - 1)) (self (depth - 1));
+        2, map2 (fun a b -> call (Logical Xor) [ a; b ]) (self (depth - 1)) (self (depth - 1));
+        2, map neg (self (depth - 1));
+        2, map2 (fun branches else_ -> Case { case = None; branches; else_ })
+             (list_size (int_range 1 2)
+                (map2 (fun when_ then_ -> { when_; then_ }) (self (depth - 1)) (self (depth - 1))))
+             (option (self (depth - 1)));
+        2, map3 (fun scrutinee branches else_ -> Case { case = Some scrutinee; branches; else_ })
+             gen_scalar
+             (list_size (int_range 1 2)
+                (map2 (fun when_ then_ -> { when_; then_ }) gen_scalar (self (depth - 1))))
+             (option (self (depth - 1)));
+        1, map2 (fun a b ->
+             Choices (make_located ~value:(Some "q") ~pos:(0, 0),
+               [ make_located ~value:(Some "A") ~pos:(0, 0), Some a;
+                 make_located ~value:(Some "B") ~pos:(0, 0), Some b ]))
+             (self (depth - 1)) (self (depth - 1));
+      ]) 3
+
+  type row = { cols : int option array; sub : int option list }
+
+  let k_not = Option.map not
+  let k_and a b =
+    match a, b with
+    | Some false, _ | _, Some false -> Some false
+    | Some true, Some true -> Some true
+    | None, _ | _, None -> None
+  let k_or a b =
+    match a, b with
+    | Some true, _ | _, Some true -> Some true
+    | Some false, Some false -> Some false
+    | None, _ | _, None -> None
+  let k_xor a b = match a, b with Some a, Some b -> Some (a <> b) | _ -> None
+
+  let index name =
+    let rec go i = if i >= Array.length col then None else if String.equal col.(i) name then Some i else go (i + 1) in
+    go 0
+
+  let rec scalar row = function
+    | Column c -> Option.map_default (Array.get row.cols) None (index c.collated.cname)
+    | Fun { kind = Arith _; parameters = [ a; b ]; _ } ->
+      (match scalar row a, scalar row b with Some a, Some b -> Some (a + b) | _ -> None)
+    | Fun { kind = Null_handling (Coalesce _); parameters = [ a; b ]; _ } ->
+      (match scalar row a with None -> scalar row b | v -> v)
+    | Value _ -> None
+    | Fun _ | Param _ | Inparam _ | Choices _ | InChoice _ | SelectExpr _
+    | InTupleList _ | OptionActions _ | Case _ | Of_values _ as e ->
+      failwith ("oracle: not a scalar: " ^ Format.asprintf "%a" Sql.pp_expr e)
+
+  let strict op row a b =
+    match scalar row a, scalar row b with Some a, Some b -> Some (op a b) | _ -> None
+
+  let rec holds row e =
+    let k_eq a b = match a, b with Some a, Some b -> Some (a = b) | _ -> None in
+    match e with
+    | Fun { kind = Comparison Comp_equal; parameters = [ a; b ]; _ } -> strict ( = ) row a b
+    | Fun { kind = Comparison Comp_num_eq; parameters = [ a; b ]; _ } -> strict ( <> ) row a b
+    | Fun { kind = Comparison Comp_num_cmp; parameters = [ a; b ]; _ } -> strict ( < ) row a b
+    | Fun { kind = Comparison Not_distinct_op; parameters = [ a; b ]; _ } ->
+      Some (scalar row a = scalar row b)
+    | Fun { kind = Comparison Is_null; parameters = [ a ]; _ } -> Some (scalar row a = None)
+    | Fun { kind = Comparison Is_not_null; parameters = [ a ]; _ } -> Some (scalar row a <> None)
+    | Fun { kind = Logical And; parameters = [ a; b ]; _ } -> k_and (holds row a) (holds row b)
+    | Fun { kind = Logical Or; parameters = [ a; b ]; _ } -> k_or (holds row a) (holds row b)
+    | Fun { kind = Logical Xor; parameters = [ a; b ]; _ } -> k_xor (holds row a) (holds row b)
+    | Fun { kind = Negation; parameters = [ a ]; _ } -> k_not (holds row a)
+    | Fun { kind = Membership; parameters = x :: candidates; _ } ->
+      let x = scalar row x in
+      List.fold_left (fun acc c -> k_or acc (k_eq x (scalar row c))) (Some false) candidates
+    | Fun { kind = Range; parameters = [ x; lo; hi ]; _ } ->
+      k_and (strict ( >= ) row x lo) (strict ( <= ) row x hi)
+    | Fun { kind = Quantified_comparison { quantifier; _ }; parameters = x :: _; _ } ->
+      let x = scalar row x in
+      let fold combine unit = List.fold_left (fun acc v -> combine acc (k_eq x v)) unit row.sub in
+      begin match quantifier with
+      | `All -> fold k_and (Some true)
+      | `Any -> fold k_or (Some false)
+      end
+    | Case { case; branches; else_ } ->
+      let guard { when_; _ } =
+        match case with
+        | None -> holds row when_
+        | Some scrutinee -> strict ( = ) row scrutinee when_
+      in
+      let rec taken = function
+        | [] -> Option.map_default (holds row) None else_
+        | branch :: rest -> if guard branch = Some true then holds row branch.then_ else taken rest
+      in
+      taken branches
+    | Fun _ | Value _ | Param _ | Inparam _ | Choices _ | InChoice _ | SelectExpr _
+    | InTupleList _ | OptionActions _ | Column _ | Of_values _ as e ->
+      failwith ("oracle: not a condition: " ^ Format.asprintf "%a" Sql.pp_expr e)
+
+  let rec instances e =
+    match e with
+    | Choices (_, alternatives) ->
+      List.concat_map (fun (_, e) -> Option.map_default instances [] e) alternatives
+    | Fun ({ parameters; _ } as f) ->
+      List.map (fun parameters -> Fun { f with parameters })
+        (List.fold_right (fun p acc ->
+          List.concat_map (fun p -> List.map (List.cons p) acc) (instances p)) parameters [ [] ])
+    | Case ({ branches; else_; _ } as c) ->
+      let branches =
+        List.fold_right (fun { when_; then_ } acc ->
+          List.concat_map (fun when_ ->
+            List.concat_map (fun then_ ->
+              List.map (List.cons { when_; then_ }) acc) (instances then_)) (instances when_))
+          branches [ [] ]
+      in
+      let elses = match else_ with None -> [ None ] | Some e -> List.map (fun e -> Some e) (instances e) in
+      List.concat_map (fun branches -> List.map (fun else_ -> Case { c with branches; else_ }) elses) branches
+    | e -> [ e ]
+
+  let rows =
+    let rec tuples values n =
+      if n = 0 then [ [] ]
+      else List.concat_map (fun v -> List.map (List.cons v) (tuples values (n - 1))) values
+    in
+    let cols = List.map Array.of_list (tuples [ None; Some 0; Some 1; Some 2 ] (Array.length col)) in
+    let subs = [ []; [ Some 0 ]; [ Some 1 ]; [ None ]; [ Some 0; None ]; [ Some 0; Some 1 ] ] in
+    List.concat_map (fun cols -> List.map (fun sub -> { cols; sub }) subs) cols
+
+  let show = Format.asprintf "%a" Sql.pp_expr
+
+  let shrink e =
+    let open QCheck.Iter in
+    let opt = Option.map_default (fun e -> [ e ]) [] in
+    match e with
+    | Fun { kind = Logical _ | Negation; parameters; _ } -> of_list parameters
+    | Case { case = None; branches; else_ } ->
+      of_list (List.concat_map (fun b -> [ b.when_; b.then_ ]) branches @ opt else_)
+    | Case { case = Some _; branches; else_ } ->
+      of_list (List.map (fun b -> b.then_) branches @ opt else_)
+    | Choices (_, alternatives) -> of_list (List.filter_map snd alternatives)
+    | Fun _ | Value _ | Param _ | Inparam _ | InChoice _ | SelectExpr _ | Column _
+    | InTupleList _ | OptionActions _ | Of_values _ -> empty
+
+  let cond = QCheck.make ~print:show ~shrink gen_cond
+
+  let sound e =
+    let promised = n e in
+    let broken =
+      List.find_map (fun instance ->
+        List.find_map (fun row ->
+          if holds row instance <> Some true then None
+          else
+            Narrowing.Qualified_attr.Set.elements promised
+            |> List.find_map (fun k ->
+              let name = k.Narrowing.Qualified_attr.name in
+              match index name with
+              | Some i when row.cols.(i) = None -> Some (instance, row, name)
+              | Some _ | None -> None))
+          rows)
+        (instances e)
+    in
+    match broken with
+    | None -> true
+    | Some (instance, row, name) ->
+      QCheck.Test.fail_reportf
+        "@[<v>promised %s is NULL in a kept row@,instance: %s@,row: %s@,subquery: %s@]"
+        name (show instance)
+        (String.concat ", " (List.mapi (fun i v ->
+          sprintf "%s=%s" col.(i) (Option.map_default string_of_int "NULL" v)) (Array.to_list row.cols)))
+        (String.concat ", " (List.map (Option.map_default string_of_int "NULL") row.sub))
+
+end
+
+let test_narrowing_soundness = [
+  qcheck (QCheck.Test.make ~count:2000
+    ~name:"narrowing is sound against a three-valued reading of SQL"
+    Narrowing_soundness.cond Narrowing_soundness.sound);
+]
+
 let run () =
   Gen.params_mode := Some Named;
   let tests =
@@ -3136,6 +3375,7 @@ let run () =
     "test_join_hole_whitespace" >::: test_join_hole_whitespace;
     "migration name" >::: test_migration_name;
     "test_type_laws" >::: test_type_laws;
+    "test_narrowing_soundness" >::: test_narrowing_soundness;
     "test_meta_laws" >::: test_meta_laws;
   ]
   in

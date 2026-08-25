@@ -770,6 +770,11 @@ and column_kind =
 
 type columns = column list [@@deriving show]
 
+(* building expressions: the parser and the tests go through these rather than each
+   spelling out the record *)
+let fn ?(over=false) fn_name kind parameters = Fun { fn_name; kind; parameters; is_over_clause = over }
+let column ?collation collated = Column (make_collated ?collation ~collated ())
+
 let comparison_signature op =
   let open Type in
   match op with
