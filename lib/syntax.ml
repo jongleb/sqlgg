@@ -1079,17 +1079,19 @@ and get_params_l env l = flat_map (get_params env) l
 
 and do_join (env,params) { From.src; kind; cond; _ } =
   let joined = Qualified_attr.Set.of_list (List.map Qualified_attr.of_attr src.rsrc_schema) in
-  let side key = if Qualified_attr.Set.mem key joined then `Joined else `Accumulated in
+  let is_joined key = Qualified_attr.Set.mem key joined in
+  let is_accumulated key = not (is_joined key) in
+  let both = const true in
+  let neither = const false in
   let filtered, padded =
     match kind with
-    | Inner | Straight -> [`Accumulated; `Joined], []
-    | Left -> [`Joined], [`Joined]
-    | Right -> [`Accumulated], [`Accumulated]
-    | Full -> [], [`Accumulated; `Joined]
+    | Inner | Straight -> both, neither
+    | Left -> is_joined, is_joined
+    | Right -> is_accumulated, is_accumulated
+    | Full -> neither, both
   in
-  let is_filtered col = List.mem (side (Qualified_attr.of_attr col)) filtered in
-  let is_padded key = List.mem (side key) padded in
-  let pads = padded <> [] in
+  let constrains col = filtered (Qualified_attr.of_attr col) in
+  let survives_padding = Attr_refinement.restrict_not_null (fun key -> not (padded key)) in
   let common_columns = match cond with
     | Natural | Using _ -> Schema.Join.common_columns cond env.schema src.rsrc_schema
     | On _ | Default -> []
@@ -1097,19 +1099,18 @@ and do_join (env,params) { From.src; kind; cond; _ } =
   let schema = Schema.Join.join kind cond env.schema src.rsrc_schema in
   let inherited =
     List.map (fun (col, referenced) ->
-      Attr_refinement.inherit_meta ~constrains:is_filtered col ~referenced) common_columns
+      Attr_refinement.inherit_meta ~constrains col ~referenced) common_columns
   in
-  let carried_over =
-    Attr_refinement.restrict_not_null (fun key -> not (is_padded key)) env.attr_refinement in
-  let env = { env with schema; attr_refinement = Attr_refinement.keep_all (carried_over :: inherited) } in
+  let env = { env with schema;
+    attr_refinement = Attr_refinement.keep_all (survives_padding env.attr_refinement :: inherited) } in
+  let params = params @ src.rsrc_params in
   match cond with
-  | Default | Natural | Using _ -> env, params @ src.rsrc_params
+  | Default | Natural | Using _ -> env, params
   | On e ->
-    let refined = narrow_columns ~resolve:(resolve_column_opt ~env) ~constrains:is_filtered e in
-    let refined = if pads then Attr_refinement.meta_only refined else refined in
-    let env = { env with attr_refinement = Attr_refinement.add env.attr_refinement refined } in
+    let env = { env with attr_refinement = Attr_refinement.add env.attr_refinement
+      (survives_padding (narrow_columns ~resolve:(resolve_column_opt ~env) ~constrains e)) } in
     (* TODO should use final schema (same as tables)? *)
-    env, params @ src.rsrc_params @ get_params { env with set_tyvar_strict = true } e
+    env, params @ get_params { env with set_tyvar_strict = true } e
 
 and join env { From.base; joins } =
   assert (env.schema = []);

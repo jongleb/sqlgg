@@ -54,7 +54,6 @@ module Attr_refinement = struct
 
   let with_not_null_of ~from t = { t with not_null = from.not_null }
 
-  let meta_only t = with_not_null_of ~from:empty t
 
   let inherit_meta ~constrains (col : table_name Schema.Source.Attr.t) ~(referenced : table_name Schema.Source.Attr.t) =
     let inherited = Meta.of_domain referenced.attr.meta in
