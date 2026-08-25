@@ -60,10 +60,8 @@ module Attr_refinement = struct
 
   let not_null attr = { empty with not_null = Qualified_attr.Set.singleton attr }
 
-  (* drop what was proven about the columns [keep] rejects *)
   let restrict_not_null keep t = { t with not_null = Qualified_attr.Set.filter keep t.not_null }
 
-  (* everything [t] uncovered, but only the nullability [from] is entitled to *)
   let with_not_null_of ~from t = { t with not_null = from.not_null }
 
   let meta_only t = with_not_null_of ~from:empty t
@@ -639,14 +637,7 @@ let propagate_meta ~meta_of =
 
 let push_meta ~meta_of ctx e = snd (propagate_meta ~meta_of e) ctx
 
-(** Refine what a boolean condition says about its columns, in Kleene's three-valued logic.
-
-    [req e true] (resp. [false]) collects the columns that must be non-NULL for [e] to
-    come out TRUE (resp. FALSE) rather than UNKNOWN, so a row that got past a WHERE or
-    an inner ON witnesses every column in [req e true].  [nn e] does the same for [e]
-    being defined at all, threading through the arguments each function is strict in.
-    Negation merely swaps the two polarities, which is what makes De Morgan's laws hold
-    here by construction instead of by enumeration. *)
+(** columns that a satisfied condition proves non-NULL, in three-valued logic *)
 let narrow_columns ~env ~constrains e =
   let open Attr_refinement in
   let strict col =
@@ -654,7 +645,6 @@ let narrow_columns ~env ~constrains e =
     | Some a when constrains a -> not_null (Qualified_attr.of_attr a)
     | Some _ | None -> empty
   in
-  (* a satisfied equality between two columns lets each side borrow the other's domain *)
   let borrowed = function
     | Sql.Fun { kind = Comparison (Comp_equal | Not_distinct_op); parameters = [Column a; Column b]; _ } ->
       begin match resolve_column_opt ~env a.collated, resolve_column_opt ~env b.collated with
@@ -667,7 +657,6 @@ let narrow_columns ~env ~constrains e =
   in
   let rec nn = function
     | Sql.Column col -> strict col.collated
-    (* defined as soon as any one argument is, so only what all of them ask for *)
     | Fun { kind = Null_handling (Coalesce _ | If_null); parameters; _ } -> keep_shared (List.map nn parameters)
     | Fun { kind; parameters; _ } -> keep_all (List.map nn (Sql.strict_args kind parameters))
     | Case c -> paths ~result:nn c
@@ -676,35 +665,28 @@ let narrow_columns ~env ~constrains e =
 
   and req e tv = add (if tv then borrowed e else empty) @@
     match e with
-    (* AND is TRUE only once every conjunct is, and FALSE as soon as one of them is;
-       OR is the mirror image, so a single [equal] settles all four cases *)
     | Sql.Fun { kind = Logical (And | Or as op); parameters; _ } ->
       let combine = if Bool.equal tv (equal_logical_op op And) then keep_all else keep_shared in
       combine (List.map (fun e -> req e tv) parameters)
-    (* either outcome of XOR needs every operand known *)
     | Fun { kind = Logical Xor; parameters; _ } -> keep_all (List.map defined parameters)
     | Fun { kind = Negation; parameters = [e]; _ } -> req e (not tv)
+    | Fun { kind = Quantified_comparison { quantifier = `Any; _ }; parameters = x :: _; _ } when tv -> nn x
+    | Fun { kind = Quantified_comparison _; _ } -> empty
     | Fun { kind = Comparison Is_null; parameters = [e]; _ } -> if tv then empty else nn e
     | Fun { kind = Comparison Is_not_null; parameters = [e]; _ } -> if tv then nn e else empty
     | Case c -> paths ~result:(fun e -> req e tv) c
-    (* a dynamic branch may be left out of the query altogether, so it promises
-       nothing unless every alternative promises it too *)
     | Choices (_, l) -> keep_shared (List.map (fun (_, e) -> Option.map_default (fun e -> req e tv) empty e) l)
     | InChoice _ | OptionActions _ -> empty
     | e -> nn e
 
   and defined e = keep_shared [req e true; req e false]
 
-  (* every way a CASE can reach a value: its guard held, and its result did the rest *)
   and paths ~result { Sql.case; branches; else_ } =
     let guard { Sql.when_; _ } =
-      match case with
-      | None -> req when_ true
-      | Some scrutinee -> add (nn scrutinee) (nn when_)
+      Option.map_default (fun scrutinee -> add (nn scrutinee) (nn when_)) (req when_ true) case
     in
     let taken = List.map (fun b -> add (guard b) (result b.Sql.then_)) branches in
-    (* without an ELSE the CASE falls through to NULL, which is no path at all *)
-    keep_shared (match else_ with Some e -> taken @ [ result e ] | None -> taken)
+    keep_shared (taken @ Option.map_default (fun e -> [ result e ]) [] else_)
   in
   req e true
 
@@ -1028,10 +1010,7 @@ and assign_types env expr =
         | F (ret, args), _ ->
           let args, ret = convert (ret, args) in
           undepend ret (common_nullability args), args
-        (* [Arith] is [Ret] plus the knowledge that it is strict in its arguments *)
         | Arith t, _ -> infer_fn (Ret t) types
-        (* likewise these differ from a plain [F] only in strictness, so they type by
-           the very signature [Sql.signature] already publishes for them *)
         | (Membership | Range | Like _) as func, _ ->
           begin match Sql.signature func (List.length types) with
           | Some (ret, args) -> infer_fn (F (ret, args)) types
@@ -1045,6 +1024,7 @@ and assign_types env expr =
         | Ret ret, _ ->
           let nullability = common_nullability @@ ret :: types in (* remove this when subqueries are taken out separately *)
           { ret with nullability }, types (* ignoring arguments FIXME *)
+        | Quantified_comparison { op; _ }, _ -> infer_fn (Comparison op) types
         | Comparison op, _ ->
           let args, ret = convert (Sql.comparison_signature op) in
           begin match op with
@@ -1221,9 +1201,6 @@ and get_params_l env l = flat_map (get_params env) l
 and do_join (env,params) { From.src; kind; cond; _ } =
   let joined = Qualified_attr.Set.of_list (List.map Qualified_attr.of_attr src.rsrc_schema) in
   let side key = if Qualified_attr.Set.mem key joined then `Joined else `Accumulated in
-  (* Which sides of the join its condition really filters, and which ones it may pad with
-     NULLs. An outer join lets the side it preserves through untouched (the condition
-     decides nothing there) and pads the other one; a full join preserves both. *)
   let filtered, padded =
     match kind with
     | Inner | Straight -> [`Accumulated; `Joined], []
@@ -1243,7 +1220,6 @@ and do_join (env,params) { From.src; kind; cond; _ } =
     List.map (fun (col, referenced) ->
       Attr_refinement.inherit_meta ~constrains:is_filtered col ~referenced) common_columns
   in
-  (* a padded column is nullable again, whatever we had proved about it upstream *)
   let carried_over =
     Attr_refinement.restrict_not_null (fun key -> not (is_padded key)) env.attr_refinement in
   let env = { env with schema; attr_refinement = Attr_refinement.keep_all (carried_over :: inherited) } in
@@ -1251,8 +1227,6 @@ and do_join (env,params) { From.src; kind; cond; _ } =
   | Default | Natural | Using _ -> env, params @ src.rsrc_params
   | On e ->
     let refined = narrow_columns ~env ~constrains:is_filtered e in
-    (* a join that pads keeps the very rows its condition rejected, so only the domains
-       it uncovered survive, never the nullability *)
     let refined = if pads then Attr_refinement.meta_only refined else refined in
     let env = { env with attr_refinement = Attr_refinement.add env.attr_refinement refined } in
     (* TODO should use final schema (same as tables)? *)
@@ -1357,8 +1331,6 @@ and eval_select ~order env { columns; from; where; group; having; } =
   let env = { from_env with scope = env.scope } in
   let env = { env with query_has_grouping = List.length group > 0 } in
   let narrow = Option.map_default (narrow_columns ~env ~constrains:(const true)) Attr_refinement.empty in
-  (* HAVING is only reached once the rows are grouped, so it can speak for the grouping
-     keys but not for the columns folded away underneath them *)
   let narrow_having having =
     let is_grouping_key =
       let keys = Qualified_attr.Set.of_list @@ List.filter_map (function
@@ -1371,9 +1343,6 @@ and eval_select ~order env { columns; from; where; group; having; } =
   in
   let outer = env.attr_refinement in
   let refined = Attr_refinement.keep_all [ outer; narrow where; narrow_having having ] in
-  (* Everything downstream sees a row that already passed both clauses. WHERE itself does
-     not: it runs against the row as stored, so it must not read back the nullability it is
-     about to justify, though the domains it uncovers do reach the params inside it. *)
   let where_env = { env with attr_refinement = Attr_refinement.with_not_null_of ~from:outer refined } in
   let env = { env with attr_refinement = refined } in
   let projection = make_dynamic_select ~env columns in

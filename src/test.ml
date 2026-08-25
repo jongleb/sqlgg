@@ -259,7 +259,7 @@ let test = Type.[
      [attr' "name" Text;
       attr' "str" ~nullability:Nullable Text]
      [];
-  (* CASE without ELSE falls through to NULL, which WHERE rejects, so a surviving row took a branch *)
+  (* CASE without ELSE yields NULL, which WHERE rejects *)
   tt "SELECT name FROM test WHERE CASE WHEN id > 10 THEN name IS NOT NULL END"
      [attr' "name" Text]
      [];
@@ -269,6 +269,23 @@ let test = Type.[
      [];
   (* CASE with different columns in branches - should NOT refine either *)
   tt "SELECT name, str FROM test WHERE CASE WHEN id > 10 THEN name IS NOT NULL ELSE str IS NOT NULL END"
+     [attr' "name" ~nullability:Nullable Text;
+      attr' "str" ~nullability:Nullable Text]
+     [];
+  (* `op ALL` is vacuously TRUE on an empty subquery *)
+  tt "SELECT name FROM test WHERE name > ALL (SELECT str FROM test)"
+     [attr' "name" ~nullability:Nullable Text]
+     [];
+  (* `op ANY` needs a row that matched *)
+  tt "SELECT name FROM test WHERE name > ANY (SELECT str FROM test)"
+     [attr' "name" Text]
+     [];
+  (* NOT binds tighter than AND *)
+  tt "SELECT name, str FROM test WHERE NOT (name IS NULL) AND NOT (str IS NULL)"
+     [attr' "name" Text;
+      attr' "str" Text]
+     [];
+  tt "SELECT name, str FROM test WHERE NOT (name IS NULL AND str IS NULL)"
      [attr' "name" ~nullability:Nullable Text;
       attr' "str" ~nullability:Nullable Text]
      [];
@@ -2637,7 +2654,7 @@ let test_cardinality =
   let z = [attr' ~nullability:Nullable "z" ~extra:[Constraint.make_composite_unique ["z"; "a"]] Int] in
   let a = [attr' ~nullability:Nullable "a" ~extra:[Constraint.make_composite_unique ["z"; "a"]] Int] in
   let b = [attr' ~nullability:Nullable "b" Int] in
-  (* the same columns as seen through a WHERE that has just proved them non-NULL *)
+  (* same columns, refined to non-NULL *)
   let refined = List.map (fun a -> Sql.{ a with domain = Type.make_strict a.domain }) in
   [
   tt "CREATE TABLE test_cardinality (x INT PRIMARY KEY, y INT, z INT, a INT, b INT, UNIQUE(y), UNIQUE(z, a))" [] [];
@@ -2688,7 +2705,8 @@ let test_cardinality =
   tt "select z,a from test_cardinality where z = 1 and a = 1" (refined z @ refined a) [] ~kind:(Select `Zero_one);
   tt "select z,a from test_cardinality where z = 1 and not (a = 1)" (refined z @ refined a) [] ~kind:(Select `Nat);
   tt "select z,a from test_cardinality where not (z = 1 and a = 1)" (z @ a) [] ~kind:(Select `Nat);
-  tt "select z,a from test_cardinality where not (z = 1) and a = 1" (z @ a) [] ~kind:(Select `Nat);
+  (* NOT binds tighter than AND *)
+  tt "select z,a from test_cardinality where not (z = 1) and a = 1" (refined z @ refined a) [] ~kind:(Select `Nat);
   tt "select z,a from test_cardinality where not not (a = 1)" (z @ refined a) [] ~kind:(Select `Nat);
   tt "select z,a from test_cardinality where z = 1 and a != 1" (refined z @ refined a) [] ~kind:(Select `Nat);
   tt "select z,a from test_cardinality where z != 1 and a = 1" (refined z @ refined a) [] ~kind:(Select `Nat);
