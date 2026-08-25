@@ -574,9 +574,9 @@ expr:
         Sql.Case case_record
       }
     | IF LPAREN e1=expr COMMA e2=expr COMMA e3=expr RPAREN { fn "if" (F (Var 0, [Typ (depends Bool); Var 0; Var 0])) [e1;e2;e3] }
-    | e=window_function OVER window_spec { e }
-    | f=table_name LPAREN p=func_params RPAREN OVER window_spec 
-        { fn ~over:true f.tn (Function.lookup_agg f.tn (List.length p)) p }
+    | w=window_function OVER spec=window_spec { w spec }
+    | f=table_name LPAREN p=func_params RPAREN OVER w=window_spec
+        { fn ~over:w f.tn (Function.lookup_agg f.tn (List.length p)) p }
 
 values_stmt1: 
   | VALUES expr_list=commas(preceded(ROW, delimited(LPAREN, expr_list, RPAREN))) { RowExprList expr_list }
@@ -587,24 +587,37 @@ values_stmt:
   
 
 (* https://dev.mysql.com/doc/refman/8.0/en/window-functions-usage.html *)
+first_or_last: FIRST_VALUE { "first_value" } | LAST_VALUE { "last_value" }
+lag_or_lead: LAG { "lag" } | LEAD { "lead" }
+
 window_function:
-  | either(FIRST_VALUE,LAST_VALUE) LPAREN e=expr RPAREN { e }
-  | NTH_VALUE LPAREN e=expr COMMA INTEGER RPAREN { e }
-  | either(LAG,LEAD) LPAREN e=expr pair(COMMA, pair(MINUS?,INTEGER))? RPAREN { e }
+  | f=first_or_last LPAREN e=expr RPAREN { fun over -> fn ~over f (Agg Self) [e] }
+  | NTH_VALUE LPAREN e=expr COMMA INTEGER RPAREN
+    { fun _ -> fn ~over:{ frame_may_be_empty = true } "nth_value" (Agg Self) [e] }
+  | f=lag_or_lead LPAREN e=expr offset=pair(COMMA, pair(MINUS?,INTEGER))? RPAREN
+    {
+      match offset with
+      | Some (_, (_, 0)) -> (fun _ -> e)
+      | None | Some _ -> (fun _ -> fn ~over:{ frame_may_be_empty = true } f (Agg Self) [e])
+    }
 
-window_spec: LPAREN e=partition? o=order? frame? RPAREN (* TODO order parameters? *) { (Option.may (fun o -> make_partition_by (List.map fst o )) o); e }
-partition: PARTITION BY e=expr_list { make_partition_by e} (* TODO check no params *)
+frame: either(ROWS,RANGE) f=frame_extent { f }
 
-frame: either(ROWS,RANGE) either(frame_border, frame_between) { }
-
-frame_between: BETWEEN frame_border AND frame_border { }
+frame_extent:
+  | start=frame_border { start, `Current }
+  | BETWEEN start=frame_border AND stop=frame_border { start, stop }
 
 frame_border:
-  | CURRENT ROW
-  | UNBOUNDED PRECEDING
-  | UNBOUNDED FOLLOWING
-  | expr PRECEDING
-  | expr FOLLOWING { }
+  | CURRENT ROW { `Current }
+  | UNBOUNDED PRECEDING { `Before }
+  | UNBOUNDED FOLLOWING { `After }
+  | expr PRECEDING { `Before }
+  | expr FOLLOWING { `After }
+
+window_spec: LPAREN partition? o=order? f=frame? RPAREN (* TODO order parameters? *)
+  { Option.may (fun o -> make_partition_by (List.map fst o)) o; over_of_frame f }
+
+partition: PARTITION BY e=expr_list { make_partition_by e} (* TODO check no params *)
 
 in_or_not_in: IN { `In } | NOT IN { `NotIn }
 case_branch: WHEN w=expr THEN t=expr

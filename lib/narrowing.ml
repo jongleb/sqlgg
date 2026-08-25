@@ -104,22 +104,27 @@ let narrow_columns ~resolve ~constrains e =
     | Value _ | Param _ | Inparam _ | Choices _ | InChoice _ | InTupleList _
     | SelectExpr _ | OptionActions _ | Of_values _ -> empty
 
-  and req e tv = add (if tv then borrowed e else empty) @@
-    match e with
-    | Sql.Fun { kind = Logical (And | Or as op); parameters; _ } ->
-      let combine = if Bool.equal tv (equal_logical_op op And) then keep_all else keep_shared in
-      combine (List.map (fun e -> req e tv) parameters)
-    | Fun { kind = Logical Xor; parameters; _ } ->
-      keep_all (List.map (fun e -> keep_shared [req e true; req e false]) parameters)
-    | Fun { kind = Negation; parameters = [e]; _ } -> req e (not tv)
-    | Fun { kind = Quantified_comparison { quantifier = `Any; _ }; parameters = x :: _; _ } when tv -> nn x
-    | Fun { kind = Quantified_comparison _; _ } -> empty
-    | Fun { kind = Comparison Is_null; parameters = [e]; _ } -> if tv then empty else nn e
-    | Fun { kind = Comparison Is_not_null; parameters = [e]; _ } -> if tv then nn e else empty
-    | Case c -> paths ~result:(fun e -> req e tv) c
-    | Choices (_, l) -> keep_shared (List.map (fun (_, e) -> Option.map_default (fun e -> req e tv) empty e) l)
-    | InChoice _ | OptionActions _ -> empty
-    | e -> nn e
+  and req e tv =
+    let same e = req e tv in
+    let required =
+      match (e : Sql.expr) with
+      | Fun { kind = Logical (And | Or as op); parameters; _ } ->
+        let combine = if Bool.equal tv (equal_logical_op op And) then keep_all else keep_shared in
+        combine (List.map same parameters)
+      | Fun { kind = Logical Xor; parameters; _ } ->
+        keep_all (List.map (fun e -> keep_shared [req e true; req e false]) parameters)
+      | Fun { kind = Negation; parameters = [e]; _ } -> req e (not tv)
+      | Fun { kind = Comparison (Is_null | Is_not_null as op); parameters = [e]; _ } ->
+        if Bool.equal tv (equal_comparison_op op Is_not_null) then nn e else empty
+      | Fun { kind = Quantified_comparison { quantifier = `Any; _ }; parameters = x :: _; _ } when tv -> nn x
+      | Fun { kind = Quantified_comparison _; _ } -> empty
+      | Case c -> paths ~result:same c
+      | Choices (_, alternatives) ->
+        keep_shared (List.map (fun (_, e) -> Option.map_default same empty e) alternatives)
+      | InChoice _ | OptionActions _ -> empty
+      | e -> nn e
+    in
+    add (if tv then borrowed e else empty) required
 
   and paths ~result { Sql.case; branches; else_ } =
     let guard { Sql.when_; _ } =

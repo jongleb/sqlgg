@@ -738,7 +738,8 @@ and 't func =
      Valid calls: f(a,b,c) or f(a,b,c,d,e) or f(a,b,c,d,e,f,g) etc. *)
   [@@deriving show]
 and 'expr choices = (param_id * 'expr option) list
-and 't fun_ = { fn_name: string; kind: 't func; parameters: expr list; is_over_clause: bool; } [@@deriving show]
+and 't fun_ = { fn_name: string; kind: 't func; parameters: expr list; over: over option } [@@deriving show]
+and over = { frame_may_be_empty: bool } [@@deriving show]
 and case_branch = { when_: expr; then_: expr }
 and case = {  
   case: expr option;
@@ -770,7 +771,17 @@ and column_kind =
 
 type columns = column list [@@deriving show]
 
-let fn ?(over=false) fn_name kind parameters = Fun { fn_name; kind; parameters; is_over_clause = over }
+let fn ?over fn_name kind parameters = Fun { fn_name; kind; parameters; over }
+
+let over_has_a_row = function None -> false | Some o -> not o.frame_may_be_empty
+
+(* where a frame boundary sits relative to the current row *)
+type frame_bound = [ `Before | `Current | `After ]
+
+let over_of_frame : (frame_bound * frame_bound) option -> over = function
+  | None -> { frame_may_be_empty = false }
+  | Some (`After, _) | Some (_, `Before) -> { frame_may_be_empty = true }
+  | Some ((`Before | `Current), (`Current | `After)) -> { frame_may_be_empty = false }
 let column ?collation collated = Column (make_collated ?collation ~collated ())
 
 let comparison_signature op =

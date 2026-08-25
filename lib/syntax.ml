@@ -67,7 +67,7 @@ type res_expr =
 
 and case_branch = { when_: res_expr; then_: res_expr; } [@@deriving show]
 
-and res_fun = { kind: Type.t func [@printer pp_func] ; parameters: res_expr list; is_over_clause: bool; } [@@deriving show]
+and res_fun = { kind: Type.t func [@printer pp_func] ; parameters: res_expr list; over: Sql.over option } [@@deriving show]
 
 and res_in_tuple_list =
   ResTyped of (Type.t * Meta.t) list | Res of (res_expr * Meta.t) list [@@deriving show]
@@ -130,7 +130,7 @@ let rec is_grouping = function
 | e -> List.exists is_grouping (sub_exprs e)
 
 let is_windowing =
-  expr_exists (function Sql.Fun { is_over_clause; _ } -> is_over_clause | _ -> false)
+  expr_exists (function Sql.Fun { over; _ } -> Option.is_some over | _ -> false)
 
 let exists_grouping columns =
   List.exists (function
@@ -656,8 +656,8 @@ let rec resolve_columns env expr =
     | Inparam (x, m) -> ResInparam (make_param ~id:x.id ~typ:(Source_type.to_infer_type x.typ), m)
     | InChoice (n, k, x) -> ResInChoice (n, k, each x)
     | Choices (n, l) -> ResChoices (n, List.map (fun (n, e) -> n, Option.map each e) l)
-    | Fun { kind; parameters; is_over_clause; _ } ->
-      ResFun { kind = source_fun_kind_to_infer kind; parameters = List.map each parameters; is_over_clause }
+    | Fun { kind; parameters; over; _ } ->
+      ResFun { kind = source_fun_kind_to_infer kind; parameters = List.map each parameters; over }
     | Case { case; branches; else_ } ->
       let case = Option.map each case in
       let branches = List.map (fun { Sql.when_; then_ } -> { when_ = each when_; then_ = each then_ }) branches in
@@ -685,16 +685,16 @@ let rec resolve_columns env expr =
               let then_exprs = List.map (fun b -> b.Sql.then_) branches in
               let all_results_exprs = then_exprs @ (option_list else_) in
               List.find_map with_count all_results_exprs
-            | Fun { kind = Agg Count; is_over_clause = false; _ }
+            | Fun { kind = Agg Count; over = None; _ }
             | SelectExpr (_, _) -> Some domain
-            | Fun { parameters; is_over_clause = false; _ } -> List.find_map with_count parameters
+            | Fun { parameters; over = None; _ } -> List.find_map with_count parameters
             | Choices (_, chs) ->
               List.fold_left (fun acc (_, e) -> match acc with
                 | None -> None
                 | Some _ -> Stdlib.Option.bind e with_count
               ) (Some domain) chs
             | OptionActions { choice; _ } -> with_count choice  
-            | Fun { is_over_clause = true; _ }
+            | Fun { over = Some _; _ }
             | Value _| Param _| Inparam _ | InChoice _
             | Column _| InTupleList _ | Of_values _ -> None
         in
@@ -790,7 +790,7 @@ and assign_types env expr =
       let case = Option.map (assign_params whens_t) case_e in
       let branches = List.map2 (fun when_ then_ -> { when_; then_ }) whens_e thens_e in
       ResCase { case = case; branches; else_ = else_ }, `Ok thens_t
-    | ResFun { kind; parameters; is_over_clause}  ->
+    | ResFun { kind; parameters; over }  ->
         let open Type in
         let (params,types) = parameters |> List.map typeof |> List.split in
         let types = List.map get_or_failwith types in
@@ -839,7 +839,8 @@ and assign_types env expr =
 
         (* With GROUP BY, the query returns no rows if no groups exist. With OVER clause, the query returns no rows if the outer query filter eliminates all rows.
            In both cases, if we're in a context that expects a value (like a subquery), the result should be nullable. *)
-        let consider_agg_nullability typ = if (env.query_has_grouping || is_over_clause) && is_strict typ then typ else make_nullable typ in
+        let aggregates_a_row = env.query_has_grouping || over_has_a_row over in
+        let consider_agg_nullability typ = if aggregates_a_row && is_strict typ then typ else make_nullable typ in
 
         let first_strict ret args = 
           let has_one_strict = List.exists (fun arg -> equal_nullability arg.nullability Strict) types in
@@ -940,7 +941,7 @@ and assign_types env expr =
         | Col_assign _, _ -> fail "SET operation requires two arguments"
         in
         let (ret,inferred_params) = infer_fn kind types in
-        ResFun { kind; parameters = (List.map2 assign_params inferred_params params); is_over_clause }, `Ok ret
+        ResFun { kind; parameters = (List.map2 assign_params inferred_params params); over }, `Ok ret
   and typeof expr =
     let r = typeof_ expr in
     if !Config.debug then eprintfn "%s is typeof %s" (Type.show @@ get_or_failwith @@ snd r) (show_res_expr @@ fst r);
@@ -996,7 +997,7 @@ and resolve_column_assignments ~env l =
     let assign e =
       let e = push_meta ~meta_of:(meta_of ~env) attr.meta e in
       Fun { fn_name = "col_assign"; kind = Col_assign { ret_t = Var 0; col_t = Var 0; arg_t = Var 0 };
-            parameters = [Value typ; e]; is_over_clause = false }
+            parameters = [Value typ; e]; over = None }
     in
     match expr with
     (* FIXME hack, should propagate properly *)
@@ -1176,8 +1177,8 @@ and ensure_res_expr = function
   | InChoice (p,_,_) -> failed ~at:p.pos "ensure_res_expr InChoice TBD"
   | Column _ | Of_values _ -> failwith "Not a simple expression"
   | Fun { kind; _ } when Sql.is_grouping kind -> failwith "Grouping function not allowed in simple expression"
-  | Fun { kind; parameters; is_over_clause; _ } ->
-     ResFun { kind = source_fun_kind_to_infer kind; parameters = List.map ensure_res_expr parameters; is_over_clause } (* FIXME *)
+  | Fun { kind; parameters; over; _ } ->
+     ResFun { kind = source_fun_kind_to_infer kind; parameters = List.map ensure_res_expr parameters; over } (* FIXME *)
   | SelectExpr _ -> failwith "not implemented : ensure_res_expr for SELECT"
   | OptionActions _ -> failwith  "BoolChoice is used in WHERE expr only"
 
@@ -1451,7 +1452,7 @@ let annotate_select select attrs =
       | { value = Expr (loc, name); pos = col_pos } :: cols, a :: attrs ->
         let e = push_meta ~meta_of:(const None) a.meta loc.value in
         let t = a.domain in
-        loop ({ value = Expr ({ loc with value = Fun { fn_name = "insert_select"; kind = (F (Typ t, [Typ t])); parameters = [e]; is_over_clause = false} }, name); pos = col_pos } :: acc) cols attrs
+        loop ({ value = Expr ({ loc with value = Fun { fn_name = "insert_select"; kind = (F (Typ t, [Typ t])); parameters = [e]; over = None} }, name); pos = col_pos } :: acc) cols attrs
       | _, [] | [], _ -> failwith "Select cardinality doesn't match Insert"
     in
     loop [] cols attrs

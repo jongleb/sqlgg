@@ -1115,6 +1115,21 @@ let test_add_with_window_function = [
   tt {| SELECT MAX(1) OVER() WHERE FALSE |} [attr' "" Int;] [];
   tt {| SELECT MAX(NULL) OVER() |} [attr' ~nullability:Nullable "" Any;] [];
 
+  (* A frame that never reaches the current row is empty on the rows at that edge *)
+  tt "CREATE TABLE win_frame (a INT, b INT)" [] [];
+  tt {| SELECT SUM(a) OVER (ORDER BY b) AS w FROM win_frame WHERE a IS NOT NULL |}
+     [attr' "w" Int] [];
+  tt {| SELECT SUM(a) OVER (ORDER BY b ROWS UNBOUNDED PRECEDING) AS w FROM win_frame WHERE a IS NOT NULL |}
+     [attr' "w" Int] [];
+  tt {| SELECT SUM(a) OVER (ORDER BY b ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS w FROM win_frame WHERE a IS NOT NULL |}
+     [attr' "w" Int] [];
+  tt {| SELECT SUM(a) OVER (ORDER BY b ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING) AS w FROM win_frame WHERE a IS NOT NULL |}
+     [attr' ~nullability:Nullable "w" Int] [];
+  tt {| SELECT SUM(a) OVER (ORDER BY b ROWS BETWEEN 1 FOLLOWING AND 2 FOLLOWING) AS w FROM win_frame WHERE a IS NOT NULL |}
+     [attr' ~nullability:Nullable "w" Int] [];
+  tt {| SELECT SUM(a) OVER (ORDER BY b ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS w FROM win_frame WHERE a IS NOT NULL |}
+     [attr' ~nullability:Nullable "w" Int] [];
+
   (* Same but with PARTITION BY and ORDER BY *)
   tt {| SELECT SUM(1) OVER(PARTITION BY COALESCE(NULL, 'a')) |} [attr' "" Int;] [];
   tt {| SELECT SUM(1) OVER(ORDER BY 1 + 1) |} [attr' "" Int;] [];
