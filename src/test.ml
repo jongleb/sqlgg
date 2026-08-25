@@ -259,7 +259,6 @@ let test = Type.[
      [attr' "name" Text;
       attr' "str" ~nullability:Nullable Text]
      [];
-  (* CASE without ELSE yields NULL, which WHERE rejects *)
   tt "SELECT name FROM test WHERE CASE WHEN id > 10 THEN name IS NOT NULL END"
      [attr' "name" Text]
      [];
@@ -272,15 +271,12 @@ let test = Type.[
      [attr' "name" ~nullability:Nullable Text;
       attr' "str" ~nullability:Nullable Text]
      [];
-  (* `op ALL` is vacuously TRUE on an empty subquery *)
   tt "SELECT name FROM test WHERE name > ALL (SELECT str FROM test)"
      [attr' "name" ~nullability:Nullable Text]
      [];
-  (* `op ANY` needs a row that matched *)
   tt "SELECT name FROM test WHERE name > ANY (SELECT str FROM test)"
      [attr' "name" Text]
      [];
-  (* NOT binds tighter than AND *)
   tt "SELECT name, str FROM test WHERE NOT (name IS NULL) AND NOT (str IS NULL)"
      [attr' "name" Text;
       attr' "str" Text]
@@ -368,7 +364,6 @@ let test_parsing = [
 *)
 let test_join_result_cols () =
   Tables.reset ();
-  (* a trailing "?" marks the column as nullable *)
   let ints = List.map (fun name ->
     if Stdlib.String.ends_with name ~suffix:"?" then
       attr' ~nullability:Type.Nullable (String.slice ~last:(-1) name) Type.Int
@@ -2654,7 +2649,6 @@ let test_cardinality =
   let z = [attr' ~nullability:Nullable "z" ~extra:[Constraint.make_composite_unique ["z"; "a"]] Int] in
   let a = [attr' ~nullability:Nullable "a" ~extra:[Constraint.make_composite_unique ["z"; "a"]] Int] in
   let b = [attr' ~nullability:Nullable "b" Int] in
-  (* same columns, refined to non-NULL *)
   let refined = List.map (fun a -> Sql.{ a with domain = Type.make_strict a.domain }) in
   [
   tt "CREATE TABLE test_cardinality (x INT PRIMARY KEY, y INT, z INT, a INT, b INT, UNIQUE(y), UNIQUE(z, a))" [] [];
@@ -2705,7 +2699,6 @@ let test_cardinality =
   tt "select z,a from test_cardinality where z = 1 and a = 1" (refined z @ refined a) [] ~kind:(Select `Zero_one);
   tt "select z,a from test_cardinality where z = 1 and not (a = 1)" (refined z @ refined a) [] ~kind:(Select `Nat);
   tt "select z,a from test_cardinality where not (z = 1 and a = 1)" (z @ a) [] ~kind:(Select `Nat);
-  (* NOT binds tighter than AND *)
   tt "select z,a from test_cardinality where not (z = 1) and a = 1" (refined z @ refined a) [] ~kind:(Select `Nat);
   tt "select z,a from test_cardinality where not not (a = 1)" (z @ refined a) [] ~kind:(Select `Nat);
   tt "select z,a from test_cardinality where z = 1 and a != 1" (refined z @ refined a) [] ~kind:(Select `Nat);
@@ -2772,7 +2765,6 @@ let test_nullability_narrowing =
   tt "SELECT a FROM narrow1 WHERE a IN (1, 2)" [s "a"] [];
   tt "SELECT a FROM narrow1 WHERE a NOT IN (1, 2)" [s "a"] [];
   tt "SELECT a FROM narrow1 WHERE a BETWEEN 1 AND 2" [s "a"] [];
-  (* only the head is strict: `1 IN (NULL, 1)` is TRUE, `3 BETWEEN NULL AND 2` is FALSE *)
   tt "SELECT a, b FROM narrow1 WHERE a IN (b, 1)" [s "a"; n "b"] [];
   tt "SELECT a, b FROM narrow1 WHERE a BETWEEN b AND 1" [s "a"; n "b"] [];
 
@@ -3086,11 +3078,6 @@ let test_type_laws = List.map qcheck [
 
 
 
-(* Checks the analysis against a separate three-valued interpreter of SQL: in every row
-   the condition keeps, every column the analysis called non-nullable must really be
-   non-NULL. The other direction is not checked, BETWEEN is deliberately under-refined.
-   Comp_num_cmp stands for <, >, <= and >= alike, so both sides here read it as <.
-   frequency and any_of stay put: their replacements postdate the opam lower bound. *)
 module Narrowing_soundness = struct
 
   let col = [| "a"; "b"; "c" |]

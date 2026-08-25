@@ -501,7 +501,6 @@ expr:
     | e1=expr NUM_DIV_OP e2=expr %prec PLUS { arith "num_div" Float e1 e2 }
     | e1=expr TEXT_DIST_OP e2=expr { arith "text_dist" Float e1 e2 }
     | e1=expr DIV e2=expr %prec PLUS { arith "div" Int e1 e2 }
-    (* one rule per connective so each carries its own precedence, see the MySQL table above *)
     | e1=expr op=and_op e2=expr %prec AND { fn "boolean_bin_op" (Logical op) [e1;e2] }
     | e1=expr op=xor_op e2=expr %prec XOR { fn "boolean_bin_op" (Logical op) [e1;e2] }
     | e1=expr op=or_op e2=expr %prec OR { fn "boolean_bin_op" (Logical op) [e1;e2] }
@@ -513,7 +512,6 @@ expr:
     | e1=expr JSON_UNQUOTE_EXTRACT_OP e2=expr { call "json_unquote" [call "json_extract" [e1;e2]] }
     | e=like_expr esc=escape?
       { Option.map_default (fun esc -> fn "like_escape" (Like { escaped = true }) [e;esc]) e esc }
-    (* distinct precedences, see the MySQL table above *)
     | EXCL e=expr %prec EXCL
       (* Some SQLs use ! as negation, some don't. play it safe and negate it,
          since negation is currently only used to verify cardinality constraints *)

@@ -184,7 +184,6 @@ let resolve_column_opt ~env col =
   | attr -> Some attr
   | exception (Schema.Error _ | Failure _) -> None
 
-(** the attribute an expression names, when it names one at all *)
 let as_column ~env = function
   | Sql.Column col -> resolve_column_opt ~env col.collated
   | _ -> None

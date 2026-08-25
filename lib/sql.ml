@@ -770,8 +770,6 @@ and column_kind =
 
 type columns = column list [@@deriving show]
 
-(* building expressions: the parser and the tests go through these rather than each
-   spelling out the record *)
 let fn ?(over=false) fn_name kind parameters = Fun { fn_name; kind; parameters; is_over_clause = over }
 let column ?collation collated = Column (make_collated ?collation ~collated ())
 
@@ -819,7 +817,6 @@ let signature kind arity =
   | Some (_, args) when not (Int.equal (List.length args) arity) -> None
   | Some _ | None as sign -> sign
 
-(** arguments where a NULL makes the whole call NULL *)
 let strict_args kind parameters =
   match kind with
   | Comparison (Comp_equal | Comp_num_cmp | Comp_text_cmp | Comp_num_eq)

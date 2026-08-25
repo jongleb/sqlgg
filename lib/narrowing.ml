@@ -1,9 +1,3 @@
-(** Which columns a satisfied condition proves non-NULL, in Kleene's three-valued logic.
-
-    Kept apart from [Syntax] so it can be exercised on its own: it needs nothing of the
-    evaluation environment beyond a way to resolve a column name, which callers pass as
-    [~resolve]. *)
-
 open ExtLib
 open Prelude
 open Sql
