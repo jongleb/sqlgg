@@ -3379,7 +3379,7 @@ let run () =
     "test_type_laws" >::: test_type_laws;
     "test_narrowing_soundness" >::: test_narrowing_soundness;
     "test_meta_laws" >::: test_meta_laws;
-  ]
+  ] @ Test_hmx.tests
   in
 let test_suite = "main" >::: tests in
   let results = run_test_tt test_suite in
