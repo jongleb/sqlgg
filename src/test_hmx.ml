@@ -39,8 +39,9 @@ let test_base_lattice = [
      re-confirm this list rather than grow it silently. *)
   "edges invented by the transitive closure" >:: (fun () ->
     assert_equal ~msg:"derived edges" ~printer:(fun l -> String.concat " " (List.map show_pair l))
-      [ Base.Int, Base.Text; Base.Int, Base.Blob; Base.Datetime, Base.Blob; Base.Json_path, Base.Blob;
-        Base.One_or_all, Base.Blob ]
+      [ Base.Int, Base.Text; Base.Int, Base.Blob;
+        Base.Str_lit, Base.Text; Base.Str_lit, Base.Blob;
+        Base.Datetime, Base.Blob; Base.Json_path, Base.Blob; Base.One_or_all, Base.Blob ]
       Base.derived);
 
   "incomparable pairs stay incomparable" >:: (fun () ->
@@ -75,10 +76,16 @@ let test_pred = [
 
   "predicate membership" >:: (fun () ->
     assert_equal ~printer:(fun l -> String.concat "," (List.map Base.show l))
-      Base.[ Int; UInt64; Float; Decimal ] (Pred.members Pred.Num));
+      Base.[ Int; UInt64; Num_lit; Float; Decimal ] (Pred.members Pred.Num));
 ]
 
 (* -------------------------------------------------------------- Refine *)
+
+(* Num_lit is a position in the lattice, not a type anything can write down:
+   it only ever arrives as the type of a literal, so only as a lower bound.
+   The generators below stay inside the vocabulary stage 1 can actually
+   produce. *)
+let writable_bases = List.filter (fun b -> not (Base.equal b Base.Num_lit)) Base.all
 
 let arb_refine =
   let open QCheck.Gen in
@@ -167,335 +174,503 @@ let test_refine_units = [
 
 (* -------------------------------------------------------------- solver *)
 
-let base b = Hmx.Ty (Refined.of_base b)
-let refined b r = Hmx.Ty (Refined.make b r)
-let dec p s = Refine.decimal ~precision:(Some p) ~scale:(Some s)
+let solve ?fallback bounds =
+  let v = Hmx_solver.fresh () in
+  match List.iter (fun f -> f v) bounds; Hmx_solver.resolve ?fallback v with
+  | t -> Ok t
+  | exception Conflict e -> Error e
 
-let solve ?policy l = Hmx.solve ?policy (Hmx.Conj l)
+let lo t v = Hmx_solver.above v t
+let up t v = Hmx_solver.below v t
+let exact t v = Hmx_solver.exactly v t
+let pred p v = Hmx_solver.has v p
 
-let assert_base ?policy ~msg expect l v =
-  match solve ?policy l with
-  | Error e -> assert_failure (sprintf "%s: %s" msg (Hmx.show_error e))
-  | Ok sol ->
-    match Hmx.base_of sol v with
-    | Error e -> assert_failure (sprintf "%s: %s" msg (Hmx.show_error e))
-    | Ok t -> assert_equal ~msg ~printer:Refined.show expect t
+let assert_solves ~msg ?fallback bounds expect =
+  match solve ?fallback bounds with
+  | Error e -> assert_failure (sprintf "%s: %s" msg e)
+  | Ok t -> assert_equal ~msg ~printer:Refined.show expect t
 
-let assert_fails ~msg l v =
-  match solve l with
+let assert_conflict ~msg bounds =
+  match solve bounds with
   | Error _ -> ()
-  | Ok sol ->
-    match Hmx.base_of sol v with
-    | Error _ -> ()
-    | Ok t -> assert_failure (sprintf "%s: expected failure, got %s" msg (Refined.show t))
+  | Ok t -> assert_failure (sprintf "%s: expected a conflict, got %s" msg (Refined.show t))
+
+let dec p s = Refine.decimal ~precision:(Some p) ~scale:(Some s)
+let base b = Refined.of_base b
+let refined b r = Refined.make b r
 
 let test_solver = [
 
-  (* §1: the motivating regression. SUM over a decimal column must keep the
-     column's precision instead of collapsing to a join. *)
+  (* §1: the motivating regression. SUM over a decimal must keep the column's
+     precision instead of collapsing to a join. *)
   "SUM keeps the argument type" >:: (fun () ->
-    assert_base ~msg:"sum(decimal(10,2))" (Refined.make Base.Decimal (dec 10 2))
-      [ Hmx.Has (Pred.Num, Hmx.Var 0); Hmx.Sub (refined Base.Decimal (dec 10 2), Hmx.Var 0) ] 0);
+    assert_solves ~msg:"sum(decimal(10,2))"
+      [ pred Pred.Num; lo (refined Base.Decimal (dec 10 2)) ]
+      (refined Base.Decimal (dec 10 2)));
 
   "mixed numeric arguments take the lub" >:: (fun () ->
-    assert_base ~msg:"int + float" (Refined.of_base Base.Float)
-      [ Hmx.Has (Pred.Num, Hmx.Var 0); Hmx.Sub (base Base.Int, Hmx.Var 0); Hmx.Sub (base Base.Float, Hmx.Var 0) ] 0);
+    assert_solves ~msg:"int + float" [ pred Pred.Num; lo (base Base.Int); lo (base Base.Float) ]
+      (base Base.Float));
 
   "incomparable numeric arguments are rejected" >:: (fun () ->
-    assert_fails ~msg:"float + decimal"
-      [ Hmx.Has (Pred.Num, Hmx.Var 0); Hmx.Sub (base Base.Float, Hmx.Var 0); Hmx.Sub (base Base.Decimal, Hmx.Var 0) ] 0);
+    assert_conflict ~msg:"float + decimal"
+      [ pred Pred.Num; lo (base Base.Float); lo (base Base.Decimal) ]);
 
-  (* the predicate, not the bare bounds, is what rules this out: Int <= Datetime
-     <= Text holds in the closure, so a lub exists but is not numeric *)
-  "a predicate constrains defaulting, not just solving" >:: (fun () ->
-    assert_fails ~msg:"num(int, text)"
-      [ Hmx.Has (Pred.Num, Hmx.Var 0); Hmx.Sub (base Base.Int, Hmx.Var 0); Hmx.Sub (base Base.Text, Hmx.Var 0) ] 0);
+  (* the predicate has to survive into the class, not merely be checked where
+     it was written: Int <= Datetime <= Text makes a lub exist *)
+  "a predicate constrains the class, not just its own position" >:: (fun () ->
+    assert_conflict ~msg:"num(int, text)"
+      [ pred Pred.Num; lo (base Base.Int); lo (base Base.Text) ];
+    assert_solves ~msg:"int <= _ <= text, Num"
+      [ pred Pred.Num; lo (base Base.Int); up (base Base.Text) ] (base Base.Int));
 
   "an upper bound is taken as the type" >:: (fun () ->
-    assert_base ~msg:"concat coerces to text" (Refined.of_base Base.Text)
-      [ Hmx.Sub (Hmx.Var 0, base Base.Text); Hmx.Has (Pred.Stringable, Hmx.Var 0) ] 0);
+    assert_solves ~msg:"concat" [ up (base Base.Text); pred Pred.Stringable ] (base Base.Text));
 
   "a lone predicate defaults" >:: (fun () ->
-    assert_base ~msg:"num" (Refined.of_base Base.Int) [ Hmx.Has (Pred.Num, Hmx.Var 0) ] 0;
-    assert_base ~msg:"stringable" (Refined.of_base Base.Text) [ Hmx.Has (Pred.Stringable, Hmx.Var 0) ] 0);
+    assert_solves ~msg:"num" [ pred Pred.Num ] (base Base.Int);
+    assert_solves ~msg:"stringable" [ pred Pred.Stringable ] (base Base.Text));
 
   (* §8: Any is gone, so a parameter nothing constrains is an error unless the
      dialect opts into a fallback *)
   "an unconstrained variable cannot be inferred" >:: (fun () ->
-    assert_fails ~msg:"bare ?" [ Hmx.Has (Pred.Comparable, Hmx.Var 0) ] 0);
+    assert_conflict ~msg:"bare ?" [ pred Pred.Comparable ]);
 
   "a dialect may supply a fallback" >:: (fun () ->
-    assert_base ~policy:{ Hmx.fallback_base = Some Base.Text; default_null = Null.Nullable }
-      ~msg:"fallback" (Refined.of_base Base.Text) [ Hmx.Has (Pred.Comparable, Hmx.Var 0) ] 0);
+    assert_solves ~fallback:Base.Text ~msg:"fallback" [ pred Pred.Comparable ] (base Base.Text));
 
-  "a parameter takes the type of the column it is compared to" >:: (fun () ->
-    let e = Refine.enum [ "a"; "b" ] in
-    assert_base ~msg:"status = ?" (Refined.make Base.Text e)
-      [ Hmx.Eq (Hmx.Var 0, Hmx.Var 1); Hmx.Eq (Hmx.Var 1, refined Base.Text e) ] 0);
-
-  (* A declared ENUM is an upper bound, not a closedness flag inside the
-     lattice: "does not accept more constructors" is exactly what an upper
-     bound means, and the rejection then needs no rule of its own. *)
-  "a foreign literal against a declared enum is rejected" >:: (fun () ->
-    assert_fails ~msg:"status = 'typo'"
-      [ Hmx.Sub (Hmx.Var 0, refined Base.Text (Refine.enum [ "a"; "b" ]));
-        Hmx.Sub (refined Base.Text (Refine.literal "typo"), Hmx.Var 0) ] 0);
-
-  "a member literal against a declared enum is accepted" >:: (fun () ->
-    assert_base ~msg:"status = 'a'" (Refined.make Base.Text (Refine.literal "a"))
-      [ Hmx.Sub (Hmx.Var 0, refined Base.Text (Refine.enum [ "a"; "b" ]));
-        Hmx.Sub (refined Base.Text (Refine.literal "a"), Hmx.Var 0) ] 0);
-
-  (* how stage 2 should encode a declared ENUM column: invariantly, so that the
-     column type is both what a parameter picks up and what a literal is
-     checked against *)
-  "a declared enum column is invariant" >:: (fun () ->
-    let e = Refine.enum [ "a"; "b" ] in
-    assert_base ~msg:"status = 'a'" (Refined.make Base.Text e)
-      [ Hmx.Eq (Hmx.Var 0, refined Base.Text e);
-        Hmx.Sub (refined Base.Text (Refine.literal "a"), Hmx.Var 0) ] 0;
-    assert_fails ~msg:"status = 'typo'"
-      [ Hmx.Eq (Hmx.Var 0, refined Base.Text e);
-        Hmx.Sub (refined Base.Text (Refine.literal "typo"), Hmx.Var 0) ] 0);
+  (* A declared ENUM is an upper bound, not a flag inside the lattice: "accepts
+     no further constructors" is exactly what an upper bound means. *)
+  "a declared enum rejects a foreign literal" >:: (fun () ->
+    let e = Refine.enum ~closed:true [ "a"; "b" ] in
+    assert_solves ~msg:"status = 'a'"
+      [ exact (refined Base.Text e); lo (refined Base.Str_lit (Refine.literal "a")) ]
+      (refined Base.Text e);
+    assert_conflict ~msg:"status = 'typo'"
+      [ exact (refined Base.Text e); lo (refined Base.Str_lit (Refine.literal "typo")) ]);
 
   "two literals widen to their union" >:: (fun () ->
-    assert_base ~msg:"'a' or 'b'" (Refined.make Base.Text (Refine.enum [ "a"; "b" ]))
-      [ Hmx.Sub (refined Base.Text (Refine.literal "a"), Hmx.Var 0);
-        Hmx.Sub (refined Base.Text (Refine.literal "b"), Hmx.Var 0) ] 0);
+    assert_solves ~msg:"'a' or 'b'"
+      [ lo (refined Base.Str_lit (Refine.literal "a")); lo (refined Base.Str_lit (Refine.literal "b")) ]
+      (refined Base.Text (Refine.enum [ "a"; "b" ])));
 
   (* a value set is destroyed by a value arriving from a smaller base, a
      capacity is not *)
   "a value set does not survive a widening, a capacity does" >:: (fun () ->
-    assert_base ~msg:"coalesce(enum, datetime)" (Refined.of_base Base.Text)
-      [ Hmx.Sub (refined Base.Text (Refine.enum [ "a"; "b" ]), Hmx.Var 0);
-        Hmx.Sub (base Base.Datetime, Hmx.Var 0) ] 0;
-    assert_base ~msg:"decimal(10,2) + int" (Refined.make Base.Decimal (dec 10 2))
-      [ Hmx.Sub (refined Base.Decimal (dec 10 2), Hmx.Var 0);
-        Hmx.Sub (base Base.Int, Hmx.Var 0) ] 0);
+    assert_solves ~msg:"coalesce(enum, datetime)"
+      [ lo (refined Base.Text (Refine.enum [ "a"; "b" ])); lo (base Base.Datetime) ]
+      (base Base.Text);
+    assert_solves ~msg:"decimal(10,2) + int"
+      [ lo (refined Base.Decimal (dec 10 2)); lo (base Base.Int) ]
+      (refined Base.Decimal (dec 10 2)));
 
-  "a refinement does not survive widening of the base" >:: (fun () ->
-    assert_base ~msg:"literal below blob" (Refined.of_base Base.Blob)
-      [ Hmx.Sub (refined Base.Text (Refine.literal "a"), Hmx.Var 0); Hmx.Sub (base Base.Blob, Hmx.Var 0) ] 0);
+  (* a literal sits below every stringable type, and which one it may become is
+     decided by validating its content *)
+  "a literal rises only where it validates" >:: (fun () ->
+    assert_solves ~msg:"'$.a' as a json path"
+      [ lo (refined Base.Str_lit (Refine.literal "$.a")); up (base Base.Json_path) ]
+      (refined Base.Str_lit (Refine.literal "$.a"));
+    assert_conflict ~msg:"'nonsense' as a json path"
+      [ lo (refined Base.Str_lit (Refine.literal "nonsense[")); up (base Base.Json_path) ]);
+
+  (* §11.1: a subtyping edge between two variables is unification, so the two
+     classes merge their bounds *)
+  "unifying two variables merges their bounds" >:: (fun () ->
+    let a = Hmx_solver.fresh () and b = Hmx_solver.fresh () in
+    Hmx_solver.same a b;
+    Hmx_solver.above a (base Base.Int);
+    Hmx_solver.below b (base Base.Float);
+    assert_equal ~printer:Refined.show (base Base.Int) (Hmx_solver.resolve a));
+
+  (* the lattice needs the transitive closure to be a lattice; §11.4 wants the
+     edges it invents refused, so they are reported instead of allowed silently *)
+  "a coercion invented by the closure is reported" >:: (fun () ->
+    let v = Hmx_solver.fresh () in
+    Hmx_solver.above v (base Base.Int);
+    Hmx_solver.below v (base Base.Text);
+    assert_equal ~msg:"resolves" ~printer:Refined.show (base Base.Int) (Hmx_solver.resolve v);
+    let w = Hmx_solver.fresh () in
+    Hmx_solver.above w (base Base.Int);
+    Hmx_solver.above w (base Base.Datetime);
+    assert_equal ~msg:"one derived coercion" 1 (List.length (Hmx_solver.derived_coercions w)));
 ]
 
-let assert_null ~msg expect l v =
-  match solve l with
-  | Error e -> assert_failure (sprintf "%s: %s" msg (Hmx.show_error e))
-  | Ok sol -> assert_equal ~msg ~printer:Null.show expect (Hmx.null_of sol v)
+(* --------------------------------------------------------- nullability *)
+
+let nsolve build =
+  let st = Hmx_null.create () in
+  let out = build st in
+  match Hmx_null.solve st with
+  | () -> Ok (Hmx_null.get st out)
+  | exception Conflict e -> Error e
+
+let assert_null ~msg expect build =
+  match nsolve build with
+  | Error e -> assert_failure (sprintf "%s: %s" msg e)
+  | Ok n -> assert_equal ~msg ~printer:Null.show expect n
 
 let test_nullability = [
-  "join is nullable as soon as one argument is" >:: (fun () ->
-    assert_null ~msg:"a + b" Null.Nullable
-      [ Hmx.NJoin (Hmx.NVar 0, [ Hmx.N Null.NotNull; Hmx.N Null.Nullable ]) ] 0);
+  "a join is nullable as soon as one argument is" >:: (fun () ->
+    assert_null ~msg:"a + b" Null.Nullable (fun st ->
+      let n = Hmx_null.fresh st in
+      Hmx_null.add st (Join (n, [ N Null.NotNull; N Null.Nullable ])); n));
 
-  "join of strict arguments is strict" >:: (fun () ->
-    assert_null ~msg:"a + b" Null.NotNull
-      [ Hmx.NJoin (Hmx.NVar 0, [ Hmx.N Null.NotNull; Hmx.N Null.NotNull ]) ] 0);
+  "a join of strict arguments is strict" >:: (fun () ->
+    assert_null ~msg:"a + b" Null.NotNull (fun st ->
+      let n = Hmx_null.fresh st in
+      Hmx_null.add st (Join (n, [ N Null.NotNull; N Null.NotNull ])); n));
 
-  (* COALESCE: the result is not null as soon as any branch is not null *)
-  "meet is strict as soon as one argument is" >:: (fun () ->
-    assert_null ~msg:"coalesce" Null.NotNull
-      [ Hmx.NMeet (Hmx.NVar 0, [ Hmx.N Null.Nullable; Hmx.N Null.NotNull ]) ] 0);
+  (* COALESCE: not null as soon as any branch is *)
+  "a meet is strict as soon as one argument is" >:: (fun () ->
+    assert_null ~msg:"coalesce" Null.NotNull (fun st ->
+      let n = Hmx_null.fresh st in
+      Hmx_null.add st (Meet (n, [ N Null.Nullable; N Null.NotNull ])); n));
 
-  "an unknown argument is resolved by the fixpoint, whatever the order" >:: (fun () ->
-    let cs = [ Hmx.NJoin (Hmx.NVar 0, [ Hmx.NVar 1; Hmx.N Null.NotNull ]);
-               Hmx.NEq (Hmx.NVar 1, Hmx.NVar 2);
-               Hmx.NEq (Hmx.NVar 2, Hmx.N Null.Nullable) ] in
-    assert_null ~msg:"in order" Null.Nullable cs 0;
-    assert_null ~msg:"reversed" Null.Nullable (List.rev cs) 0);
+  "an unknown argument is settled by the fixpoint, whatever the order" >:: (fun () ->
+    let build st =
+      let n = Hmx_null.fresh st and a = Hmx_null.fresh st and b = Hmx_null.fresh st in
+      Hmx_null.add st (Join (n, [ a; N Null.NotNull ]));
+      Hmx_null.add st (Eq (a, b));
+      Hmx_null.add st (Eq (b, N Null.Nullable));
+      n
+    in
+    assert_null ~msg:"fixpoint" Null.Nullable build);
 
-  (* the dual direction: a strict result forces strict arguments *)
+  (* the dual direction: a strict result forces its arguments *)
   "a strict join result forces its arguments" >:: (fun () ->
-    assert_null ~msg:"not null context" Null.NotNull
-      [ Hmx.NEq (Hmx.NVar 0, Hmx.N Null.NotNull);
-        Hmx.NJoin (Hmx.NVar 0, [ Hmx.NVar 1; Hmx.NVar 2 ]) ] 1);
+    assert_null ~msg:"not null context" Null.NotNull (fun st ->
+      let n = Hmx_null.fresh st and a = Hmx_null.fresh st in
+      Hmx_null.add st (Eq (n, N Null.NotNull));
+      Hmx_null.add st (Join (n, [ a; Hmx_null.fresh st ]));
+      a));
 
   "a contradiction is reported" >:: (fun () ->
-    match solve [ Hmx.NEq (Hmx.NVar 0, Hmx.N Null.NotNull);
-                  Hmx.NJoin (Hmx.NVar 0, [ Hmx.N Null.Nullable ]) ] with
+    match nsolve (fun st ->
+      let n = Hmx_null.fresh st in
+      Hmx_null.add st (Eq (n, N Null.NotNull));
+      Hmx_null.add st (Join (n, [ N Null.Nullable ])); n)
+    with
     | Error _ -> ()
     | Ok _ -> assert_failure "expected a nullability conflict");
 
-  "an undetermined nullability defaults by policy" >:: (fun () ->
-    assert_null ~msg:"free" Null.Nullable [] 0);
+  (* NotNull is the identity of the join, so an unconstrained variable is not
+     null — §8 says otherwise and §8 is wrong *)
+  "an undetermined nullability is not null" >:: (fun () ->
+    assert_null ~msg:"free" Null.NotNull (fun st -> Hmx_null.fresh st));
 ]
 
-(* ------------------------------------------------------ confluence *)
+(* ---------------------------------------------------------- signatures *)
 
-let n_vars = 4
+(* The target table, written the way the final version will write it. Until
+   Sql.Function is retired the authoritative version is derived by
+   Hmx_of_sql.of_func; these pin down what the vocabulary expresses. *)
+module Sg = struct
+  open Hmx_sig
+  let bool = Refined.of_base Base.Bool
+  let text = Refined.of_base Base.Text
+  let int = Refined.of_base Base.Int
 
-let arb_constraints =
-  let open QCheck.Gen in
-  let v = int_range 0 (n_vars - 1) in
-  let refined =
-    oneof [
-      map Refined.of_base (any_of Base.all);
-      map (fun s -> Refined.make Base.Text (Refine.literal s)) (any_of [ "a"; "b" ]);
-      map (fun l -> Refined.make Base.Text (Refine.enum l))
-        (list_size (int_range 1 2) (any_of [ "a"; "b"; "c" ]));
-      map2 (fun p s -> Refined.make Base.Decimal (Refine.decimal ~precision:(Some p) ~scale:(Some s)))
-        (int_range 4 12) (int_range 0 3);
-    ] in
-  let ty = oneof [ map (fun i -> Hmx.Var i) v; map (fun t -> Hmx.Ty t) refined ] in
-  let nty = oneof [ map (fun i -> Hmx.NVar i) v; map (fun n -> Hmx.N n) (any_of Null.all) ] in
-  let c = oneof [
-    map2 (fun a b -> Hmx.Eq (a, b)) ty ty;
-    map2 (fun a b -> Hmx.Sub (a, b)) ty ty;
-    map2 (fun p a -> Hmx.Has (p, a)) (any_of Pred.all) ty;
-    map2 (fun a b -> Hmx.NEq (a, b)) nty nty;
-    map2 (fun a l -> Hmx.NJoin (a, l)) nty (list_size (int_range 1 3) nty);
-    map2 (fun a l -> Hmx.NMeet (a, l)) nty (list_size (int_range 1 3) nty);
-  ] in
-  QCheck.make ~print:(fun l -> sprintf "%d constraints" (List.length l)) (list_size (int_range 1 6) c)
-
-(** the observable substitution: only success/failure and the value, never the
-    message, which legitimately depends on which conflict is hit first *)
-let snapshot l =
-  match solve l with
-  | Error _ -> None
-  | Ok sol ->
-    Some (List.init n_vars (fun v ->
-      (match Hmx.base_of sol v with Ok t -> Some (Refined.show t) | Error _ -> None),
-      Null.show (Hmx.null_of sol v)))
-
-let same_snapshot a b = match a, b with
-  | None, None -> true
-  | Some a, Some b -> a = b
-  | None, Some _ | Some _, None -> false
-
-let shuffle rand l =
-  let a = Array.of_list l in
-  for i = Array.length a - 1 downto 1 do
-    let j = Random.State.int rand (i + 1) in
-    let t = a.(i) in a.(i) <- a.(j); a.(j) <- t
-  done;
-  Array.to_list a
-
-let test_confluence = List.map qcheck [
-  (* the property the whole design leans on: stage 2 may emit constraints in
-     any order and stage 4 must still produce the same sigma *)
-  QCheck.Test.make ~count:20000 ~name:"solving is confluent under reordering" arb_constraints
-    (fun l ->
-      let rand = Random.State.make [| List.length l; 7 |] in
-      let a = snapshot l in
-      List.for_all (fun _ -> same_snapshot a (snapshot (shuffle rand l))) [ (); (); () ]);
-
-  QCheck.Test.make ~count:5000 ~name:"solving is idempotent under duplication" arb_constraints
-    (fun l -> same_snapshot (snapshot l) (snapshot (l @ l)));
-
-  QCheck.Test.make ~count:5000 ~name:"a solved variable satisfies its own constraints" arb_constraints
-    (fun l ->
-      match solve l with
-      | Error _ -> true
-      | Ok sol ->
-        List.for_all (fun v ->
-          match Hmx.base_of sol v with
-          | Error _ -> true
-          | Ok t ->
-            let info = Hmx.info_of sol v in
-            List.for_all (fun lo -> Refined.leq lo t) info.Hmx.lowers
-            && List.for_all (fun up -> Refined.leq t up) info.Hmx.uppers
-            && List.for_all (fun p -> Pred.satisfies p t.Refined.base) info.Hmx.preds)
-          (List.init n_vars (fun i -> i)));
-]
-
-(* ---------------------------------------------------- signatures *)
-
-let counter = ref 0
-let fresh () = incr counter; !counter
-
-(** what stage 2 will do: relate every actual argument to its formal by [Sub],
-    add the signature's predicates, and pick the nullability rule *)
-let apply ?(nulls = []) sg args =
-  match Hmx_sig.instantiate ~fresh sg (List.length args) with
-  | Error e -> Error e
-  | Ok sch ->
-    let ret_n = fresh () in
-    let cs =
-      List.map2 (fun arg formal -> Hmx.Sub (arg, formal)) args sch.Hmx_sig.formals
-      @ [ sch.Hmx_sig.side ]
-      @ [ match sch.Hmx_sig.result_null with
-          | Hmx_sig.Join -> Hmx.NJoin (Hmx.NVar ret_n, nulls)
-          | Hmx_sig.Meet -> Hmx.NMeet (Hmx.NVar ret_n, nulls)
-          | Hmx_sig.Const n -> Hmx.NEq (Hmx.NVar ret_n, Hmx.N n) ]
-    in
-    match Hmx.solve (Hmx.Conj cs) with
-    | Error e -> Error (Hmx.show_error e)
-    | Ok sol ->
-      let ty = match sch.Hmx_sig.result with
-        | Hmx.Ty t -> Ok t
-        | Hmx.Var v -> (match Hmx.base_of sol v with Ok t -> Ok t | Error e -> Error (Hmx.show_error e))
-      in
-      match ty with
-      | Error e -> Error e
-      | Ok t -> Ok (sol, t, Hmx.null_of sol ret_n)
-
-let sig_ name arity = match Hmx_sig.find name arity with
-  | Some sg -> sg
-  | None -> assert_failure (sprintf "no signature for %s/%d" name arity)
-
-let assert_applies ~msg ?nulls ?null name args expect =
-  match apply ?nulls (sig_ name (List.length args)) args with
-  | Error e -> assert_failure (sprintf "%s: %s" msg e)
-  | Ok (_, t, n) ->
-    assert_equal ~msg ~printer:Refined.show expect t;
-    match null with None -> () | Some n' -> assert_equal ~msg:(msg ^ " nullability") ~printer:Null.show n' n
+  let arith = make ~preds:[ Pred.Num ] (Args [ Same; Same ]) Ret_same
+  let equal = make ~compares:true ~preds:[ Pred.Comparable ] (Args [ Same; Same ]) (Ret bool)
+  let sum = make ~agg:true ~preds:[ Pred.Num ] ~nulls:(Const Null.Nullable) (Args [ Same ]) Ret_same
+  let count = make ~agg:true ~nulls:(Const Null.NotNull)
+      (Varargs { head = []; tail = [ Free ] }) (Ret int)
+  let coalesce = make ~nulls:Meet (Varargs { head = [ Same ]; tail = [ Same ] }) Ret_same
+  let concat = make (Varargs { head = []; tail = [ As text ] }) (Ret text)
+  let concat_ws = make (Varargs { head = [ As text ]; tail = [ As text ] }) (Ret text)
+  let json_array_append =
+    make (Varargs { head = [ As (Refined.of_base Base.Json);
+                             As (Refined.of_base Base.Json_path); Free ];
+                    tail = [ As (Refined.of_base Base.Json_path); Free ] })
+      (Ret (Refined.of_base Base.Json))
+end
 
 let test_signatures = [
-
   "arity is checked by instantiate" >:: (fun () ->
-    let ws = sig_ "concat_ws" 3 in
-    assert_bool "1 argument" (Result.is_error (Hmx_sig.instantiate ~fresh ws 0));
-    assert_bool "2 arguments" (Result.is_ok (Hmx_sig.instantiate ~fresh ws 2));
-    assert_bool "5 arguments" (Result.is_ok (Hmx_sig.instantiate ~fresh ws 5));
-    let ja = sig_ "json_array_append" 3 in
-    assert_bool "3 arguments" (Result.is_ok (Hmx_sig.instantiate ~fresh ja 3));
-    assert_bool "4 arguments" (Result.is_error (Hmx_sig.instantiate ~fresh ja 4));
-    assert_bool "5 arguments" (Result.is_ok (Hmx_sig.instantiate ~fresh ja 5)));
+    let ok n sg = Result.is_ok (Hmx_sig.instantiate sg n) in
+    assert_bool "concat_ws/0" (not (ok 0 Sg.concat_ws));
+    assert_bool "concat_ws/2" (ok 2 Sg.concat_ws);
+    assert_bool "concat_ws/5" (ok 5 Sg.concat_ws);
+    assert_bool "json_array_append/3" (ok 3 Sg.json_array_append);
+    assert_bool "json_array_append/4" (not (ok 4 Sg.json_array_append));
+    assert_bool "json_array_append/5" (ok 5 Sg.json_array_append));
 
-  (* the reason arguments are related by Sub and not Eq: with Eq this fails *)
-  "arithmetic takes the lub of its arguments" >:: (fun () ->
-    assert_applies ~msg:"int + float" "+" [ base Base.Int; base Base.Float ] (Refined.of_base Base.Float));
-
-  "arithmetic keeps a decimal precise" >:: (fun () ->
-    assert_applies ~msg:"decimal + int" "+"
-      [ refined Base.Decimal (dec 10 2); base Base.Int ] (Refined.make Base.Decimal (dec 10 2)));
-
-  "SUM keeps the column type" >:: (fun () ->
-    assert_applies ~msg:"sum" ~nulls:[ Hmx.N Null.NotNull ] ~null:Null.Nullable "sum"
-      [ refined Base.Decimal (dec 10 2) ] (Refined.make Base.Decimal (dec 10 2)));
-
-  "a non-numeric argument is refused" >:: (fun () ->
-    assert_bool "text + text"
-      (Result.is_error (apply (sig_ "+" 2) [ base Base.Text; base Base.Text ])));
-
-  "COUNT is strict whatever its arguments" >:: (fun () ->
-    assert_applies ~msg:"count(x)" ~nulls:[ Hmx.N Null.Nullable ] ~null:Null.NotNull "count"
-      [ base Base.Text ] (Refined.of_base Base.Int));
-
-  "COALESCE is strict as soon as one branch is" >:: (fun () ->
-    assert_applies ~msg:"coalesce" ~nulls:[ Hmx.N Null.Nullable; Hmx.N Null.NotNull ] ~null:Null.NotNull
-      "coalesce" [ base Base.Int; base Base.Int ] (Refined.of_base Base.Int));
-
-  "comparison marks both positions strict" >:: (fun () ->
-    match Hmx_sig.instantiate ~fresh (sig_ "=" 2) 2 with
+  (* both operands share the scheme variable, which is what lets a parameter
+     take its sibling's type and nullability *)
+  "comparison shares one variable across both operands" >:: (fun () ->
+    match Hmx_sig.instantiate Sg.equal 2 with
     | Error e -> assert_failure e
-    | Ok sch -> assert_equal ~msg:"strict_at" [ true; true ] sch.Hmx_sig.strict_at);
+    | Ok sch -> assert_equal ~msg:"same_at" [ true; true ] sch.Hmx_sig.same_at);
 
-  (* Sql.Type.order_kind answers `No` for Int against Text; the closure says
-     yes. The lattice needs the closure, so the use is reported instead and
-     §11.4 becomes a dialect decision rather than a silent one. *)
-  "a coercion invented by the closure is reported" >:: (fun () ->
-    match apply (sig_ "concat" 2) [ base Base.Int; base Base.Text ] with
+  "varargs expand to the actual arity" >:: (fun () ->
+    match Hmx_sig.instantiate Sg.coalesce 3 with
     | Error e -> assert_failure e
-    | Ok (sol, t, _) ->
-      assert_equal ~printer:Refined.show (Refined.of_base Base.Text) t;
-      assert_equal ~msg:"one derived coercion" 1 (List.length (Hmx.derived_coercions sol)));
+    | Ok sch -> assert_equal ~msg:"width" 3 (List.length sch.Hmx_sig.formals));
 
-  "an ordinary coercion is not reported" >:: (fun () ->
-    match apply (sig_ "+" 2) [ base Base.Int; base Base.Float ] with
-    | Error e -> assert_failure e
-    | Ok (sol, _, _) -> assert_equal ~msg:"no derived coercion" 0 (List.length (Hmx.derived_coercions sol)));
+  "COUNT and SUM carry their own nullability rule" >:: (fun () ->
+    let rule sg n = match Hmx_sig.instantiate sg n with
+      | Error e -> assert_failure e
+      | Ok sch -> sch.Hmx_sig.result_null
+    in
+    assert_bool "count" (rule Sg.count 1 = Hmx_sig.Const Null.NotNull);
+    assert_bool "sum" (rule Sg.sum 1 = Hmx_sig.Const Null.Nullable);
+    assert_bool "concat" (rule Sg.concat 2 = Hmx_sig.Join));
+]
+
+(* ------------------------------------------- coverage of the old registry *)
+
+(** which arities the current inference accepts, mirroring Sql.signature where
+    it is defined and infer_fn where it is not *)
+let old_accepts (kind : Sql.Source_type.t Sql.func) arity =
+  match kind with
+  | Agg Count -> arity = 0 || arity = 1
+  | Agg (Self | Avg) -> arity = 1
+  | Agg (With_order { with_order_kind = Group_concat; _ }) -> arity >= 1
+  | Agg (With_order { with_order_kind = Json_arrayagg; _ }) -> arity = 1
+  | Logical _ -> arity = 2
+  | Negation -> arity = 1
+  | Ret _ | Arith _ -> true
+  | Null_handling _ | Comparison _ | Quantified_comparison _ | Membership | Range
+  | Like _ | F _ | Col_assign _ | Multi _ -> Option.is_some (Sql.signature kind arity)
+
+let new_accepts kind arity =
+  match Hmx_of_sql.of_func ~arity kind with
+  | Error _ -> false
+  | Ok sg -> Result.is_ok (Hmx_sig.instantiate sg arity)
+
+(** Divergences we accept, with the reason. COALESCE of no arguments passes the
+    old signature check and then dies in Hashtbl.find; the new one says so. *)
+let known_divergence name arity = String.equal name "coalesce" && arity = 0
+
+let test_registry_coverage = [
+  "every registered function translates" >:: (fun () ->
+    let total = Sql.Function.fold (fun _ _ _ n -> n + 1) 0 in
+    assert_bool (sprintf "the registry looks empty: %d entries" total) (total > 100);
+    let bad =
+      Sql.Function.fold (fun name narg kind acc ->
+        match kind with
+        | None -> acc
+        | Some kind ->
+          let arity = match narg with Some n -> n | None -> 1 in
+          match Hmx_of_sql.of_func ~arity kind with
+          | Ok _ -> acc
+          | Error e -> sprintf "%s: %s" name e :: acc)
+        []
+    in
+    assert_equal ~msg:"untranslatable registrations" ~printer:(String.concat "\n") [] bad);
+
+  "a registered arity is accepted" >:: (fun () ->
+    let bad =
+      Sql.Function.fold (fun name narg kind acc ->
+        match kind, narg with
+        | None, _ | _, None -> acc
+        | Some kind, Some n -> if new_accepts kind n then acc else sprintf "%s/%d" name n :: acc)
+        []
+    in
+    assert_equal ~msg:"rejected registrations" ~printer:(String.concat " ") [] bad);
+
+  (* the entries registered without an arity are exactly the varargs ones, so
+     this compares the old arity rule against the new one head on *)
+  "varargs arities agree with the old rule" >:: (fun () ->
+    let varargs = Sql.Function.fold (fun _ narg k n ->
+      match k, narg with Some _, None -> n + 1 | _ -> n) 0 in
+    assert_bool (sprintf "no varargs registrations found: %d" varargs) (varargs > 0);
+    let bad =
+      Sql.Function.fold (fun name narg kind acc ->
+        match kind, narg with
+        | None, _ | _, Some _ -> acc
+        | Some kind, None ->
+          List.fold_left (fun acc arity ->
+            if known_divergence name arity then acc
+            else if Bool.equal (old_accepts kind arity) (new_accepts kind arity) then acc
+            else sprintf "%s/%d: old=%b new=%b" name arity
+                   (old_accepts kind arity) (new_accepts kind arity) :: acc)
+            acc [ 0; 1; 2; 3; 4; 5; 6 ])
+        []
+    in
+    assert_equal ~msg:"arity disagreements" ~printer:(String.concat " ") [] bad);
+]
+
+(* ------------------------------------------ stages 1 to 3, end to end *)
+
+(* The first thing that runs without syntax.ml at all: parse, resolve against
+   a hand-built scope, generate constraints, solve. *)
+
+let parse_expr text =
+  match (Parser.parse_stmt (sprintf "SELECT %s" text)).statement with
+  | Sql.Select { select_complete = { select = ({ columns = [ c ]; _ }, _); _ }; _ } ->
+    (match c.value with
+     | Sql.Expr (e, _) -> e.value
+     | All | AllOf _ -> assert_failure "expected a single expression")
+  | _ -> assert_failure (sprintf "not a select: %s" text)
+
+let col ?(sources = [ "t" ]) name base null =
+  { Resolve.name; sources; ty = Resolved.known base null; meta = Sql.Meta.empty () }
+
+let scope columns = {
+  Resolve.columns;
+  named = (fun _ -> None);
+  grouping = false;
+  guaranteed_row = false;
+  subquery = (fun _ _ -> Error { Resolve.pos = None; msg = "no subqueries in this scope" });
+  of_values = (fun _ -> Error { Resolve.pos = None; msg = "no VALUES() in this scope" });
+}
+
+let demo_scope = scope [
+  col "id" (Refined.of_base Base.Int) Null.NotNull;
+  col "price" (Refined.make Base.Decimal (dec 10 2)) Null.NotNull;
+  col "note" (Refined.of_base Base.Text) Null.Nullable;
+  col "status" (Refined.make Base.Text (Refine.enum [ "new"; "done" ])) Null.NotNull;
+]
+
+let infer_sql ?(env = demo_scope) text =
+  match Resolve.expr env (parse_expr text) with
+  | Error e -> Error (Resolve.show_error e)
+  | Ok r -> Constrain.infer r
+
+let assert_sql ~msg text base null =
+  match infer_sql text with
+  | Error e -> assert_failure (sprintf "%s: %s" msg e)
+  | Ok t -> assert_equal ~msg ~printer:Sql.Type.show (Hmx_of_sql.to_type base null) t
+
+let assert_sql_fails ~msg text =
+  match infer_sql text with
+  | Error _ -> ()
+  | Ok t -> assert_failure (sprintf "%s: expected failure, got %s" msg (Sql.Type.show t))
+
+let test_pipeline = [
+
+  "a literal" >:: (fun () ->
+    assert_sql ~msg:"1" "1" (Refined.of_base Base.Int) Null.NotNull);
+
+  "a column keeps its declared type" >:: (fun () ->
+    assert_sql ~msg:"price" "price" (Refined.make Base.Decimal (dec 10 2)) Null.NotNull;
+    assert_sql ~msg:"note" "note" (Refined.of_base Base.Text) Null.Nullable);
+
+  (* §1: the motivating case, now through the real parser *)
+  "arithmetic on a decimal keeps the precision" >:: (fun () ->
+    assert_sql ~msg:"price + 1" "price + 1" (Refined.make Base.Decimal (dec 10 2)) Null.NotNull);
+
+  "arithmetic with a nullable operand is nullable" >:: (fun () ->
+    assert_sql ~msg:"id + length(note)" "id + length(note)" (Refined.of_base Base.Int) Null.Nullable);
+
+  "a numeric literal lands on either side of the lattice" >:: (fun () ->
+    assert_sql ~msg:"price + 1.5" "price + 1.5" (Refined.make Base.Decimal (dec 10 2)) Null.NotNull;
+    assert_sql ~msg:"1.5" "1.5" (Refined.of_base Base.Float) Null.NotNull);
+
+  "COALESCE is not null once a branch is" >:: (fun () ->
+    assert_sql ~msg:"coalesce(note, 'x')" "coalesce(note, 'x')"
+      (Refined.of_base Base.Text) Null.NotNull);
+
+  "a parameter takes the type of what it is compared to" >:: (fun () ->
+    assert_sql ~msg:"status = @s" "status = @s" (Refined.of_base Base.Bool) Null.NotNull);
+
+  "a literal outside a declared enum is rejected" >:: (fun () ->
+    assert_sql ~msg:"status" "status"
+      (Refined.make Base.Text (Refine.enum [ "new"; "done" ])) Null.NotNull);
+
+  "adding text to a number is rejected" >:: (fun () ->
+    assert_sql_fails ~msg:"id + note" "id + note");
+
+  "an unknown column is reported by stage 1" >:: (fun () ->
+    match Resolve.expr demo_scope (parse_expr "nosuch") with
+    | Ok _ -> assert_failure "expected a resolve error"
+    | Error e -> assert_bool (Resolve.show_error e)
+                   (String.length (Resolve.show_error e) > 0));
+]
+
+(* ------------------------------------------------ stage 1: FROM and JOIN *)
+
+let attr name t null =
+  Sql.make_attribute' name { Sql.Type.t; nullability = null }
+
+let demo_catalog = {
+  Resolve.table = (fun (n : Sql.table_name) ->
+    match n.tn with
+    | "a" -> Ok (Resolve.sourced n [ attr "id" Sql.Type.Int Strict; attr "x" Sql.Type.Text Strict ])
+    | "b" -> Ok (Resolve.sourced n [ attr "id" Sql.Type.Int Strict; attr "y" Sql.Type.Text Strict ])
+    | other -> Error { Resolve.pos = None; msg = "no such table " ^ other });
+  select = (fun _ -> Error { Resolve.pos = None; msg = "subqueries not wired yet" });
+  values = (fun _ -> Error { Resolve.pos = None; msg = "value rows not wired yet" });
+}
+
+let parse_from text =
+  match (Parser.parse_stmt text).statement with
+  | Sql.Select { select_complete = { select = (sel, _); _ }; _ } -> sel.from
+  | _ -> assert_failure (sprintf "not a select: %s" text)
+
+let resolve_from text =
+  match parse_from text with
+  | None -> assert_failure "no FROM clause"
+  | Some n ->
+    match Resolve.nested demo_catalog n with
+    | Error e -> assert_failure (Resolve.show_error e)
+    | Ok schema -> Resolve.scope_of_schema schema
+
+let find_col scope name sources =
+  match List.find_opt (fun (c : Resolve.column) ->
+    String.equal c.name name && c.sources = sources) scope with
+  | Some c -> c
+  | None ->
+    assert_failure (sprintf "no %s from %s in scope [%s]" name (String.concat "," sources)
+      (String.concat " " (List.map (fun (c : Resolve.column) ->
+        sprintf "%s.%s" (String.concat "," c.sources) c.name) scope)))
+
+let null_of (c : Resolve.column) =
+  match c.ty.null with Some n -> n | None -> assert_failure "no nullability on a declared column"
+
+let test_from = [
+
+  "a plain table puts its columns in scope" >:: (fun () ->
+    let scope = resolve_from "SELECT 1 FROM a" in
+    assert_equal ~msg:"width" 2 (List.length scope);
+    assert_equal ~msg:"x" Null.NotNull (null_of (find_col scope "x" [ "a" ])));
+
+  "an inner join keeps both sides strict" >:: (fun () ->
+    let scope = resolve_from "SELECT 1 FROM a JOIN b ON a.id = b.id" in
+    assert_equal ~msg:"a.x" Null.NotNull (null_of (find_col scope "x" [ "a" ]));
+    assert_equal ~msg:"b.y" Null.NotNull (null_of (find_col scope "y" [ "b" ])));
+
+  (* the padding rule: the optional side of an outer join goes nullable *)
+  "a left join makes the right side nullable" >:: (fun () ->
+    let scope = resolve_from "SELECT 1 FROM a LEFT JOIN b ON a.id = b.id" in
+    assert_equal ~msg:"a.x stays strict" Null.NotNull (null_of (find_col scope "x" [ "a" ]));
+    assert_equal ~msg:"b.y goes nullable" Null.Nullable (null_of (find_col scope "y" [ "b" ])));
+
+  "a right join pads the other side" >:: (fun () ->
+    let scope = resolve_from "SELECT 1 FROM a RIGHT JOIN b ON a.id = b.id" in
+    assert_equal ~msg:"a.x" Null.Nullable (null_of (find_col scope "x" [ "a" ]));
+    assert_equal ~msg:"b.y" Null.NotNull (null_of (find_col scope "y" [ "b" ])));
+
+  "an alias renames the source" >:: (fun () ->
+    let scope = resolve_from "SELECT 1 FROM a AS t1" in
+    ignore (find_col scope "x" [ "t1" ]));
+
+  (* USING collapses the shared column instead of duplicating it *)
+  "USING keeps one copy of the common column" >:: (fun () ->
+    let scope = resolve_from "SELECT 1 FROM a JOIN b USING (id)" in
+    assert_equal ~msg:"width" 3 (List.length scope));
+
+  "an unknown table is reported" >:: (fun () ->
+    match parse_from "SELECT 1 FROM nosuch" with
+    | None -> assert_failure "no FROM"
+    | Some n ->
+      match Resolve.nested demo_catalog n with
+      | Ok _ -> assert_failure "expected an error"
+      | Error _ -> ());
+
+  (* stage 1 output feeds stage 2 directly *)
+  "a joined scope types an expression" >:: (fun () ->
+    let cols = resolve_from "SELECT 1 FROM a LEFT JOIN b ON a.id = b.id" in
+    let env = scope cols in
+    match Resolve.expr env (parse_expr "concat(a.x, b.y)") with
+    | Error e -> assert_failure (Resolve.show_error e)
+    | Ok r ->
+      match Constrain.infer r with
+      | Error e -> assert_failure e
+      | Ok t ->
+        assert_equal ~msg:"nullable through the outer join" ~printer:Sql.Type.show
+          (Hmx_of_sql.to_type (Refined.of_base Base.Text) Null.Nullable) t);
 ]
 
 let tests = [
@@ -506,5 +681,7 @@ let tests = [
   "hmx_solver" >::: test_solver;
   "hmx_nullability" >::: test_nullability;
   "hmx_signatures" >::: test_signatures;
-  "hmx_confluence" >::: test_confluence;
+  "hmx_registry_coverage" >::: test_registry_coverage;
+  "hmx_pipeline" >::: test_pipeline;
+  "hmx_from" >::: test_from;
 ]

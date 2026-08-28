@@ -15,14 +15,25 @@
 
 open Printf
 
+(** Raised inside a stage and caught once at its boundary. A stage stays a
+    total function; threading [(unit, error) result] through every unification
+    just to rebuild it at the end is noise. *)
+exception Conflict of string
+
+let conflict fmt = ksprintf (fun msg -> raise (Conflict msg)) fmt
+
 module Base = struct
 
   type t =
     | Int
     | UInt64
+    | Num_lit   (** an unsuffixed numeric literal: 1.5 is neither float nor
+                    decimal until something says which *)
     | Float
     | Decimal
     | Bool
+    | Str_lit  (** a string literal: below every stringable type, and which one
+                   it may become is decided by validating its content *)
     | Datetime
     | Text
     | Blob
@@ -33,8 +44,9 @@ module Base = struct
 
   (* written out rather than derived: keeps the function total and warning-8 checked *)
   let index = function
-    | Int -> 0 | UInt64 -> 1 | Float -> 2 | Decimal -> 3 | Bool -> 4 | Datetime -> 5
-    | Text -> 6 | Blob -> 7 | Json -> 8 | Json_path -> 9 | One_or_all -> 10
+    | Int -> 0 | UInt64 -> 1 | Num_lit -> 2 | Float -> 3 | Decimal -> 4 | Bool -> 5
+    | Str_lit -> 6 | Datetime -> 7 | Text -> 8 | Blob -> 9 | Json -> 10 | Json_path -> 11
+    | One_or_all -> 12
 
   let count = List.length all
 
@@ -47,10 +59,20 @@ module Base = struct
       below and the edges that only exist in the closure are exposed as
       {!derived} — a dialect may then refuse them, but the solver stays sound. *)
   let declared = [
+    (* a numeric literal sits below both, which is exactly why Float and
+       Decimal can stay incomparable while [decimal_col > 1.5] still types *)
+    Int, Num_lit;
+    Num_lit, Float;
+    Num_lit, Decimal;
     Int, Float;
     Int, Decimal;
     Int, UInt64;
     Int, Datetime;
+    (* a literal can become any of these, subject to its content validating *)
+    Str_lit, Datetime;
+    Str_lit, Json;
+    Str_lit, Json_path;
+    Str_lit, One_or_all;
     Datetime, Text;
     Text, Blob;
     Json, Text;
@@ -144,12 +166,31 @@ module Refine = struct
       [DECIMAL(7,0)] then normalise to the same value. *)
   type dec = { int_digits : int option; scale : int option } [@@deriving eq, ord]
 
+  (** [closed] records that the constructor set came from a declared ENUM
+      rather than from literals. It is a provenance tag, not part of the order:
+      it takes no part in [leq] or [equal], because making it an ordering axis
+      is what broke antisymmetry. It rides along so the declared type can be
+      reconstructed, and codegen ignores it anyway. *)
+  type enum = { ctors : Ctors.t; closed : bool } [@@deriving ord]
+
   type t =
     | Top
-    | Enum of Ctors.t   (** a set of string constructors; a bare literal is a singleton *)
+    | Enum of enum      (** a set of string constructors; a bare literal is a singleton *)
     | Dec of dec
     | Flt of float
-    [@@deriving eq, ord]
+    [@@deriving ord]
+
+  (** structural, including the provenance tag: used to key sets of bounds so
+      that accumulation stays order independent *)
+  let compare_structural = compare
+
+  let equal a b =
+    match a, b with
+    | Top, Top -> true
+    | Enum a, Enum b -> Ctors.equal a.ctors b.ctors
+    | Dec a, Dec b -> equal_dec a b
+    | Flt a, Flt b -> Float.equal a b
+    | (Top | Enum _ | Dec _ | Flt _), _ -> false
 
   let decimal ~precision ~scale =
     match precision, scale with
@@ -158,12 +199,12 @@ module Refine = struct
     | None, s -> Dec { int_digits = None; scale = s }
 
   let precision_of d = match d.int_digits, d.scale with Some i, Some s -> Some (i + s) | _ -> None
-  let literal s = Enum (Ctors.singleton s)
-  let enum l = Enum (Ctors.of_list l)
+  let literal s = Enum { ctors = Ctors.singleton s; closed = false }
+  let enum ?(closed = false) l = Enum { ctors = Ctors.of_list l; closed }
 
   let show = function
     | Top -> "_"
-    | Enum ctors -> Ctors.show ctors
+    | Enum { ctors; closed } -> Ctors.show ctors ^ (if closed then "" else "..")
     | Dec d ->
       sprintf "(%s,%s)"
         (match precision_of d with Some p -> string_of_int p | None -> "_")
@@ -172,6 +213,9 @@ module Refine = struct
 
   let pp fmt t = Format.pp_print_string fmt (show t)
   let is_top = function Top -> true | Enum _ | Dec _ | Flt _ -> false
+
+  (** a declared ENUM: it accepts no constructor beyond the ones it lists *)
+  let is_closed_enum = function Enum { closed; _ } -> closed | Top | Dec _ | Flt _ -> false
 
   (** Two sorts of refinement, and they behave differently when the base widens.
       A {e value set} says which values the type has, so a value arriving from a
@@ -188,9 +232,17 @@ module Refine = struct
     match a, b with
     | _, Top -> true
     | Top, (Enum _ | Dec _ | Flt _) -> false
-    | Enum a, Enum b -> Ctors.subset a b
+    | Enum a, Enum b -> Ctors.subset a.ctors b.ctors
     | Dec a, Dec b -> le_opt a.scale b.scale && le_opt a.int_digits b.int_digits
     | Flt a, Flt b -> Float.equal a b
+    (* the old check_exact_exact_number: an exact numeric literal is below a
+       decimal exactly when it fits *)
+    | Flt f, Dec d ->
+      (match d.int_digits, d.scale with
+       | Some i, Some s ->
+         let max = (10. ** float_of_int i) -. (10. ** (-. float_of_int s)) in
+         f >= -. max && f <= max
+       | _ -> true)
     | (Enum _ | Dec _ | Flt _), _ -> false
 
   (** Total: refinements of different kinds sit on different base types, so
@@ -200,7 +252,9 @@ module Refine = struct
   let join a b =
     match a, b with
     | Top, _ | _, Top -> Top
-    | Enum a, Enum b -> Enum (Ctors.union a b)
+    (* closedness is sticky: a declared enum joined with one of its own
+       literals is still that declared enum *)
+    | Enum a, Enum b -> Enum { ctors = Ctors.union a.ctors b.ctors; closed = a.closed || b.closed }
     | Dec a, Dec b ->
       Dec { int_digits = max_opt a.int_digits b.int_digits; scale = max_opt a.scale b.scale }
     | Flt a, Flt b -> if Float.equal a b then Flt a else Top
@@ -209,7 +263,9 @@ module Refine = struct
   let meet a b =
     match a, b with
     | Top, x | x, Top -> Some x
-    | Enum a, Enum b -> let c = Ctors.inter a b in if Ctors.is_empty c then None else Some (Enum c)
+    | Enum a, Enum b ->
+      let c = Ctors.inter a.ctors b.ctors in
+      if Ctors.is_empty c then None else Some (Enum { ctors = c; closed = a.closed || b.closed })
     | Dec a, Dec b ->
       Some (Dec { int_digits = min_opt a.int_digits b.int_digits; scale = min_opt a.scale b.scale })
     | Flt a, Flt b -> if Float.equal a b then Some (Flt a) else None
@@ -227,10 +283,10 @@ module Refine = struct
   (** which base a refinement may sit on; [Top] fits any *)
   let fits (b : Base.t) = function
     | Top -> true
-    | Enum _ -> (match b with Text | Blob | Datetime | Json | Json_path | One_or_all -> true
-                            | Int | UInt64 | Float | Decimal | Bool -> false)
+    | Enum _ -> (match b with Str_lit | Text | Blob | Datetime | Json | Json_path | One_or_all -> true
+                            | Int | UInt64 | Num_lit | Float | Decimal | Bool -> false)
     | Dec _ -> Base.equal b Base.Decimal
-    | Flt _ -> Base.equal b Base.Float
+    | Flt _ -> Base.equal b Base.Float || Base.equal b Base.Num_lit
 end
 
 module Null = struct
@@ -249,14 +305,14 @@ module Pred = struct
 
   let satisfies p (b : Base.t) =
     match p, b with
-    | Num, (Int | UInt64 | Float | Decimal) -> true
-    | Num, (Bool | Datetime | Text | Blob | Json | Json_path | One_or_all) -> false
-    | Ord, (Int | UInt64 | Float | Decimal | Bool | Datetime | Text | Blob) -> true
+    | Num, (Int | UInt64 | Num_lit | Float | Decimal) -> true
+    | Num, (Bool | Str_lit | Datetime | Text | Blob | Json | Json_path | One_or_all) -> false
+    | Ord, (Int | UInt64 | Num_lit | Float | Decimal | Bool | Str_lit | Datetime | Text | Blob) -> true
     | Ord, (Json | Json_path | One_or_all) -> false
     | Comparable, _ -> true
-    | Stringable, (Text | Blob | Datetime | Json | Json_path | One_or_all) -> true
-    | Stringable, (Int | UInt64 | Float | Decimal | Bool) -> false
-    | Aggregatable, (Int | UInt64 | Float | Decimal | Bool | Datetime | Text | Blob) -> true
+    | Stringable, (Str_lit | Text | Blob | Datetime | Json | Json_path | One_or_all) -> true
+    | Stringable, (Int | UInt64 | Num_lit | Float | Decimal | Bool) -> false
+    | Aggregatable, (Int | UInt64 | Num_lit | Float | Decimal | Bool | Str_lit | Datetime | Text | Blob) -> true
     | Aggregatable, (Json | Json_path | One_or_all) -> false
 
   let members p = List.filter (satisfies p) Base.all
@@ -293,13 +349,32 @@ module Refined = struct
   let pp fmt t = Format.pp_print_string fmt (show t)
 
   (* a refinement does not survive a widening of the base *)
-  (* Across a widening of the base only a capacity survives on the right: an
-     Int may land in a Decimal(10,2), but a Datetime is not one of an enum's
-     constructors. *)
+  (** Whether a refinement's content is acceptable at a base. This is where
+      the old [order_kind]'s scattered literal checks live: a string literal
+      may become a JSON path only if it parses as one. *)
+  let valid_at (b : Base.t) (r : Refine.t) =
+    match b, r with
+    | Base.Json_path, Refine.Enum { ctors; _ } ->
+      Refine.Ctors.for_all Sqlgg_json_path.Json_path.is_valid ctors
+    | Base.One_or_all, Refine.Enum { ctors; _ } ->
+      Refine.Ctors.for_all
+        (fun s -> List.mem (String.lowercase_ascii s) [ "one"; "all" ]) ctors
+    | Base.Json, Refine.Enum { ctors; _ } ->
+      Refine.Ctors.for_all
+        (fun s -> match Yojson.Safe.from_string s with
+           | _ -> true
+           | exception Yojson.Json_error _ -> false) ctors
+    | _ -> true
+
+  (* An unrefined value says nothing about which values it holds, so it can
+     only sit below a capacity, never below a value set: an Int fits a
+     Decimal(10,2), but a Datetime is not one of an enum's constructors. A
+     refined value carries its own contents up and is compared directly. *)
   let leq a b =
     Base.leq a.base b.base
-    && (if Base.equal a.base b.base then Refine.leq a.refine b.refine
-        else not (Refine.is_value_set b.refine))
+    && (if Refine.is_top a.refine then not (Refine.is_value_set b.refine)
+        else Refine.leq a.refine b.refine)
+    && valid_at b.base a.refine
 
   let well_formed { base; refine } = Refine.fits base refine
 end

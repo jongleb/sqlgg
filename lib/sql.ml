@@ -1169,6 +1169,9 @@ val add_multi: Source_type.t func -> string -> unit
 val sponge : Source_type.t func
 val add_fixed_then_pairs : ret:Type.tyvar -> fixed_args:Type.tyvar list -> repeating_pattern:Type.tyvar list -> string -> unit
 
+(** every registration, for coverage checks against a replacement table *)
+val fold : (string -> int option -> Source_type.t func option -> 'a -> 'a) -> 'a -> 'a
+
 end = struct
 
 let h = Hashtbl.create 10
@@ -1218,6 +1221,8 @@ let multi ~ret args name =
 
 let add_fixed_then_pairs ~ret ~fixed_args ~repeating_pattern name = 
   add_multi (Multi { ret; fixed_args; repeating_pattern }) name
+
+let fold f init = Hashtbl.fold (fun (name, narg) v acc -> f name narg v acc) h init
 
 end
 
