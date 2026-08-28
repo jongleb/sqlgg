@@ -73,26 +73,40 @@ let merge_info a b = {
   preds = merge_uniq Pred.compare a.preds b.preds;
 }
 
-(** Refinement the variable must take if its base is resolved to [base].
-    A lower bound sitting on a strictly smaller base cannot pass its refinement
-    up, so it contributes [Top]; an upper bound sitting on a strictly larger
-    base must itself be unrefined, otherwise [base] is not a solution at all. *)
+(** The refinement the variable takes once its base is resolved to [base].
+
+    Lower bounds sitting on a strictly smaller base do not pass their own
+    refinement up, and they widen a value set to nothing: whatever those values
+    are, they are not known to be among the constructors. A capacity is left
+    alone. The result is checked against [Refined.leq] before it is returned, so
+    this function cannot disagree with the order. *)
 let resolve_refine base info =
-  let contributes_top (l : Refined.t) = not (Base.equal l.base base) in
-  let lowers = List.map (fun (l : Refined.t) -> if contributes_top l then Refine.Top else l.refine) info.lowers in
-  let uppers_here = List.filter_map (fun (u : Refined.t) ->
-    if Base.equal u.base base then Some u.refine else None) info.uppers in
-  let uppers_above_unrefined = List.for_all (fun (u : Refined.t) ->
-    Base.equal u.base base || Refine.is_top u.refine) info.uppers in
-  if not uppers_above_unrefined then `Conflict
-  else
-    match Refine.join_all lowers, Refine.meet_all uppers_here with
-    | _, `Conflict -> `Conflict
-    | None, `None -> `Ok Refine.Top
-    | Some r, `None -> if Refine.fits base r then `Ok r else `Conflict
-    | None, `Some r -> if Refine.fits base r then `Ok r else `Conflict
-    | Some lo, `Some up ->
-      if Refine.leq lo up && Refine.fits base lo then `Ok lo else `Conflict
+  let here l = Base.equal l.Refined.base base in
+  let lowers_here = List.filter_map (fun l -> if here l then Some l.Refined.refine else None) info.lowers in
+  let uppers_here = List.filter_map (fun u -> if here u then Some u.Refined.refine else None) info.uppers in
+  let widened = List.exists (fun l -> not (here l)) info.lowers in
+  let lo =
+    match Refine.join_all lowers_here with
+    | Some r when widened && Refine.is_value_set r -> Some Refine.Top
+    | r -> r
+  in
+  let candidate =
+    match lo, Refine.meet_all uppers_here with
+    | _, `Conflict -> None
+    | None, `None -> Some Refine.Top
+    | Some r, `None -> Some r
+    | None, `Some r -> Some r
+    | Some l, `Some u -> if Refine.leq l u then Some l else None
+  in
+  match candidate with
+  | None -> `Conflict
+  | Some r when not (Refine.fits base r) -> `Conflict
+  | Some r ->
+    let t = Refined.make base r in
+    if List.for_all (fun l -> Refined.leq l t) info.lowers
+       && List.for_all (fun u -> Refined.leq t u) info.uppers
+    then `Ok r
+    else `Conflict
 
 (** every base the variable could still take *)
 let candidates info =
@@ -113,12 +127,14 @@ type state = {
   mutable tvars : var list;
   mutable nvars : var list;
   mutable pending : (pos option * t) list;   (** deferred NJoin/NMeet *)
+  mutable derived : (pos option * Refined.t * Refined.t) list;
+      (** accepted coercions that exist only in the transitive closure *)
 }
 
 let fresh_state () = {
   tparent = H.create 32; tinfo = H.create 32;
   nparent = H.create 32; nvalue = H.create 32;
-  tvars = []; nvars = []; pending = [];
+  tvars = []; nvars = []; pending = []; derived = [];
 }
 
 let rec find tbl v =
@@ -247,7 +263,11 @@ let rec walk ?pos st c =
   | Sub (Var a, Ty t) -> add_bound ?pos st ~side:`Upper a t
   | Sub (Ty t, Var a) -> add_bound ?pos st ~side:`Lower a t
   | Sub (Ty a, Ty b) ->
-    if Refined.leq a b then Ok () else errorf ?pos "%s is not coercible to %s" (Refined.show a) (Refined.show b)
+    if not (Refined.leq a b) then errorf ?pos "%s is not coercible to %s" (Refined.show a) (Refined.show b)
+    else begin
+      if Base.is_derived a.base b.base then st.derived <- (pos, a, b) :: st.derived;
+      Ok ()
+    end
   | Has (p, Var a) -> add_pred ?pos st a p
   | Has (p, Ty t) ->
     if Pred.satisfies p t.base then Ok ()
@@ -349,6 +369,24 @@ let base_of ?pos sol v =
       match resolve_refine base info with
       | `Conflict -> errorf ?pos "no type satisfies %s" (show_info info)
       | `Ok refine -> Ok (Refined.make base refine)
+
+(** Coercions the solution accepts that exist only because the base table was
+    closed transitively — [CONCAT(int_col, 'x')] and relatives. The lattice
+    needs the closure to be a lattice; §11.4 wants these refused, so they are
+    reported rather than silently allowed, and the dialect decides. *)
+let derived_coercions sol =
+  let from_concrete = List.map (fun (pos, a, b) -> pos, a, b) sol.st.derived in
+  let from_vars =
+    List.concat_map (fun v ->
+      match base_of sol v with
+      | Error _ -> []
+      | Ok t ->
+        List.filter_map (fun (l : Refined.t) ->
+          if Base.is_derived l.base t.base then Some (None, l, t) else None)
+          (info_of sol v).lowers)
+      (tvars sol)
+  in
+  from_concrete @ from_vars
 
 let null_of sol v = match nget sol.st v with Some n -> n | None -> sol.policy.default_null
 

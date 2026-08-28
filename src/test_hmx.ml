@@ -263,6 +263,16 @@ let test_solver = [
       [ Hmx.Sub (refined Base.Text (Refine.literal "a"), Hmx.Var 0);
         Hmx.Sub (refined Base.Text (Refine.literal "b"), Hmx.Var 0) ] 0);
 
+  (* a value set is destroyed by a value arriving from a smaller base, a
+     capacity is not *)
+  "a value set does not survive a widening, a capacity does" >:: (fun () ->
+    assert_base ~msg:"coalesce(enum, datetime)" (Refined.of_base Base.Text)
+      [ Hmx.Sub (refined Base.Text (Refine.enum [ "a"; "b" ]), Hmx.Var 0);
+        Hmx.Sub (base Base.Datetime, Hmx.Var 0) ] 0;
+    assert_base ~msg:"decimal(10,2) + int" (Refined.make Base.Decimal (dec 10 2))
+      [ Hmx.Sub (refined Base.Decimal (dec 10 2), Hmx.Var 0);
+        Hmx.Sub (base Base.Int, Hmx.Var 0) ] 0);
+
   "a refinement does not survive widening of the base" >:: (fun () ->
     assert_base ~msg:"literal below blob" (Refined.of_base Base.Blob)
       [ Hmx.Sub (refined Base.Text (Refine.literal "a"), Hmx.Var 0); Hmx.Sub (base Base.Blob, Hmx.Var 0) ] 0);
@@ -389,6 +399,105 @@ let test_confluence = List.map qcheck [
           (List.init n_vars (fun i -> i)));
 ]
 
+(* ---------------------------------------------------- signatures *)
+
+let counter = ref 0
+let fresh () = incr counter; !counter
+
+(** what stage 2 will do: relate every actual argument to its formal by [Sub],
+    add the signature's predicates, and pick the nullability rule *)
+let apply ?(nulls = []) sg args =
+  match Hmx_sig.instantiate ~fresh sg (List.length args) with
+  | Error e -> Error e
+  | Ok sch ->
+    let ret_n = fresh () in
+    let cs =
+      List.map2 (fun arg formal -> Hmx.Sub (arg, formal)) args sch.Hmx_sig.formals
+      @ [ sch.Hmx_sig.side ]
+      @ [ match sch.Hmx_sig.result_null with
+          | Hmx_sig.Join -> Hmx.NJoin (Hmx.NVar ret_n, nulls)
+          | Hmx_sig.Meet -> Hmx.NMeet (Hmx.NVar ret_n, nulls)
+          | Hmx_sig.Const n -> Hmx.NEq (Hmx.NVar ret_n, Hmx.N n) ]
+    in
+    match Hmx.solve (Hmx.Conj cs) with
+    | Error e -> Error (Hmx.show_error e)
+    | Ok sol ->
+      let ty = match sch.Hmx_sig.result with
+        | Hmx.Ty t -> Ok t
+        | Hmx.Var v -> (match Hmx.base_of sol v with Ok t -> Ok t | Error e -> Error (Hmx.show_error e))
+      in
+      match ty with
+      | Error e -> Error e
+      | Ok t -> Ok (sol, t, Hmx.null_of sol ret_n)
+
+let sig_ name arity = match Hmx_sig.find name arity with
+  | Some sg -> sg
+  | None -> assert_failure (sprintf "no signature for %s/%d" name arity)
+
+let assert_applies ~msg ?nulls ?null name args expect =
+  match apply ?nulls (sig_ name (List.length args)) args with
+  | Error e -> assert_failure (sprintf "%s: %s" msg e)
+  | Ok (_, t, n) ->
+    assert_equal ~msg ~printer:Refined.show expect t;
+    match null with None -> () | Some n' -> assert_equal ~msg:(msg ^ " nullability") ~printer:Null.show n' n
+
+let test_signatures = [
+
+  "arity is checked by instantiate" >:: (fun () ->
+    let ws = sig_ "concat_ws" 3 in
+    assert_bool "1 argument" (Result.is_error (Hmx_sig.instantiate ~fresh ws 0));
+    assert_bool "2 arguments" (Result.is_ok (Hmx_sig.instantiate ~fresh ws 2));
+    assert_bool "5 arguments" (Result.is_ok (Hmx_sig.instantiate ~fresh ws 5));
+    let ja = sig_ "json_array_append" 3 in
+    assert_bool "3 arguments" (Result.is_ok (Hmx_sig.instantiate ~fresh ja 3));
+    assert_bool "4 arguments" (Result.is_error (Hmx_sig.instantiate ~fresh ja 4));
+    assert_bool "5 arguments" (Result.is_ok (Hmx_sig.instantiate ~fresh ja 5)));
+
+  (* the reason arguments are related by Sub and not Eq: with Eq this fails *)
+  "arithmetic takes the lub of its arguments" >:: (fun () ->
+    assert_applies ~msg:"int + float" "+" [ base Base.Int; base Base.Float ] (Refined.of_base Base.Float));
+
+  "arithmetic keeps a decimal precise" >:: (fun () ->
+    assert_applies ~msg:"decimal + int" "+"
+      [ refined Base.Decimal (dec 10 2); base Base.Int ] (Refined.make Base.Decimal (dec 10 2)));
+
+  "SUM keeps the column type" >:: (fun () ->
+    assert_applies ~msg:"sum" ~nulls:[ Hmx.N Null.NotNull ] ~null:Null.Nullable "sum"
+      [ refined Base.Decimal (dec 10 2) ] (Refined.make Base.Decimal (dec 10 2)));
+
+  "a non-numeric argument is refused" >:: (fun () ->
+    assert_bool "text + text"
+      (Result.is_error (apply (sig_ "+" 2) [ base Base.Text; base Base.Text ])));
+
+  "COUNT is strict whatever its arguments" >:: (fun () ->
+    assert_applies ~msg:"count(x)" ~nulls:[ Hmx.N Null.Nullable ] ~null:Null.NotNull "count"
+      [ base Base.Text ] (Refined.of_base Base.Int));
+
+  "COALESCE is strict as soon as one branch is" >:: (fun () ->
+    assert_applies ~msg:"coalesce" ~nulls:[ Hmx.N Null.Nullable; Hmx.N Null.NotNull ] ~null:Null.NotNull
+      "coalesce" [ base Base.Int; base Base.Int ] (Refined.of_base Base.Int));
+
+  "comparison marks both positions strict" >:: (fun () ->
+    match Hmx_sig.instantiate ~fresh (sig_ "=" 2) 2 with
+    | Error e -> assert_failure e
+    | Ok sch -> assert_equal ~msg:"strict_at" [ true; true ] sch.Hmx_sig.strict_at);
+
+  (* Sql.Type.order_kind answers `No` for Int against Text; the closure says
+     yes. The lattice needs the closure, so the use is reported instead and
+     §11.4 becomes a dialect decision rather than a silent one. *)
+  "a coercion invented by the closure is reported" >:: (fun () ->
+    match apply (sig_ "concat" 2) [ base Base.Int; base Base.Text ] with
+    | Error e -> assert_failure e
+    | Ok (sol, t, _) ->
+      assert_equal ~printer:Refined.show (Refined.of_base Base.Text) t;
+      assert_equal ~msg:"one derived coercion" 1 (List.length (Hmx.derived_coercions sol)));
+
+  "an ordinary coercion is not reported" >:: (fun () ->
+    match apply (sig_ "+" 2) [ base Base.Int; base Base.Float ] with
+    | Error e -> assert_failure e
+    | Ok (sol, _, _) -> assert_equal ~msg:"no derived coercion" 0 (List.length (Hmx.derived_coercions sol)));
+]
+
 let tests = [
   "hmx_base_lattice" >::: test_base_lattice;
   "hmx_pred" >::: test_pred;
@@ -396,5 +505,6 @@ let tests = [
   "hmx_refine" >::: test_refine_units;
   "hmx_solver" >::: test_solver;
   "hmx_nullability" >::: test_nullability;
+  "hmx_signatures" >::: test_signatures;
   "hmx_confluence" >::: test_confluence;
 ]

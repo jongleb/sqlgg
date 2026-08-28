@@ -83,6 +83,11 @@ module Base = struct
       && not (List.exists (fun (x, y) -> equal x a && equal y b) declared))
       (List.concat_map (fun a -> List.map (fun b -> a, b) all) all)
 
+  (** did [a <= b] hold only because the table was closed transitively?
+      {!Sql.Type.order_kind} answers [`No] for these pairs, so a dialect that
+      wants to keep refusing them needs to see them. *)
+  let is_derived a b = List.exists (fun (x, y) -> equal x a && equal y b) derived
+
   let upper_bounds l = List.filter (fun c -> List.for_all (fun a -> leq a c) l) all
   let lower_bounds l = List.filter (fun c -> List.for_all (fun a -> leq c a) l) all
 
@@ -167,6 +172,13 @@ module Refine = struct
 
   let pp fmt t = Format.pp_print_string fmt (show t)
   let is_top = function Top -> true | Enum _ | Dec _ | Flt _ -> false
+
+  (** Two sorts of refinement, and they behave differently when the base widens.
+      A {e value set} says which values the type has, so a value arriving from a
+      smaller base destroys it: [COALESCE(enum_col, datetime_col)] is plain text.
+      A {e capacity} only bounds how much fits, and widening [Int] into
+      [Decimal(10,2)] neither needs nor changes it. *)
+  let is_value_set = function Enum _ | Flt _ -> true | Top | Dec _ -> false
 
   let le_opt x y = match x, y with _, None -> true | None, Some _ -> false | Some a, Some b -> a <= b
   let max_opt x y = match x, y with None, _ | _, None -> None | Some a, Some b -> Some (max a b)
@@ -281,9 +293,13 @@ module Refined = struct
   let pp fmt t = Format.pp_print_string fmt (show t)
 
   (* a refinement does not survive a widening of the base *)
+  (* Across a widening of the base only a capacity survives on the right: an
+     Int may land in a Decimal(10,2), but a Datetime is not one of an enum's
+     constructors. *)
   let leq a b =
     Base.leq a.base b.base
-    && (if Base.equal a.base b.base then Refine.leq a.refine b.refine else Refine.is_top b.refine)
+    && (if Base.equal a.base b.base then Refine.leq a.refine b.refine
+        else not (Refine.is_value_set b.refine))
 
   let well_formed { base; refine } = Refine.fits base refine
 end
