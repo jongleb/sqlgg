@@ -90,5 +90,5 @@ let rec show = function
   | InTupleList { items; _ } ->
     Printf.sprintf "(%s) in ..." (String.concat "," (List.map (fun (e, _) -> show e) items))
   | OptionActions { choice; _ } -> Printf.sprintf "opt{%s}" (show choice)
-  | Subquery { kind = `AsValue; ty } -> Printf.sprintf "(select):%s" (show_ty ty)
+  | Subquery { kind = `AsValue; ty; _ } -> Printf.sprintf "(select):%s" (show_ty ty)
   | Subquery { kind = `Exists; _ } -> "exists(select)"

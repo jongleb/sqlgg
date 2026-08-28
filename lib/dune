@@ -6,6 +6,6 @@
 (library
  (name sqlgg)
  (public_name sqlgg.lib)
- (libraries extlib yojson sqlgg_json_path inferno pprint)
+ (libraries extlib yojson sqlgg_json_path inferno)
  (preprocess
   (pps ppx_deriving.std ppx_enumerate ppx_deriving_variant_string)))

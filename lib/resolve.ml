@@ -48,26 +48,26 @@ let opt_result f = function
 
 (* ------------------------------------------------------------ columns *)
 
-let qualified tname c =
-  match tname with
-  | None -> true
-  | Some (t : Sql.table_name) -> List.mem t.tn c.sources
-
-(** The old resolver prefers a qualified match and falls back to an unqualified
-    one, taking the last of several matches rather than reporting the
-    ambiguity. That last part is kept: reporting it now would break queries
-    that work today. *)
+(** A qualified reference picks among the columns that carry that source; an
+    unqualified one must be unique, and being present in two joined tables is
+    an error rather than a silent pick. *)
 let lookup_column env ({ cname; tname } : Sql.col_name) =
-  match List.filter (fun c -> String.equal c.name cname && qualified tname c) env.columns with
-  | [ c ] -> Ok c
-  | _ :: _ as l -> Ok (List.nth l (List.length l - 1))
-  | [] ->
-    let pool =
-      match tname with
-      | Some t -> (match env.named t.tn with Some l -> l | None -> [])
-      | None -> env.columns
-    in
-    match List.filter (fun c -> String.equal c.name cname) pool with
+  let named name c = String.equal c.name name in
+  match tname with
+  | Some t ->
+    (match List.filter (fun c -> named cname c && List.mem t.Sql.tn c.sources) env.columns with
+     | [ c ] -> Ok c
+     | _ :: _ as l -> Ok (List.nth l (List.length l - 1))
+     | [] ->
+       (match env.named t.tn with
+        | None -> fail "missing table: %s" t.tn
+        | Some cols ->
+          (match List.filter (named cname) cols with
+           | [ c ] -> Ok c
+           | [] -> fail "missing attribute: %s" cname
+           | _ -> fail "duplicate attribute: %s" cname)))
+  | None ->
+    match List.filter (named cname) env.columns with
     | [ c ] -> Ok c
     | [] -> fail "missing attribute: %s" cname
     | _ -> fail "duplicate attribute: %s" cname

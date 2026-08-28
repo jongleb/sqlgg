@@ -130,26 +130,6 @@ module Base = struct
   let join a b = lub [ a; b ]
   let meet a b = glb [ a; b ]
 
-  module Check = struct
-    type failure =
-      | Not_antisymmetric of t * t
-      | Join_not_unique of t * t * t list
-      | Meet_not_unique of t * t * t list
-      [@@deriving show { with_path = false }]
-
-    let minimal l = List.filter (fun m -> not (List.exists (fun x -> not (equal x m) && leq x m) l)) l
-    let maximal l = List.filter (fun m -> not (List.exists (fun x -> not (equal x m) && leq m x) l)) l
-
-    let laws () =
-      let pairs = List.concat_map (fun a -> List.map (fun b -> a, b) all) all in
-      List.concat_map (fun (a, b) ->
-        let anti = if leq a b && leq b a && not (equal a b) then [ Not_antisymmetric (a, b) ] else [] in
-        let ubs = minimal (upper_bounds [ a; b ]) in
-        let lbs = maximal (lower_bounds [ a; b ]) in
-        let j = match ubs with [] | [ _ ] -> [] | l -> [ Join_not_unique (a, b, l) ] in
-        let m = match lbs with [] | [ _ ] -> [] | l -> [ Meet_not_unique (a, b, l) ] in
-        anti @ j @ m) pairs
-  end
 end
 
 module Refine = struct
@@ -292,11 +272,6 @@ end
 module Null = struct
   type t = NotNull | Nullable [@@deriving eq, ord, show { with_path = false }, enumerate]
 
-  let leq a b = match a, b with NotNull, _ -> true | Nullable, Nullable -> true | Nullable, NotNull -> false
-  let join a b = match a, b with Nullable, _ | _, Nullable -> Nullable | NotNull, NotNull -> NotNull
-  let meet a b = match a, b with NotNull, _ | _, NotNull -> NotNull | Nullable, Nullable -> Nullable
-  let join_all = List.fold_left join NotNull
-  let meet_all = List.fold_left meet Nullable
 end
 
 module Pred = struct
@@ -315,19 +290,9 @@ module Pred = struct
     | Aggregatable, (Int | UInt64 | Num_lit | Float | Decimal | Bool | Str_lit | Datetime | Text | Blob) -> true
     | Aggregatable, (Json | Json_path | One_or_all) -> false
 
-  let members p = List.filter (satisfies p) Base.all
-
-  (** §4.3 asks for convexity, not for an interval: [Num] is not an interval
-      ([Float] and [Decimal] are incomparable) yet it is convex, and convexity
-      is what makes a predicate decidable from the bounds. *)
-  let is_convex p =
-    List.for_all (fun x ->
-      List.for_all (fun y ->
-        List.for_all (fun z ->
-          not (satisfies p x && satisfies p y && Base.leq x z && Base.leq z y) || satisfies p z)
-          Base.all)
-        Base.all)
-      Base.all
+  (* §4.3 wants these predicates convex — not intervals, [Num] is not one —
+     because that is what makes them decidable from the bounds. The tests
+     check it. *)
 
   (** predicate defaults used when a variable is otherwise unconstrained (§8) *)
   let default p : Base.t option =
@@ -375,6 +340,4 @@ module Refined = struct
     && (if Refine.is_top a.refine then not (Refine.is_value_set b.refine)
         else Refine.leq a.refine b.refine)
     && valid_at b.base a.refine
-
-  let well_formed { base; refine } = Refine.fits base refine
 end

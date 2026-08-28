@@ -1,10 +1,10 @@
-(** The domain of the constraint language: what is known about one type
-    variable, and how two such things combine.
+(** The domain: what is known about one type variable, and how two such things
+    combine.
 
-    Kept separate from any solver on purpose. It is what a unifier has to be
-    told from the outside — {!Hmx_structure} hands exactly this to Inferno as
-    its [conjunction] — and it is also what defaulting reads. Nothing here
-    knows about variables, union-find or constraint order. *)
+    This is the whole of what a unifier cannot supply. Inferno owns variables,
+    union-find and merging; the meaning of a merge is {!S.conjunction} below,
+    which is [merge_info] plus a feasibility check. Defaulting reads the same
+    record. Nothing here knows about variables or constraint order. *)
 
 open Printf
 open Hmx_lattice
@@ -144,3 +144,26 @@ let pick ?fallback info =
 
 (** is [info] satisfiable at all? *)
 let feasible info = candidates info <> []
+
+(** The domain as Inferno's unifier sees it.
+
+    SQL base types are nullary, so a structure has no children and can simply
+    be the bounds record — which is why [iter], [fold] and [map] are not needed
+    and neither is [Structure.Option]: [None] is the absence of a constraint.
+
+    A subtyping bound is stated by unifying with a one-sided structure, and a
+    predicate rides inside the class, so it still constrains the outcome long
+    after the point where it was written. Qualified types, with the unifier
+    doing the propagation. *)
+module S = struct
+  type 'a structure = info option
+
+  exception InconsistentConjunction
+
+  let conjunction _equate a b =
+    match a, b with
+    | None, s | s, None -> s
+    | Some a, Some b ->
+      let m = merge_info a b in
+      if feasible m then Some m else raise InconsistentConjunction
+end

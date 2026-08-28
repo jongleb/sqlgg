@@ -1,9 +1,8 @@
 (** Type variables and unification, delegated to Inferno.
 
-    All of it: {!Inferno.Unifier} is union-find with structure merging, and our
-    structure is the bounds record, so the whole solver is [fresh] and [unify].
-    A subtyping bound is stated by unifying with a one-sided structure, and
-    {!Hmx_structure}'s conjunction does the lattice work.
+    All of it: {!Inferno.Unifier} is union-find with structure merging, and
+    {!Hmx_domain.S} says what a merge means, so the whole solver is [fresh] and
+    [unify].
 
     State lives in the variables themselves, not in a module-level table, so
     each statement is independent and nothing has to be reset between them.
@@ -14,8 +13,7 @@
 
 open Hmx_lattice
 
-module OS = Inferno.Structure.Option (Hmx_structure.S)
-module U = Inferno.Unifier.Make (OS)
+module U = Inferno.Unifier.Make (Hmx_domain.S)
 
 type var = U.variable
 let no_info = Hmx_domain.no_info
@@ -41,7 +39,7 @@ let unify a b =
   | exception U.Unify (x, y) ->
     conflict "cannot reconcile %s with %s"
       (Hmx_domain.show_info (info x)) (Hmx_domain.show_info (info y))
-  | exception Hmx_structure.S.InconsistentConjunction -> conflict "inconsistent constraints"
+  | exception Hmx_domain.S.InconsistentConjunction -> conflict "inconsistent constraints"
 
 (** [t] is coercible to the variable *)
 let above v t = unify v (bounded { no_info with lowers = [ t ] })
