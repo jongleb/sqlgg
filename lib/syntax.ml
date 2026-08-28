@@ -543,14 +543,11 @@ let rec resolve_env env = {
     | exception _ -> None
     | s -> Some (Resolve.scope_of_schema s));
   grouping = env.query_has_grouping;
-  guaranteed_row = false;
   of_values = (fun col ->
     match Hashtbl.find_opt env.insert_resolved_types col with
-    | Some t -> let base, null = Hmx_of_sql.of_type t in Ok { Resolved.base; null }
-    | None ->
-      Error { Resolve.pos = None;
-              msg = "VALUES(col) as an expression is only acceptable in ON DUPLICATE KEY UPDATE context" });
-  subquery = (fun select usage -> Ok (subquery_result ~env select usage));
+    | Some t -> Resolve.ty_of_sql t
+    | None -> fail "VALUES(col) as an expression is only acceptable in ON DUPLICATE KEY UPDATE context");
+  subquery = (fun select usage -> subquery_result ~env select usage);
 }
 
 (* A scalar subquery yields no row when the outer filter matches nothing, so
@@ -562,7 +559,7 @@ and subquery_result ~env select usage =
     | DynamicWithSources _ -> fail "nested select cannot have dynamic attributes") schema
   in
   let schema' = Schema.Source.to_schema schema in
-  let ty t = let base, null = Hmx_of_sql.of_type t in { Resolved.base; null } in
+  let ty t = Resolve.ty_of_sql t in
   match schema, usage with
   | [ { attr = { domain; _ }; _ } ], `AsValue ->
     let rec with_count = function
@@ -598,12 +595,10 @@ and subquery_result ~env select usage =
 (** @return the statement's parameters and the expression's type *)
 and resolve_types env expr =
   let expr = push_meta ~meta_of:(meta_of ~env) (Meta.empty ()) expr in
-  match Resolve.expr (resolve_env env) expr with
-  | Error e -> fail "%s" (Resolve.show_error e)
-  | Ok r ->
-    match Constrain.solve_expr r with
-    | Error msg -> fail "%s" msg
-    | Ok (ty, vars) -> vars, `Ok ty
+  match Constrain.solve_expr (resolve_env env) expr with
+  | Error msg -> fail "%s" msg
+  | Ok (ty, vars) -> vars, `Ok ty
+  | exception Hmx_lattice.Conflict msg -> fail "%s" msg
 
 and meta_of ~env = function
   | `Column col ->

@@ -328,7 +328,7 @@ let nsolve build =
   let st = Hmx_null.create () in
   let out = build st in
   match Hmx_null.solve st with
-  | () -> Ok (Hmx_null.get st out)
+  | () -> Ok (Hmx_null.get out)
   | exception Conflict e -> Error e
 
 let assert_null ~msg expect build =
@@ -339,26 +339,26 @@ let assert_null ~msg expect build =
 let test_nullability = [
   "a join is nullable as soon as one argument is" >:: (fun () ->
     assert_null ~msg:"a + b" Null.Nullable (fun st ->
-      let n = Hmx_null.fresh st in
-      Hmx_null.add st (Join (n, [ N Null.NotNull; N Null.Nullable ])); n));
+      let n = Hmx_null.fresh () in
+      Hmx_null.add st (Join (n, [ Hmx_null.const Null.NotNull; Hmx_null.const Null.Nullable ])); n));
 
   "a join of strict arguments is strict" >:: (fun () ->
     assert_null ~msg:"a + b" Null.NotNull (fun st ->
-      let n = Hmx_null.fresh st in
-      Hmx_null.add st (Join (n, [ N Null.NotNull; N Null.NotNull ])); n));
+      let n = Hmx_null.fresh () in
+      Hmx_null.add st (Join (n, [ Hmx_null.const Null.NotNull; Hmx_null.const Null.NotNull ])); n));
 
   (* COALESCE: not null as soon as any branch is *)
   "a meet is strict as soon as one argument is" >:: (fun () ->
     assert_null ~msg:"coalesce" Null.NotNull (fun st ->
-      let n = Hmx_null.fresh st in
-      Hmx_null.add st (Meet (n, [ N Null.Nullable; N Null.NotNull ])); n));
+      let n = Hmx_null.fresh () in
+      Hmx_null.add st (Meet (n, [ Hmx_null.const Null.Nullable; Hmx_null.const Null.NotNull ])); n));
 
   "an unknown argument is settled by the fixpoint, whatever the order" >:: (fun () ->
     let build st =
-      let n = Hmx_null.fresh st and a = Hmx_null.fresh st and b = Hmx_null.fresh st in
-      Hmx_null.add st (Join (n, [ a; N Null.NotNull ]));
+      let n = Hmx_null.fresh () and a = Hmx_null.fresh () and b = Hmx_null.fresh () in
+      Hmx_null.add st (Join (n, [ a; Hmx_null.const Null.NotNull ]));
       Hmx_null.add st (Eq (a, b));
-      Hmx_null.add st (Eq (b, N Null.Nullable));
+      Hmx_null.add st (Eq (b, Hmx_null.const Null.Nullable));
       n
     in
     assert_null ~msg:"fixpoint" Null.Nullable build);
@@ -366,16 +366,16 @@ let test_nullability = [
   (* the dual direction: a strict result forces its arguments *)
   "a strict join result forces its arguments" >:: (fun () ->
     assert_null ~msg:"not null context" Null.NotNull (fun st ->
-      let n = Hmx_null.fresh st and a = Hmx_null.fresh st in
-      Hmx_null.add st (Eq (n, N Null.NotNull));
-      Hmx_null.add st (Join (n, [ a; Hmx_null.fresh st ]));
+      let n = Hmx_null.fresh () and a = Hmx_null.fresh () in
+      Hmx_null.add st (Eq (n, Hmx_null.const Null.NotNull));
+      Hmx_null.add st (Join (n, [ a; Hmx_null.fresh () ]));
       a));
 
   "a contradiction is reported" >:: (fun () ->
     match nsolve (fun st ->
-      let n = Hmx_null.fresh st in
-      Hmx_null.add st (Eq (n, N Null.NotNull));
-      Hmx_null.add st (Join (n, [ N Null.Nullable ])); n)
+      let n = Hmx_null.fresh () in
+      Hmx_null.add st (Eq (n, Hmx_null.const Null.NotNull));
+      Hmx_null.add st (Join (n, [ Hmx_null.const Null.Nullable ])); n)
     with
     | Error _ -> ()
     | Ok _ -> assert_failure "expected a nullability conflict");
@@ -383,7 +383,7 @@ let test_nullability = [
   (* NotNull is the identity of the join, so an unconstrained variable is not
      null — §8 says otherwise and §8 is wrong *)
   "an undetermined nullability is not null" >:: (fun () ->
-    assert_null ~msg:"free" Null.NotNull (fun st -> Hmx_null.fresh st));
+    assert_null ~msg:"free" Null.NotNull (fun _ -> Hmx_null.fresh ()));
 ]
 
 (* ---------------------------------------------------------- signatures *)
@@ -532,15 +532,14 @@ let parse_expr text =
   | _ -> assert_failure (sprintf "not a select: %s" text)
 
 let col ?(sources = [ "t" ]) name base null =
-  { Resolve.name; sources; ty = Resolved.known base null; meta = Sql.Meta.empty () }
+  { Resolve.name; sources; ty = { base = Some base; null = Some null }; meta = Sql.Meta.empty () }
 
 let scope columns = {
   Resolve.columns;
   named = (fun _ -> None);
   grouping = false;
-  guaranteed_row = false;
-  subquery = (fun _ _ -> Error { Resolve.pos = None; msg = "no subqueries in this scope" });
-  of_values = (fun _ -> Error { Resolve.pos = None; msg = "no VALUES() in this scope" });
+  subquery = (fun _ _ -> conflict "no subqueries in this scope");
+  of_values = (fun _ -> conflict "no VALUES() in this scope");
 }
 
 let demo_scope = scope [
@@ -551,9 +550,9 @@ let demo_scope = scope [
 ]
 
 let infer_sql ?(env = demo_scope) text =
-  match Resolve.expr env (parse_expr text) with
-  | Error e -> Error (Resolve.show_error e)
-  | Ok r -> Constrain.infer r
+  match Constrain.infer env (parse_expr text) with
+  | r -> r
+  | exception Conflict e -> Error e
 
 let assert_sql ~msg text base null =
   match infer_sql text with
@@ -603,10 +602,9 @@ let test_pipeline = [
     assert_sql ~msg:"id + note" "id + note" (Refined.of_base Base.Text) Null.Nullable);
 
   "an unknown column is reported by stage 1" >:: (fun () ->
-    match Resolve.expr demo_scope (parse_expr "nosuch") with
-    | Ok _ -> assert_failure "expected a resolve error"
-    | Error e -> assert_bool (Resolve.show_error e)
-                   (String.length (Resolve.show_error e) > 0));
+    match Constrain.infer demo_scope (parse_expr "nosuch") with
+    | _ -> assert_failure "expected a resolve error"
+    | exception Conflict _ -> ());
 ]
 
 (* ------------------------------------------------ stage 1: FROM and JOIN *)
@@ -617,11 +615,11 @@ let attr name t null =
 let demo_catalog = {
   Resolve.table = (fun (n : Sql.table_name) ->
     match n.tn with
-    | "a" -> Ok (Resolve.sourced n [ attr "id" Sql.Type.Int Strict; attr "x" Sql.Type.Text Strict ])
-    | "b" -> Ok (Resolve.sourced n [ attr "id" Sql.Type.Int Strict; attr "y" Sql.Type.Text Strict ])
-    | other -> Error { Resolve.pos = None; msg = "no such table " ^ other });
-  select = (fun _ -> Error { Resolve.pos = None; msg = "subqueries not wired yet" });
-  values = (fun _ -> Error { Resolve.pos = None; msg = "value rows not wired yet" });
+    | "a" -> Resolve.sourced n [ attr "id" Sql.Type.Int Strict; attr "x" Sql.Type.Text Strict ]
+    | "b" -> Resolve.sourced n [ attr "id" Sql.Type.Int Strict; attr "y" Sql.Type.Text Strict ]
+    | other -> conflict "no such table %s" other);
+  select = (fun _ -> conflict "subqueries not wired yet");
+  values = (fun _ -> conflict "value rows not wired yet");
 }
 
 let parse_from text =
@@ -634,8 +632,8 @@ let resolve_from text =
   | None -> assert_failure "no FROM clause"
   | Some n ->
     match Resolve.nested demo_catalog n with
-    | Error e -> assert_failure (Resolve.show_error e)
-    | Ok schema -> Resolve.scope_of_schema schema
+    | schema -> Resolve.scope_of_schema schema
+    | exception Conflict e -> assert_failure e
 
 let find_col scope name sources =
   match List.find_opt (fun (c : Resolve.column) ->
@@ -686,21 +684,18 @@ let test_from = [
     | None -> assert_failure "no FROM"
     | Some n ->
       match Resolve.nested demo_catalog n with
-      | Ok _ -> assert_failure "expected an error"
-      | Error _ -> ());
+      | _ -> assert_failure "expected an error"
+      | exception Conflict _ -> ());
 
   (* stage 1 output feeds stage 2 directly *)
   "a joined scope types an expression" >:: (fun () ->
     let cols = resolve_from "SELECT 1 FROM a LEFT JOIN b ON a.id = b.id" in
     let env = scope cols in
-    match Resolve.expr env (parse_expr "concat(a.x, b.y)") with
-    | Error e -> assert_failure (Resolve.show_error e)
-    | Ok r ->
-      match Constrain.infer r with
-      | Error e -> assert_failure e
-      | Ok t ->
-        assert_equal ~msg:"nullable through the outer join" ~printer:Sql.Type.show
-          (Hmx_of_sql.to_type (Refined.of_base Base.Text) Null.Nullable) t);
+    match Constrain.infer env (parse_expr "concat(a.x, b.y)") with
+    | Error e -> assert_failure e
+    | Ok t ->
+      assert_equal ~msg:"nullable through the outer join" ~printer:Sql.Type.show
+        (Hmx_of_sql.to_type (Refined.of_base Base.Text) Null.Nullable) t);
 ]
 
 let tests = [
