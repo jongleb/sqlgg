@@ -37,11 +37,9 @@ let of_kind (k : Sql.Type.kind) : Refined.t option =
 
 (** [None] is [Depends], which is a fresh nullability variable *)
 let of_nullability (n : Sql.Type.nullability) =
-  match n with Strict -> Some Null.NotNull | Nullable -> Some Null.Nullable | Depends -> None
+  match n with Strict -> Some false | Nullable -> Some true | Depends -> None
 
 let of_type (t : Sql.Type.t) = of_kind t.t, of_nullability t.nullability
-
-let of_source_type (t : Sql.Source_type.t) = of_type (Sql.Source_type.to_infer_type t)
 
 let of_tyvar (v : Sql.Type.tyvar) : Hmx_sig.param_spec =
   match v with
@@ -53,10 +51,10 @@ let of_tyvar (v : Sql.Type.tyvar) : Hmx_sig.param_spec =
 
 (* Ret Any means "the common supertype of the arguments", which is the shared
    variable, not an unconstrained one *)
-let ret_of_tyvar (v : Sql.Type.tyvar) : Hmx_sig.ret =
+let ret_of_tyvar (v : Sql.Type.tyvar) : Refined.t option =
   match v with
-  | Var _ -> Hmx_sig.Ret_same
-  | Typ t -> (match of_kind t.t with None -> Hmx_sig.Ret_same | Some ty -> Hmx_sig.Ret ty)
+  | Var _ -> None
+  | Typ t -> of_kind t.t
 
 let base b = Refined.of_base b
 
@@ -67,7 +65,7 @@ let base b = Refined.of_base b
    join still applies. Only a declared Nullable is absorbing. *)
 let null_of_declared (t : Sql.Type.t) : Hmx_sig.null_rule =
   match t.nullability with
-  | Nullable -> Hmx_sig.Const Null.Nullable
+  | Nullable -> Hmx_sig.Const true
   | Strict | Depends -> Hmx_sig.Join
 
 let null_of_ret (v : Sql.Type.tyvar) : Hmx_sig.null_rule =
@@ -75,18 +73,17 @@ let null_of_ret (v : Sql.Type.tyvar) : Hmx_sig.null_rule =
 
 let of_comparison (op : Sql.comparison_op) =
   let open Hmx_sig in
-  let ret = Ret (base Base.Bool) in
+  let ret = base Base.Bool in
   match op with
   (* IS NULL asks about nullability rather than comparing, so a parameter
      under it may perfectly well be null *)
-  | Is_null | Is_not_null -> make ~nulls:(Const Null.NotNull) (Args [ Same ]) ret
-  | Not_distinct_op -> make ~nulls:(Const Null.NotNull) ~compares:true (Args [ Same; Same ]) ret
+  | Is_null | Is_not_null -> make ~nulls:(Const false) (Args [ Same ]) ~ret
+  | Not_distinct_op -> make ~nulls:(Const false) ~compares:true (Args [ Same; Same ]) ~ret
   | Comp_equal | Comp_num_cmp | Comp_text_cmp | Comp_num_eq ->
-    make ~compares:true (Args [ Same; Same ]) ret
+    make ~compares:true (Args [ Same; Same ]) ~ret
 
-(* The func type is parameterised over what Ret/Arith carry: Source_type.t in
-   the registry, Type.t once resolved. *)
-let of_func' ~arity ~(to_type : 't -> Sql.Type.t) (f : 't Sql.func) : (Hmx_sig.t, string) result =
+let of_func ~arity (f : Sql.Source_type.t Sql.func) : (Hmx_sig.t, string) result =
+  let to_type = Sql.Source_type.to_infer_type in
   let open Hmx_sig in
   let repeat n spec = Args (List.init n (fun _ -> spec)) in
   let bool = base Base.Bool and text = base Base.Text in
@@ -97,47 +94,43 @@ let of_func' ~arity ~(to_type : 't -> Sql.Type.t) (f : 't Sql.func) : (Hmx_sig.t
     match of_kind t.t with
     (* Any means "the lub of the arguments", so the shared variable is what
        carries the predicate *)
-    | None -> Ok (make ~nulls ~preds (repeat arity Same) Ret_same)
-    | Some ty -> Ok (make ~nulls (repeat arity Free) (Ret ty))
+    | None -> Ok (make ~nulls ~preds (repeat arity Same))
+    | Some ty -> Ok (make ~nulls ~ret:ty (repeat arity Free))
   in
   match f with
   | Agg Count ->
-    Ok (make ~agg:true ~nulls:(Const Null.NotNull) (repeat arity Free) (Ret (base Base.Int)))
+    Ok (make ~nulls:(Const false) ~ret:(base Base.Int) (repeat arity Free))
   | Agg Avg ->
-    Ok (make ~agg:true ~nulls:(Const Null.Nullable) (Args [ Same ]) (Ret (base Base.Float)))
-  | Agg Self -> Ok (make ~agg:true ~nulls:Group_join (Args [ Same ]) Ret_same)
+    Ok (make ~nulls:(Const true) ~ret:(base Base.Float) (Args [ Same ]))
+  | Agg Self -> Ok (make ~nulls:Group_join (Args [ Same ]))
   | Agg (With_order { with_order_kind = Group_concat; _ }) ->
-    Ok (make ~agg:true ~nulls:Group_join (repeat arity Free) (Ret text))
+    Ok (make ~nulls:Group_join ~ret:text (repeat arity Free))
   | Agg (With_order { with_order_kind = Json_arrayagg; _ }) ->
-    Ok (make ~agg:true ~nulls:Group_join (Args [ Free ]) (Ret (base Base.Json)))
-  | Null_handling Null_if -> Ok (make ~nulls:(Const Null.Nullable) (Args [ Same; Same ]) Ret_same)
-  | Null_handling If_null -> Ok (make ~nulls:Meet (Args [ Same; Same ]) Ret_same)
+    Ok (make ~nulls:Group_join ~ret:(base Base.Json) (Args [ Free ]))
+  | Null_handling Null_if -> Ok (make ~nulls:(Const true) (Args [ Same; Same ]))
+  | Null_handling If_null -> Ok (make ~nulls:Meet (Args [ Same; Same ]))
   | Null_handling (Coalesce (ret, each)) ->
-    Ok (make ~nulls:Meet
-          (Varargs { head = [ of_tyvar each ]; tail = [ of_tyvar each ] }) (ret_of_tyvar ret))
+    Ok (make ~nulls:Meet ?ret:(ret_of_tyvar ret)
+          (Varargs { head = [ of_tyvar each ]; tail = [ of_tyvar each ] }))
   | Comparison op | Quantified_comparison { op; _ } -> Ok (of_comparison op)
-  | Logical _ -> Ok (make (Args [ As bool; As bool ]) (Ret bool))
-  | Negation -> Ok (make (Args [ As bool ]) (Ret bool))
+  | Logical _ -> Ok (make ~ret:bool (Args [ As bool; As bool ]))
+  | Negation -> Ok (make ~ret:bool (Args [ As bool ]))
   (* no predicate here on purpose: Arith also carries datetime arithmetic, and
      the descriptors cannot tell the two apart. Num belongs in the hand-written
      table, where + and date_add are separate entries. *)
   | Arith t -> ret_like t
   | Ret t -> ret_like t
-  | Membership | Range -> Ok (make ~compares:true (repeat arity Same) (Ret bool))
+  | Membership | Range -> Ok (make ~compares:true ~ret:bool (repeat arity Same))
   | Like { escaped } ->
-    Ok (make ~compares:true (Args [ As (if escaped then bool else text); As text ]) (Ret bool))
+    Ok (make ~compares:true ~ret:bool (Args [ As (if escaped then bool else text); As text ]))
   | F (ret, args) ->
-    Ok (make ~nulls:(null_of_ret ret) (Args (List.map of_tyvar args)) (ret_of_tyvar ret))
+    Ok (make ~nulls:(null_of_ret ret) ?ret:(ret_of_tyvar ret) (Args (List.map of_tyvar args)))
   | Multi { ret; fixed_args; repeating_pattern } ->
-    Ok (make ~nulls:(null_of_ret ret)
+    Ok (make ~nulls:(null_of_ret ret) ?ret:(ret_of_tyvar ret)
           (Varargs { head = List.map of_tyvar fixed_args;
-                     tail = List.map of_tyvar repeating_pattern })
-          (ret_of_tyvar ret))
+                     tail = List.map of_tyvar repeating_pattern }))
   | Col_assign { ret_t; col_t; arg_t } ->
-    Ok (make ~nulls:Assign (Args [ of_tyvar col_t; of_tyvar arg_t ]) (ret_of_tyvar ret_t))
-
-let of_func ~arity f = of_func' ~arity ~to_type:Sql.Source_type.to_infer_type f
-let of_resolved_func ~arity f = of_func' ~arity ~to_type:(fun (t : Sql.Type.t) -> t) f
+    Ok (make ~nulls:Assign ?ret:(ret_of_tyvar ret_t) (Args [ of_tyvar col_t; of_tyvar arg_t ]))
 
 (* ------------------------------------------------------------- back *)
 
@@ -165,6 +158,6 @@ let to_kind (r : Refined.t) : Sql.Type.kind =
   | Json_path, _ -> Json_path
   | One_or_all, _ -> One_or_all
 
-let to_nullability = function Null.NotNull -> Sql.Type.Strict | Null.Nullable -> Sql.Type.Nullable
+let to_nullability = function false -> Sql.Type.Strict | true -> Sql.Type.Nullable
 
 let to_type r null : Sql.Type.t = { t = to_kind r; nullability = to_nullability null }

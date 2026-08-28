@@ -105,11 +105,6 @@ module Base = struct
       && not (List.exists (fun (x, y) -> equal x a && equal y b) declared))
       (List.concat_map (fun a -> List.map (fun b -> a, b) all) all)
 
-  (** did [a <= b] hold only because the table was closed transitively?
-      {!Sql.Type.order_kind} answers [`No] for these pairs, so a dialect that
-      wants to keep refusing them needs to see them. *)
-  let is_derived a b = List.exists (fun (x, y) -> equal x a && equal y b) derived
-
   let upper_bounds l = List.filter (fun c -> List.for_all (fun a -> leq a c) l) all
   let lower_bounds l = List.filter (fun c -> List.for_all (fun a -> leq c a) l) all
 
@@ -269,10 +264,6 @@ module Refine = struct
     | Flt _ -> Base.equal b Base.Float || Base.equal b Base.Num_lit
 end
 
-module Null = struct
-  type t = NotNull | Nullable [@@deriving eq, ord, show { with_path = false }, enumerate]
-
-end
 
 module Pred = struct
   type t = Num | Ord | Comparable | Stringable | Aggregatable
@@ -282,13 +273,14 @@ module Pred = struct
     match p, b with
     | Num, (Int | UInt64 | Num_lit | Float | Decimal) -> true
     | Num, (Bool | Str_lit | Datetime | Text | Blob | Json | Json_path | One_or_all) -> false
-    | Ord, (Int | UInt64 | Num_lit | Float | Decimal | Bool | Str_lit | Datetime | Text | Blob) -> true
-    | Ord, (Json | Json_path | One_or_all) -> false
+    (* Json and friends sit between a string literal and Text, so any predicate
+       holding at both ends must hold here too — that is what convexity means,
+       and they are stored as text anyway *)
+    | Ord, _ -> true
     | Comparable, _ -> true
     | Stringable, (Str_lit | Text | Blob | Datetime | Json | Json_path | One_or_all) -> true
     | Stringable, (Int | UInt64 | Num_lit | Float | Decimal | Bool) -> false
-    | Aggregatable, (Int | UInt64 | Num_lit | Float | Decimal | Bool | Str_lit | Datetime | Text | Blob) -> true
-    | Aggregatable, (Json | Json_path | One_or_all) -> false
+    | Aggregatable, _ -> true
 
   (* §4.3 wants these predicates convex — not intervals, [Num] is not one —
      because that is what makes them decidable from the bounds. The tests

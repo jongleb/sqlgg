@@ -31,6 +31,9 @@ type env = {
   query_has_grouping: bool;
   (* Check if the current query is an UPDATE statement *)
   is_update: bool;
+  (* §6: aggregates are functions of a group, so they have no meaning where
+     rows are still being filtered *)
+  allow_aggregates: bool;
   insert_resolved_types: (string, Type.t) Hashtbl.t; (* for INSERT .. VALUES *)
   scope: query_scope;
   attr_refinement: Attr_refinement.t;
@@ -51,6 +54,7 @@ let empty_env = { query_has_grouping = false;
   tables = []; schema = []; 
   ctes = [];
   is_update = false;
+  allow_aggregates = true;
   insert_resolved_types = Hashtbl.create 16;
   scope = Top_level;
   attr_refinement = Attr_refinement.empty;
@@ -543,6 +547,7 @@ let rec resolve_env env = {
     | exception _ -> None
     | s -> Some (Resolve.scope_of_schema s));
   grouping = env.query_has_grouping;
+  allow_aggregates = env.allow_aggregates;
   of_values = (fun col ->
     match Hashtbl.find_opt env.insert_resolved_types col with
     | Some t -> Resolve.ty_of_sql t
@@ -553,7 +558,10 @@ let rec resolve_env env = {
 (* A scalar subquery yields no row when the outer filter matches nothing, so
    its value is nullable — unless it is a bare COUNT, which always answers. *)
 and subquery_result ~env select usage =
-  let (schema, p, _) = eval_select_full { env with scope = Subquery } select in
+  (* a subquery is a query of its own: an aggregate there belongs to it, not to
+     the clause the subquery sits in *)
+  let inner = { env with scope = Subquery; allow_aggregates = true } in
+  let (schema, p, _) = eval_select_full inner select in
   let schema = List.map (function
     | AttrWithSources a -> a
     | DynamicWithSources _ -> fail "nested select cannot have dynamic attributes") schema
@@ -831,7 +839,8 @@ and eval_select ~order env { columns; from; where; group; having; } =
   (* use schema without aliases here *)
   let p1 = get_params_of_columns env projection in
   let env, p3 =
-    let where_params env = get_params_opt env where in
+    let per_row env = { env with allow_aggregates = false } in
+    let where_params env = get_params_opt (per_row env) where in
     (* Some dialects support aliasing *)
     if Dialect.Semantic.is_where_aliases_dialect () then
       let with_aliases env = { env with schema = make_unique (Schema.Join.cross env.schema final_schema') } in
@@ -856,7 +865,7 @@ and eval_select ~order env { columns; from; where; group; having; } =
     | Some _, _ ->
       `Nat
   in
-  let p4 = get_params_l env group in
+  let p4 = get_params_l { env with allow_aggregates = false } group in
   let p5 = get_params_opt env having in
   let final_schema, p2 =
     Table_elimination.eliminate ~env ~from:resolved_from ~columns ~where ~group ~having ~order final_schema p2

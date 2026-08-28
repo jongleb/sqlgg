@@ -203,7 +203,6 @@ let solve ?fallback bounds =
 
 let lo t v = Hmx_solver.above v t
 let up t v = Hmx_solver.below v t
-let exact t v = Hmx_solver.exactly v t
 let pred p v = Hmx_solver.has v p
 
 let assert_solves ~msg ?fallback bounds expect =
@@ -264,11 +263,12 @@ let test_solver = [
      no further constructors" is exactly what an upper bound means. *)
   "a declared enum rejects a foreign literal" >:: (fun () ->
     let e = Refine.enum ~closed:true [ "a"; "b" ] in
+    let declared t v = Hmx_solver.same v (Hmx_solver.declared t) in
     assert_solves ~msg:"status = 'a'"
-      [ exact (refined Base.Text e); lo (refined Base.Str_lit (Refine.literal "a")) ]
+      [ declared (refined Base.Text e); lo (refined Base.Str_lit (Refine.literal "a")) ]
       (refined Base.Text e);
     assert_conflict ~msg:"status = 'typo'"
-      [ exact (refined Base.Text e); lo (refined Base.Str_lit (Refine.literal "typo")) ]);
+      [ declared (refined Base.Text e); lo (refined Base.Str_lit (Refine.literal "typo")) ]);
 
   "two literals widen to their union" >:: (fun () ->
     assert_solves ~msg:"'a' or 'b'"
@@ -288,9 +288,11 @@ let test_solver = [
   (* a literal sits below every stringable type, and which one it may become is
      decided by validating its content *)
   "a literal rises only where it validates" >:: (fun () ->
+    (* the literal settles to Text: Str_lit is a position in the lattice, not a
+       type anything can have *)
     assert_solves ~msg:"'$.a' as a json path"
       [ lo (refined Base.Str_lit (Refine.literal "$.a")); up (base Base.Json_path) ]
-      (refined Base.Str_lit (Refine.literal "$.a"));
+      (refined Base.Text (Refine.literal "$.a"));
     assert_conflict ~msg:"'nonsense' as a json path"
       [ lo (refined Base.Str_lit (Refine.literal "nonsense[")); up (base Base.Json_path) ]);
 
@@ -303,23 +305,6 @@ let test_solver = [
     Hmx_solver.below b (base Base.Float);
     assert_equal ~printer:Refined.show (base Base.Int) (Hmx_solver.resolve a));
 
-  (* the lattice needs the transitive closure to be a lattice; §11.4 wants the
-     edges it invents refused, so they are reported instead of allowed silently *)
-  "a coercion invented by the closure is reported" >:: (fun () ->
-    let v = Hmx_solver.fresh () in
-    Hmx_solver.above v (base Base.Int);
-    Hmx_solver.below v (base Base.Text);
-    assert_equal ~msg:"resolves" ~printer:Refined.show (base Base.Int) (Hmx_solver.resolve v);
-    (* Int <= Text exists only in the closure; Int <= Datetime is declared *)
-    let w = Hmx_solver.fresh () in
-    Hmx_solver.above w (base Base.Int);
-    Hmx_solver.above w (base Base.Text);
-    assert_equal ~msg:"one derived coercion" 1 (List.length (Hmx_solver.derived_coercions w));
-    let u = Hmx_solver.fresh () in
-    Hmx_solver.above u (base Base.Int);
-    Hmx_solver.above u (base Base.Datetime);
-    assert_equal ~msg:"declared edges are not reported" 0
-      (List.length (Hmx_solver.derived_coercions u)));
 ]
 
 (* --------------------------------------------------------- nullability *)
@@ -334,48 +319,48 @@ let nsolve build =
 let assert_null ~msg expect build =
   match nsolve build with
   | Error e -> assert_failure (sprintf "%s: %s" msg e)
-  | Ok n -> assert_equal ~msg ~printer:Null.show expect n
+  | Ok n -> assert_equal ~msg ~printer:Hmx_null.show expect n
 
 let test_nullability = [
   "a join is nullable as soon as one argument is" >:: (fun () ->
-    assert_null ~msg:"a + b" Null.Nullable (fun st ->
+    assert_null ~msg:"a + b" true (fun st ->
       let n = Hmx_null.fresh () in
-      Hmx_null.add st (Join (n, [ Hmx_null.const Null.NotNull; Hmx_null.const Null.Nullable ])); n));
+      Hmx_null.add st (Join (n, [ Hmx_null.const false; Hmx_null.const true ])); n));
 
   "a join of strict arguments is strict" >:: (fun () ->
-    assert_null ~msg:"a + b" Null.NotNull (fun st ->
+    assert_null ~msg:"a + b" false (fun st ->
       let n = Hmx_null.fresh () in
-      Hmx_null.add st (Join (n, [ Hmx_null.const Null.NotNull; Hmx_null.const Null.NotNull ])); n));
+      Hmx_null.add st (Join (n, [ Hmx_null.const false; Hmx_null.const false ])); n));
 
   (* COALESCE: not null as soon as any branch is *)
   "a meet is strict as soon as one argument is" >:: (fun () ->
-    assert_null ~msg:"coalesce" Null.NotNull (fun st ->
+    assert_null ~msg:"coalesce" false (fun st ->
       let n = Hmx_null.fresh () in
-      Hmx_null.add st (Meet (n, [ Hmx_null.const Null.Nullable; Hmx_null.const Null.NotNull ])); n));
+      Hmx_null.add st (Meet (n, [ Hmx_null.const true; Hmx_null.const false ])); n));
 
   "an unknown argument is settled by the fixpoint, whatever the order" >:: (fun () ->
     let build st =
       let n = Hmx_null.fresh () and a = Hmx_null.fresh () and b = Hmx_null.fresh () in
-      Hmx_null.add st (Join (n, [ a; Hmx_null.const Null.NotNull ]));
+      Hmx_null.add st (Join (n, [ a; Hmx_null.const false ]));
       Hmx_null.add st (Eq (a, b));
-      Hmx_null.add st (Eq (b, Hmx_null.const Null.Nullable));
+      Hmx_null.add st (Eq (b, Hmx_null.const true));
       n
     in
-    assert_null ~msg:"fixpoint" Null.Nullable build);
+    assert_null ~msg:"fixpoint" true build);
 
   (* the dual direction: a strict result forces its arguments *)
   "a strict join result forces its arguments" >:: (fun () ->
-    assert_null ~msg:"not null context" Null.NotNull (fun st ->
+    assert_null ~msg:"not null context" false (fun st ->
       let n = Hmx_null.fresh () and a = Hmx_null.fresh () in
-      Hmx_null.add st (Eq (n, Hmx_null.const Null.NotNull));
+      Hmx_null.add st (Eq (n, Hmx_null.const false));
       Hmx_null.add st (Join (n, [ a; Hmx_null.fresh () ]));
       a));
 
   "a contradiction is reported" >:: (fun () ->
     match nsolve (fun st ->
       let n = Hmx_null.fresh () in
-      Hmx_null.add st (Eq (n, Hmx_null.const Null.NotNull));
-      Hmx_null.add st (Join (n, [ Hmx_null.const Null.Nullable ])); n)
+      Hmx_null.add st (Eq (n, Hmx_null.const false));
+      Hmx_null.add st (Join (n, [ Hmx_null.const true ])); n)
     with
     | Error _ -> ()
     | Ok _ -> assert_failure "expected a nullability conflict");
@@ -383,7 +368,7 @@ let test_nullability = [
   (* NotNull is the identity of the join, so an unconstrained variable is not
      null — §8 says otherwise and §8 is wrong *)
   "an undetermined nullability is not null" >:: (fun () ->
-    assert_null ~msg:"free" Null.NotNull (fun _ -> Hmx_null.fresh ()));
+    assert_null ~msg:"free" false (fun _ -> Hmx_null.fresh ()));
 ]
 
 (* ---------------------------------------------------------- signatures *)
@@ -397,19 +382,18 @@ module Sg = struct
   let text = Refined.of_base Base.Text
   let int = Refined.of_base Base.Int
 
-  let arith = make ~preds:[ Pred.Num ] (Args [ Same; Same ]) Ret_same
-  let equal = make ~compares:true ~preds:[ Pred.Comparable ] (Args [ Same; Same ]) (Ret bool)
-  let sum = make ~agg:true ~preds:[ Pred.Num ] ~nulls:(Const Null.Nullable) (Args [ Same ]) Ret_same
-  let count = make ~agg:true ~nulls:(Const Null.NotNull)
-      (Varargs { head = []; tail = [ Free ] }) (Ret int)
-  let coalesce = make ~nulls:Meet (Varargs { head = [ Same ]; tail = [ Same ] }) Ret_same
-  let concat = make (Varargs { head = []; tail = [ As text ] }) (Ret text)
-  let concat_ws = make (Varargs { head = [ As text ]; tail = [ As text ] }) (Ret text)
+  let arith = make ~preds:[ Pred.Num ] (Args [ Same; Same ])
+  let equal = make ~compares:true ~preds:[ Pred.Comparable ] ~ret:bool (Args [ Same; Same ])
+  let sum = make ~preds:[ Pred.Num ] ~nulls:(Const true) (Args [ Same ])
+  let count = make ~nulls:(Const false) ~ret:int (Varargs { head = []; tail = [ Free ] })
+  let coalesce = make ~nulls:Meet (Varargs { head = [ Same ]; tail = [ Same ] })
+  let concat = make ~ret:text (Varargs { head = []; tail = [ As text ] })
+  let concat_ws = make ~ret:text (Varargs { head = [ As text ]; tail = [ As text ] })
   let json_array_append =
-    make (Varargs { head = [ As (Refined.of_base Base.Json);
-                             As (Refined.of_base Base.Json_path); Free ];
-                    tail = [ As (Refined.of_base Base.Json_path); Free ] })
-      (Ret (Refined.of_base Base.Json))
+    make ~ret:(Refined.of_base Base.Json)
+      (Varargs { head = [ As (Refined.of_base Base.Json);
+                          As (Refined.of_base Base.Json_path); Free ];
+                 tail = [ As (Refined.of_base Base.Json_path); Free ] })
 end
 
 let test_signatures = [
@@ -439,8 +423,8 @@ let test_signatures = [
       | Error e -> assert_failure e
       | Ok sch -> sch.Hmx_sig.result_null
     in
-    assert_bool "count" (rule Sg.count 1 = Hmx_sig.Const Null.NotNull);
-    assert_bool "sum" (rule Sg.sum 1 = Hmx_sig.Const Null.Nullable);
+    assert_bool "count" (rule Sg.count 1 = Hmx_sig.Const false);
+    assert_bool "sum" (rule Sg.sum 1 = Hmx_sig.Const true);
     assert_bool "concat" (rule Sg.concat 2 = Hmx_sig.Join));
 ]
 
@@ -538,15 +522,16 @@ let scope columns = {
   Resolve.columns;
   named = (fun _ -> None);
   grouping = false;
+  allow_aggregates = true;
   subquery = (fun _ _ -> conflict "no subqueries in this scope");
   of_values = (fun _ -> conflict "no VALUES() in this scope");
 }
 
 let demo_scope = scope [
-  col "id" (Refined.of_base Base.Int) Null.NotNull;
-  col "price" (Refined.make Base.Decimal (dec 10 2)) Null.NotNull;
-  col "note" (Refined.of_base Base.Text) Null.Nullable;
-  col "status" (Refined.make Base.Text (Refine.enum [ "new"; "done" ])) Null.NotNull;
+  col "id" (Refined.of_base Base.Int) false;
+  col "price" (Refined.make Base.Decimal (dec 10 2)) false;
+  col "note" (Refined.of_base Base.Text) true;
+  col "status" (Refined.make Base.Text (Refine.enum [ "new"; "done" ])) false;
 ]
 
 let infer_sql ?(env = demo_scope) text =
@@ -567,44 +552,44 @@ let assert_sql_fails ~msg text =
 let test_pipeline = [
 
   "a literal" >:: (fun () ->
-    assert_sql ~msg:"1" "1" (Refined.of_base Base.Int) Null.NotNull);
+    assert_sql ~msg:"1" "1" (Refined.of_base Base.Int) false);
 
   "a column keeps its declared type" >:: (fun () ->
-    assert_sql ~msg:"price" "price" (Refined.make Base.Decimal (dec 10 2)) Null.NotNull;
-    assert_sql ~msg:"note" "note" (Refined.of_base Base.Text) Null.Nullable);
+    assert_sql ~msg:"price" "price" (Refined.make Base.Decimal (dec 10 2)) false;
+    assert_sql ~msg:"note" "note" (Refined.of_base Base.Text) true);
 
   (* §1: the motivating case, now through the real parser *)
   "arithmetic on a decimal keeps the precision" >:: (fun () ->
-    assert_sql ~msg:"price + 1" "price + 1" (Refined.make Base.Decimal (dec 10 2)) Null.NotNull);
+    assert_sql ~msg:"price + 1" "price + 1" (Refined.make Base.Decimal (dec 10 2)) false);
 
   "arithmetic with a nullable operand is nullable" >:: (fun () ->
-    assert_sql ~msg:"id + length(note)" "id + length(note)" (Refined.of_base Base.Int) Null.Nullable);
+    assert_sql ~msg:"id + length(note)" "id + length(note)" (Refined.of_base Base.Int) true);
 
   "a numeric literal lands on either side of the lattice" >:: (fun () ->
-    assert_sql ~msg:"price + 1.5" "price + 1.5" (Refined.make Base.Decimal (dec 10 2)) Null.NotNull;
-    assert_sql ~msg:"1.5" "1.5" (Refined.of_base Base.Float) Null.NotNull);
+    assert_sql ~msg:"price + 1.5" "price + 1.5" (Refined.make Base.Decimal (dec 10 2)) false;
+    assert_sql ~msg:"1.5" "1.5" (Refined.of_base Base.Float) false);
 
   "COALESCE is not null once a branch is" >:: (fun () ->
     assert_sql ~msg:"coalesce(note, 'x')" "coalesce(note, 'x')"
-      (Refined.of_base Base.Text) Null.NotNull);
+      (Refined.of_base Base.Text) false);
 
   "a parameter takes the type of what it is compared to" >:: (fun () ->
-    assert_sql ~msg:"status = @s" "status = @s" (Refined.of_base Base.Bool) Null.NotNull);
+    assert_sql ~msg:"status = @s" "status = @s" (Refined.of_base Base.Bool) false);
 
   "a literal outside a declared enum is rejected" >:: (fun () ->
     assert_sql ~msg:"status" "status"
-      (Refined.make Base.Text (Refine.enum [ "new"; "done" ])) Null.NotNull);
+      (Refined.make Base.Text (Refine.enum [ "new"; "done" ])) false);
 
   (* Not rejected yet: Arith also carries datetime arithmetic, so the
      descriptors cannot say Num. The predicate arrives with the hand-written
      signature table, where + and date_add are separate entries. *)
   "arithmetic has no numeric predicate until the table is written" >:: (fun () ->
-    assert_sql ~msg:"id + note" "id + note" (Refined.of_base Base.Text) Null.Nullable);
+    assert_sql ~msg:"id + note" "id + note" (Refined.of_base Base.Text) true);
 
   "an unknown column is reported by stage 1" >:: (fun () ->
     match Constrain.infer demo_scope (parse_expr "nosuch") with
-    | _ -> assert_failure "expected a resolve error"
-    | exception Conflict _ -> ());
+    | Error _ -> ()
+    | Ok t -> assert_failure (sprintf "expected a resolve error, got %s" (Sql.Type.show t)));
 ]
 
 (* ------------------------------------------------ stage 1: FROM and JOIN *)
@@ -652,23 +637,23 @@ let test_from = [
   "a plain table puts its columns in scope" >:: (fun () ->
     let scope = resolve_from "SELECT 1 FROM a" in
     assert_equal ~msg:"width" 2 (List.length scope);
-    assert_equal ~msg:"x" Null.NotNull (null_of (find_col scope "x" [ "a" ])));
+    assert_equal ~msg:"x" false (null_of (find_col scope "x" [ "a" ])));
 
   "an inner join keeps both sides strict" >:: (fun () ->
     let scope = resolve_from "SELECT 1 FROM a JOIN b ON a.id = b.id" in
-    assert_equal ~msg:"a.x" Null.NotNull (null_of (find_col scope "x" [ "a" ]));
-    assert_equal ~msg:"b.y" Null.NotNull (null_of (find_col scope "y" [ "b" ])));
+    assert_equal ~msg:"a.x" false (null_of (find_col scope "x" [ "a" ]));
+    assert_equal ~msg:"b.y" false (null_of (find_col scope "y" [ "b" ])));
 
   (* the padding rule: the optional side of an outer join goes nullable *)
   "a left join makes the right side nullable" >:: (fun () ->
     let scope = resolve_from "SELECT 1 FROM a LEFT JOIN b ON a.id = b.id" in
-    assert_equal ~msg:"a.x stays strict" Null.NotNull (null_of (find_col scope "x" [ "a" ]));
-    assert_equal ~msg:"b.y goes nullable" Null.Nullable (null_of (find_col scope "y" [ "b" ])));
+    assert_equal ~msg:"a.x stays strict" false (null_of (find_col scope "x" [ "a" ]));
+    assert_equal ~msg:"b.y goes nullable" true (null_of (find_col scope "y" [ "b" ])));
 
   "a right join pads the other side" >:: (fun () ->
     let scope = resolve_from "SELECT 1 FROM a RIGHT JOIN b ON a.id = b.id" in
-    assert_equal ~msg:"a.x" Null.Nullable (null_of (find_col scope "x" [ "a" ]));
-    assert_equal ~msg:"b.y" Null.NotNull (null_of (find_col scope "y" [ "b" ])));
+    assert_equal ~msg:"a.x" true (null_of (find_col scope "x" [ "a" ]));
+    assert_equal ~msg:"b.y" false (null_of (find_col scope "y" [ "b" ])));
 
   "an alias renames the source" >:: (fun () ->
     let scope = resolve_from "SELECT 1 FROM a AS t1" in
@@ -695,7 +680,7 @@ let test_from = [
     | Error e -> assert_failure e
     | Ok t ->
       assert_equal ~msg:"nullable through the outer join" ~printer:Sql.Type.show
-        (Hmx_of_sql.to_type (Refined.of_base Base.Text) Null.Nullable) t);
+        (Hmx_of_sql.to_type (Refined.of_base Base.Text) true) t);
 ]
 
 let tests = [

@@ -14,7 +14,7 @@ let fail fmt = conflict fmt
     That absence is the point. Today {!Sql.Type.Any} plays two roles at once —
     the bottom of the lattice and "not known yet" — and the second role is what
     this [option] replaces. *)
-type ty = { base : Refined.t option; null : Null.t option }
+type ty = { base : Refined.t option; null : bool option (** may be NULL *) }
 
 (** a column in scope, with the tables it can be qualified by *)
 type column = { name : string; sources : string list; ty : ty; meta : Sql.Meta.t }
@@ -27,6 +27,10 @@ type env = {
   (** an aggregate here is guaranteed to see a row, so a strict argument keeps
       a strict result *)
   grouping : bool;
+  (** §6: an aggregate is a function of a group, so it has no meaning where
+      rows are still being filtered — in WHERE, in GROUP BY, in a join
+      condition, or inside another aggregate *)
+  allow_aggregates : bool;
   subquery : Sql.select_full -> [ `AsValue | `Exists ] -> ty * Sql.var list;
   of_values : string -> ty;
 }
@@ -68,14 +72,14 @@ let apply_json_meta (c : column) =
   | None, None -> c.ty
   | v, _ when is Base.Json ->
     let null = match v, c.ty.null with
-      | Some "false", Some Null.NotNull -> Some Null.NotNull
-      | _ -> Some Null.Nullable
+      | Some "false", Some false -> Some false
+      | _ -> Some true
     in
     { c.ty with null }
   | v, Some "true" when is Base.Text ->
     let null = match v, c.ty.null with
-      | Some "false", Some Null.NotNull -> Some Null.NotNull
-      | _ -> Some Null.Nullable
+      | Some "false", Some false -> Some false
+      | _ -> Some true
     in
     { c.ty with null }
   | _, Some _ -> fail "column %s has text_as_json meta, but its type is not Text" c.name

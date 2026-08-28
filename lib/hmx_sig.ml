@@ -24,36 +24,35 @@ type params =
   | Varargs of { head : param_spec list; tail : param_spec list }
       (** [head] followed by [tail] repeated zero or more times *)
 
-type ret =
-  | Ret_same       (** the shared variable *)
-  | Ret of Refined.t
-
+(** how the result's nullability follows from the arguments'.
+    Everywhere below a [bool] is "may be NULL". *)
 type null_rule =
-  | Join           (** null if any argument is *)
+  | Join           (** nullable if any argument is *)
   | Meet           (** not null if any argument is not — COALESCE and relatives *)
-  | Const of Null.t
+  | Const of bool  (** fixed, whatever the arguments say *)
   | Group_join     (** [Join], but nullable unless the group is guaranteed a row *)
   | Assign         (** SET col = e: the argument's nullability must sit below the column's *)
 
 type t = {
   params : params;
-  ret : ret;
+  ret : Refined.t option;   (** [None] is the shared variable *)
   preds : Pred.t list;      (** predicates on the shared variable *)
   nulls : null_rule;
-  agg : bool;               (** may only appear in an aggregate context *)
   compares : bool;
       (** the operands are compared rather than combined. A comparison against
           NULL is never true, so a parameter here is not offered as nullable —
           it is the one exception to inheriting a sibling's nullability. *)
 }
 
-let make ?(preds = []) ?(nulls = Join) ?(agg = false) ?(compares = false) params ret =
-  { params; ret; preds; nulls; agg; compares }
+(** the common case is a result that is the shared variable, so that is the
+    default and only a fixed result has to be named *)
+let make ?ret ?(preds = []) ?(nulls = Join) ?(compares = false) params =
+  { params; ret; preds; nulls; compares }
 
 (** the result of applying a signature to a concrete arity *)
 type scheme = {
   formals : param_spec list;   (** one per actual argument *)
-  result : ret;
+  result : Refined.t option;
   result_null : null_rule;
   same_at : bool list;         (** per argument: does it share the scheme variable *)
   preds : Pred.t list;         (** predicates on the shared variable *)

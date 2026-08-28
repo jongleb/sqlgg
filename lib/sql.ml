@@ -837,15 +837,6 @@ let strict_args kind parameters =
   | Quantified_comparison _
   | Agg _ | Null_handling _ | Logical _ | Ret _ | F _ | Col_assign _ | Multi _ -> []
 
-let source_fun_kind_to_infer = function
-  | Ret t -> Ret (Source_type.to_infer_type t)
-  | Arith t -> Arith (Source_type.to_infer_type t)
-  | Agg (Self | Count | Avg | With_order _) 
-  | Null_handling _ | Comparison _ | Quantified_comparison _
-  | Logical _ | Negation | F _ 
-  | Membership | Range | Like _
-  | Col_assign _ | Multi _ as fn -> fn
-
 let expr_to_string = show_expr
 
 let map_kind_exprs f = function
@@ -1112,43 +1103,6 @@ let fixed ret args = monomorphic (Type.depends ret) (List.map Type.depends args)
 
 let fun_identity = F (Var 0, [Var 0])
 
-let pp_func pp f =
-  let open Format in
-  let rec aux = function
-  | Agg Self -> fprintf pp "|'a| -> 'a"
-  | Agg Avg -> fprintf pp "|'a| -> float"
-  | Agg Count -> fprintf pp "|'a| -> int"
-  | Agg (With_order { with_order_kind = Group_concat; _ }) -> fprintf pp "|'a| -> text"
-  | Agg (With_order { with_order_kind = Json_arrayagg; _ }) -> fprintf pp "|'a| -> json"
-  | Ret ret -> fprintf pp "_ -> %s" (Type.show ret)
-  | Arith ret -> fprintf pp "'a -> 'a -> %s" (Type.show ret)
-  | Membership -> fprintf pp "'a -> { 'a }+ -> %s" (Type.show_kind Bool)
-  | Range -> fprintf pp "'a -> 'a -> 'a -> %s" (Type.show_kind Bool)
-  | Like { escaped } ->
-    fprintf pp "%s -> %s -> %s" (Type.show_kind (if escaped then Bool else Text)) (Type.show_kind Text) (Type.show_kind Bool)
-  | F (ret, args) -> fprintf pp "%s -> %s" (String.concat " -> " @@ List.map Type.string_of_tyvar args) (Type.string_of_tyvar ret)
-  | Col_assign { ret_t=ret; col_t; arg_t } -> aux (F (ret, [col_t; arg_t]))
-  | Null_handling (Coalesce (ret, each_arg)) -> fprintf pp "{ %s }+ -> %s" (Type.string_of_tyvar each_arg) (Type.string_of_tyvar ret)
-  | Null_handling nulls -> let ret, args = null_handling_signature nulls 2 in aux (F (ret, args))
-  | Comparison op -> let ret, args = comparison_signature op in aux (F (ret, args))
-  | Quantified_comparison { op; quantifier } ->
-    let ret, _ = comparison_signature op in
-    fprintf pp "'a -> %s { 'a } -> %s"
-      (match quantifier with `Any -> "any" | `All -> "all")
-      (Type.string_of_tyvar ret)
-  | Logical _ -> fprintf pp "'a -> 'a -> %s" (Type.show_kind Bool)
-  | Negation -> fprintf pp "'a -> %s" (Type.show_kind Bool)
-  | Multi { ret; fixed_args; repeating_pattern } ->
-      let fixed_str = match fixed_args with
-        | [] -> ""
-        | args -> String.concat " -> " (List.map Type.string_of_tyvar args) ^ " -> "
-      in
-      let repeating_str = String.concat ", " (List.map Type.string_of_tyvar repeating_pattern) in
-      fprintf pp "%s[%s]* -> %s" fixed_str repeating_str (Type.string_of_tyvar ret)
-  in
-  aux f
-
-let string_of_func = Format.asprintf "%a" pp_func
 
 let is_grouping = function
   | Agg _ -> true

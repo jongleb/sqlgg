@@ -44,7 +44,7 @@ let rec gen env (e : Sql.expr) : t =
   | Value v ->
     let t = Resolve.ty_of_sql v.collated in
     let ty, _ = split t in
-    { ty; null = Hmx_null.const (match t.null with Some n -> n | None -> Null.NotNull); vars = [] }
+    { ty; null = Hmx_null.const (match t.null with Some n -> n | None -> false); vars = [] }
   | Column col ->
     let ty, null = split (Resolve.apply_json_meta (Resolve.lookup_column env.scope col.collated)) in
     { ty; null; vars = [] }
@@ -56,7 +56,7 @@ let rec gen env (e : Sql.expr) : t =
     let vars = List.map (fun v -> PReady v) vars in
     (match usage with
      | `AsValue -> let ty, null = split t in { ty; null; vars }
-     | `Exists -> { ty = boolean (); null = Hmx_null.const Null.NotNull; vars })
+     | `Exists -> { ty = boolean (); null = Hmx_null.const false; vars })
   | InChoice (id, kind, e) ->
     let r = gen env e in
     { r with vars = [ PChoiceIn { id; kind; vars = r.vars } ] }
@@ -84,7 +84,7 @@ let rec gen env (e : Sql.expr) : t =
       in
       r.ty, r.null, meta) exprs
     in
-    { ty = boolean (); null = Hmx_null.const Null.NotNull;
+    { ty = boolean (); null = Hmx_null.const false;
       vars = [ PTuple { id = param_id; items; kind = kind_in_tuple_list; pos } ] }
   | Choices (id, l) ->
     (* alternatives, so the result is the least type above every branch *)
@@ -97,13 +97,23 @@ let rec gen env (e : Sql.expr) : t =
       vars = [ PChoice (id, List.map (fun (n, r) -> n, Option.map (fun r -> r.vars) r) branches) ] }
   | Case { case; branches; else_ } -> gen_case env case branches else_
   | Fun { fn_name; kind; parameters; over } ->
+    (* §6: the mode is an index on the judgment, not a type, so this is decided
+       here and never reaches the solver *)
+    if Sql.is_grouping kind && not env.scope.allow_aggregates then
+      conflict "%s is an aggregate and cannot appear here" fn_name;
     let sg =
       match Hmx_of_sql.of_func ~arity:(List.length parameters) kind with
       | Ok sg -> sg
       | Error msg -> conflict "%s: %s" fn_name msg
     in
     let order = match kind with Agg (With_order { order; _ }) -> order | _ -> [] in
-    gen_call env ~name:fn_name ~sg ~args:parameters ~order
+    (* an aggregate takes a group to a value, so its argument is per-row again *)
+    let inner =
+      if Sql.is_grouping kind
+      then { env with scope = { env.scope with allow_aggregates = false } }
+      else env
+    in
+    gen_call inner ~name:fn_name ~sg ~args:parameters ~order
       ~guaranteed_row:(env.scope.grouping || Sql.over_has_a_row over)
 
 and param ~in_list (p : Sql.Source_type.t Sql.param) meta =
@@ -130,7 +140,7 @@ and gen_case env scrutinee branches else_ =
   (* a CASE with no ELSE falls through to NULL *)
   Hmx_null.add env.nulls
     (match else_r with
-     | None -> Eq (n, Hmx_null.const Null.Nullable)
+     | None -> Eq (n, Hmx_null.const true)
      | Some _ -> Join (n, List.map (fun r -> r.null) results));
   { ty = a; null = n; vars = vars_of (some head @ whens @ thens @ some else_r) }
 
@@ -150,7 +160,7 @@ and gen_call env ~name ~sg ~args ~order ~guaranteed_row =
     rs sch.formals;
   List.iter (fun p -> Hmx_solver.has (Lazy.force shared) p) sch.preds;
   let result =
-    match sch.result with Ret_same -> Lazy.force shared | Ret t -> Hmx_solver.at_least t
+    match sch.result with None -> Lazy.force shared | Some t -> Hmx_solver.at_least t
   in
   let undeclared_param = function
     | Sql.Param ({ typ = { nullability = Depends; _ }; _ }, _)
@@ -183,7 +193,7 @@ and gen_call env ~name ~sg ~args ~order ~guaranteed_row =
     | Hmx_sig.Group_join ->
       if guaranteed_row then
         let n = Hmx_null.fresh () in Hmx_null.add env.nulls (Join (n, nulls)); n
-      else Hmx_null.const Null.Nullable
+      else Hmx_null.const true
     (* SET col = e: the result is the column, and the argument must fit it *)
     | Hmx_sig.Assign ->
       (match nulls with
@@ -220,17 +230,15 @@ let rec to_var read = function
 (** Walk, solve, and read everything back as declared types: the shape the rest
     of the compiler still speaks. *)
 let solve_expr ?fallback scope e =
-  match
+  try
     let env = env scope in
     let r = gen env e in
     Hmx_null.solve env.nulls;
     let read ty null =
       Hmx_of_sql.to_type (Hmx_solver.resolve ?fallback ty) (Hmx_null.get null)
     in
-    read r.ty r.null, List.map (to_var read) r.vars
-  with
-  | result -> Ok result
-  | exception Conflict msg -> Error msg
+    Ok (read r.ty r.null, List.map (to_var read) r.vars)
+  with Conflict msg -> Error msg
 
 (** just the type, for tests and for anything that does not need parameters *)
 let infer ?fallback scope e =
