@@ -6,209 +6,9 @@ open Prelude
 open Sql
 open Narrowing
 
-module Config = struct
-  let debug = ref false
-  (* If strict mode is not enabled, some dbs allow this. *)
-  let allow_write_notnull_null = ref false
-  let dynamic_select = ref false
-end
+open Env
 
-type query_scope =
-  | Top_level
-  | Subquery
-  | From_passthrough
-
-type env = {
-  tables : Tables.table list;
-  schema : table_name Schema.Source.t;
-  (*
-    1. CTEs = tables for the current statement (not keeping during whole .sql)
-    2. It merges with global tables during source resolving
-    3. The Tables field mostly stores aliases and forms a scheme
-  *)
-  ctes : Tables.table list;
-  query_has_grouping: bool;
-  (* Check if the current query is an UPDATE statement *)
-  is_update: bool;
-
-  allow_aggregates: bool;
-  insert_resolved_types: (string, Type.t) Hashtbl.t; (* for INSERT .. VALUES *)
-  scope: query_scope;
-  attr_refinement: Attr_refinement.t;
-
-  insert_targets: attr list option;
-
-  session: Constrain.session;
-}
-
-let compound_type (a : Type.t) (b : Type.t) =
-  let null = Type.is_nullable a || Type.is_nullable b in
-  match Hmx_of_sql.of_kind a.t, Hmx_of_sql.of_kind b.t with
-
-  | None, None -> Some { a with Type.nullability = if null then Nullable else Strict }
-
-  | Some a, Some b when
-      (match Hmx_lattice.Base.lub [ a.base; b.base ] with
-       | Some l -> not (Hmx_lattice.Base.equal l a.base || Hmx_lattice.Base.equal l b.base)
-       | None -> true) -> None
-  | ba, bb ->
-    let v = Hmx_solver.fresh () in
-    match
-      Option.may (Hmx_solver.above v) ba;
-      Option.may (Hmx_solver.above v) bb;
-      Hmx_solver.resolve v
-    with
-    | exception Hmx_lattice.Conflict _ -> None
-
-    | t when List.exists (fun (r : Hmx_lattice.Refined.t option) ->
-        match r with
-        | Some r -> List.mem (r.base, t.base) Hmx_lattice.Base.derived
-        | None -> false) [ ba; bb ] -> None
-    | t -> Some (Hmx_of_sql.to_type t null)
-
-let compound = Schema.compound ~merge:compound_type
-
-let empty_env session = { query_has_grouping = false;
-  tables = []; schema = [];
-  ctes = [];
-  is_update = false;
-  allow_aggregates = true;
-  insert_resolved_types = Hashtbl.create 16;
-  scope = Top_level;
-  attr_refinement = Attr_refinement.empty;
-  insert_targets = None;
-  session;
-}
-
-let schema_of ~env name =
-  let result = Tables.get_from (env.ctes @ env.tables) name in
-  Schema.Source.of_schema ~sources:[fst result] (snd result)
-
-let values_or_all table names =
-  let schema = Tables.get_schema table in
-  match names with
-  | Some names ->
-    let req_missing =
-      List.filter_map
-        (fun { extra; name; _ } ->
-          let open Constraints in
-          if inter (of_list [Autoincrement; WithDefault; NotNull]) extra = of_list [NotNull]
-            && not @@ List.mem name names then Some name
-          else None
-        )
-        schema
-    in
-    begin match req_missing with
-    | [] -> ()
-    | fields ->
-        fail "Fields: (%s) don't have a default value" (String.concat "," fields) end;
-    Schema.project names schema
-  | None -> schema
-
-let make_unique =
-  List.unique ~cmp:(fun a1 a2 ->
-    match Qualified_attr.named (Qualified_attr.of_attr a1), Qualified_attr.named (Qualified_attr.of_attr a2) with
-    | Some k1, Some k2 -> Qualified_attr.equal k1 k2
-    | None, _ | _, None -> false)
-
-let all_columns = make_unique $ Schema.cross_all
-
-let resolve_column ~env {cname;tname} =
-  let open Schema.Source in
-  let open Attr in
-  let by_name_and_sources tname name source_attr = source_attr.attr.name =
-    name && Option.map_default
-      (fun tname -> List.mem tname.tn (List.map(fun i -> i.tn) source_attr.sources)) false tname in
-  let find_by t name = List.find_all (by_name_and_sources tname name) t in
-  let find t name =
-    match find_by t name with
-    | [x] -> Some x
-    | [] -> None
-    | list -> Some (List.last list) in
-  let result = find env.schema cname in
-  let find_by_name t name = List.find_all (by_name name) t in
-  let find t name =
-    let err_data = to_schema t in
-    match find_by_name t name with
-    | [x] -> x
-    | [] -> raise (Schema.Error (err_data,"missing attribute : " ^ name))
-    | _ -> raise (Schema.Error (err_data,"duplicate attribute : " ^ name))
-  in
-  match result with
-  | None -> find (Option.map_default (schema_of ~env) env.schema tname) cname
-  | Some result -> result
-
-let resolve_column_opt ~env col =
-  match resolve_column ~env col with
-  | attr -> Some attr
-  | exception (Schema.Error _ | Failure _) -> None
-
-let as_column ~env = function
-  | Sql.Column col -> resolve_column_opt ~env col.collated
-  | _ -> None
-
-let update_schema_with_aliases all_schema final_schema =
-  let applied = all_schema |> List.filter (fun s1 -> List.for_all Schema.Source.Attr.(fun s2 -> s2.attr.name <> s1.attr.name) final_schema) in
-  applied @ final_schema
-
-let dynamic_allowed env =
-  !Config.dynamic_select &&
-  match env.scope with
-  | Top_level | From_passthrough -> true
-  | Subquery -> false
-
-let make_dynamic_select ~env columns =
-  if not (dynamic_allowed env) then
-    columns
-  else
-    let module S = Set.Make(String) in
-    let unique_name used base =
-      if not (S.mem base used) then
-        base
-      else
-        let rec aux n =
-          let candidate = base ^ "_" ^ string_of_int n in
-          if S.mem candidate used then aux (n + 1) else candidate
-        in
-        aux 1
-    in
-    let use_expanded_choices ~used ~idx ~column_pos ~schema =
-      let rev_choices, used, idx =
-        List.fold_left (fun (choices, used, idx) { Schema.Source.Attr.attr = { name; _ }; sources } ->
-          let source = match sources with s :: _ -> Some s | [] -> None in
-          let col_name = unique_name used name in
-          let expr = Column { collated = { cname = name; tname = source }; collation = None } in
-          let choice = ({ value = Some col_name; pos = Sql.dummy_pos }, Some expr), column_pos in
-          choice :: choices, S.add col_name used, idx + 1
-        ) ([], used, idx) schema
-      in
-      (used, idx, snd column_pos), List.rev rev_choices
-    in
-    let (_, _, last_col_end), choices_chunks =
-      List.fold_left_map (fun (used, idx, _last_end) column ->
-        match column.value with
-        | Expr ({ value = e; pos = ep_start, ep_end }, alias) ->
-          let base_name = Option.default begin match e with
-            | Column { collated = { cname; _ }; _ } -> cname
-            | _ -> Params.dynamic_col_param_name ^ string_of_int (idx + 1)
-            end alias
-          in
-          let col_name = unique_name used base_name in
-          let choice = (({ value = Some col_name; pos = (ep_start, ep_end) }, Some e), column.pos) in
-          ((S.add col_name used, idx + 1, snd column.pos), [choice])
-        | All ->
-          use_expanded_choices ~used ~idx ~column_pos:column.pos ~schema:env.schema
-        | AllOf t ->
-          use_expanded_choices ~used ~idx ~column_pos:column.pos ~schema:(schema_of ~env t)
-      ) (S.empty, 0, 0) columns
-    in
-    let all_choices = List.concat choices_chunks in
-    match all_choices with
-    | [] -> columns
-    | (_, (first_pos, _)) :: _ ->
-      let outer_pos = (first_pos, last_col_end) in
-      let choices = List.map fst all_choices in
-      [{ value = Expr ({ value = Choices ({ value = Some Params.dynamic_col_param_name; pos = outer_pos }, choices); pos = outer_pos }, None); pos = outer_pos }]
+module Config = Env.Config
 
 let rec resolve_env env = {
   Resolve.column = (fun col ->
@@ -216,7 +16,7 @@ let rec resolve_env env = {
   grouping = env.query_has_grouping;
   allow_aggregates = env.allow_aggregates;
   of_values = (fun col ->
-    match Hashtbl.find_opt env.insert_resolved_types col with
+    match List.assoc_opt col env.of_values_types with
     | Some t -> t
     | None -> fail "VALUES(col) as an expression is only acceptable in ON DUPLICATE KEY UPDATE context");
   subquery = (fun select usage -> subquery_result ~env select usage);
@@ -226,10 +26,7 @@ and subquery_result ~env select usage =
 
   let inner = { env with scope = Subquery; allow_aggregates = true; insert_targets = None } in
   let (schema, p, _) = eval_select_full inner select in
-  let schema = List.map (function
-    | AttrWithSources a -> a
-    | DynamicWithSources _ -> fail "nested select cannot have dynamic attributes") schema
-  in
+  let schema = static_cols "nested select cannot have dynamic attributes" schema in
   let schema' = Schema.Source.to_schema schema in
   let meta = match schema with [ a ] -> a.attr.meta | _ -> Meta.empty () in
   match schema, usage with
@@ -270,7 +67,7 @@ and resolve_types env expr =
   | Ok (ty, vars, meta) -> vars, ty, meta
   | exception Hmx_lattice.Conflict msg -> fail "%s" msg
 
-and resolve_column_assignments ~env l =
+and resolve_column_assignments ?(is_update=false) ~env l =
   let open Schema.Source in
   let open Attr in
   let all = all_columns (List.map (fun (a, b) -> Schema.Source.of_schema ~sources:[a] b) env.tables) in
@@ -279,7 +76,7 @@ and resolve_column_assignments ~env l =
     let resolved = resolve_column ~env col in
     (* non nullifiable: once a column value is set to non-NULL, it can never be updated back to NULL *)
     let resolved =
-      if env.is_update && Meta.get_is_non_nullifiable resolved.attr.meta then
+      if is_update && Meta.get_is_non_nullifiable resolved.attr.meta then
         Attr.map_attr (fun a ->
           { a with domain = Type.make_strict a.domain; extra = Constraints.add NotNull a.extra }) resolved
       else resolved in
@@ -430,9 +227,9 @@ and join env { From.base; joins } =
   let env = { env with tables = env.tables @ all_tables; schema = base.From.rsrc_schema } in
   List.fold_left do_join (env, base.From.rsrc_params) joins
 
-and params_of_assigns env ss =
+and params_of_assigns ?(is_update=false) env ss =
   List.concat_map (fun (ctx, column, e) -> fst (assign_types ~ctx env ~column e))
-    (resolve_column_assignments ~env ss)
+    (resolve_column_assignments ~is_update ~env ss)
 
 and params_of_order order final_schema env =
   List.concat_map
@@ -563,11 +360,7 @@ and resolve_source env (x, alias) =
     let (env,p,resolved_from) = eval_nested env (Some from) in
     let s = infer_schema env [dummy_loc All] in
     if alias <> None then failwith "No alias allowed on nested tables";
-    let s = List.map (function
-      | AttrWithSources attr -> attr
-       (* TODO: next step optimize it *)
-      | DynamicWithSources _ -> failwith "Nested source cannot have dynamic columns"
-    ) s in
+    let s = static_cols "Nested source cannot have dynamic columns" s in
     { From.rsrc_schema = s; From.rsrc_params = p; From.rsrc_tables = env.tables; From.rsrc_dynamic = From.dynamic_columns resolved_from; From.rsrc_physical_table = None }
   | `Table s ->
     let (name,s) = Tables.get_from (env.ctes @ Tables.all ()) s in
@@ -596,10 +389,7 @@ and resolve_source env (x, alias) =
         let select = dummy_select exprs in
         let select_complete = { select = select, unions; order=row_order; limit=row_limit; select_row_locking = None } in
         let (s, p, v) = eval_select_full env { select_complete; cte = None } in
-        let s = List.map (function
-          | AttrWithSources attr -> attr
-          | DynamicWithSources _ -> failwith "VALUES cannot have dynamic columns"
-        ) s in
+        let s = static_cols "VALUES cannot have dynamic columns" s in
         (s, p, v)
       | RowParam { id; types; values_start_pos } ->
         Schema.Source.of_schema (List.map (fun t -> make_attribute' "" (Source_type.to_infer_type t)) types),
@@ -634,11 +424,7 @@ and eval_cte ~session { cte_items; is_recursive } =
           in
           let stmt = { stmt_ with select = select, other } in
           let s1, p1, env, cardinality = eval_select ~order:[] env (fst stmt.select) in
-          let s1' = List.map (function
-            | AttrWithSources attr -> attr
-            (* TODO: next step is to support it for CTEs *)
-            | DynamicWithSources _ -> failwith "Recursive CTEs cannot have dynamic columns"
-          ) s1 in
+          let s1' = static_cols "Recursive CTEs cannot have dynamic columns" s1 in
           (* UNIONed fields access by alias to itself cte *)
           let s2 = compound (Option.map_default a1 s1' cte.cols) s1' in
           let a2 = to_schema s2 in
@@ -656,11 +442,7 @@ and eval_cte ~session { cte_items; is_recursive } =
           s1, [SharedVarsGroup (p1, shared_query_name)], kind
       )
     in
-    let s1 = List.map (function
-      | AttrWithSources attr -> attr
-        (* TODO: next step is to support it for CTEs *)
-      | DynamicWithSources _ -> failwith "Recursive CTEs cannot have dynamic columns"
-    ) s1 in
+    let s1 = static_cols "Recursive CTEs cannot have dynamic columns" s1 in
     let s2 = compound (Option.map_default a1 s1 cte.cols) s1 in
     (tbl_name, to_schema s2) :: acc_ctes, acc_vars @ p1 end
   ([], []) cte_items
@@ -676,12 +458,9 @@ and eval_compound ~env result =
     if other = [] then s1
     else (
       (* TODO: next step is to support it for UNIONS (but if it's possible to control it) *)
-      let unwrap_attr = function
-        | AttrWithSources attr -> attr
-        | DynamicWithSources _ -> failwith "Union/Except/Intersect doesn't support dynamic columns"
-      in
-      let s1' = List.map unwrap_attr s1 in
-      let s2l' = List.map (List.map unwrap_attr) s2l in
+      let unwrap = static_cols "Union/Except/Intersect doesn't support dynamic columns" in
+      let s1' = unwrap s1 in
+      let s2l' = List.map unwrap s2l in
       List.map (fun x -> AttrWithSources x) @@ List.fold_left compound s1' s2l'
     )
   in
@@ -699,12 +478,12 @@ and eval_compound ~env result =
     else cardinality in
   final_schema, ( p1 @ (List.flatten p2l) @ p3 @ p4 : var list), Stmt.Select cardinality
 
-let update_tables ~env sources ss w =
+let update_tables ?(is_update=false) ~env sources ss w =
   let schema = Schema.cross_all @@ List.map (fun src -> src.From.rsrc_schema) sources in
   let p0 = List.flatten @@ List.map (fun src -> src.From.rsrc_params) sources in
   let tables = List.flatten @@ List.map (fun src -> src.From.rsrc_tables) sources in (* TODO assert equal duplicates if not unique *)
   let env = { env with tables; schema; } in
-  let p1 = params_of_assigns env ss in
+  let p1 = params_of_assigns ~is_update env ss in
   let p2 = get_params_opt env w in
   p0 @ p1 @ p2
 
@@ -754,10 +533,7 @@ let rec eval ~session (stmt:Sql.stmt) =
       ([],[],Create name)
   | Create (name, Select { value=select; _ }) ->
       let (schema,params,_) = eval_select_full empty_env select in
-      let schema = List.map (function
-        | AttrWithSources attr -> attr
-        | DynamicWithSources _ -> failwith "CREATE TABLE AS SELECT cannot have dynamic columns"
-      ) schema in
+      let schema = static_cols "CREATE TABLE AS SELECT cannot have dynamic columns" schema in
       Tables.add (name, to_schema schema);
       ([],params,Create name)
   | Alter (name,actions) ->
@@ -798,43 +574,20 @@ let rec eval ~session (stmt:Sql.stmt) =
           c, params, t
         ) resolved l
       ) assigns in
-      (*
-        DDL:
-        -- [sqlgg] non_nullifiable=true
-        col INT NULL
-
-        INSERT with multiple VALUES:
-        INSERT INTO t (col) VALUES
-          (42),     -- col: Int (strict)
-          (NULL),   -- col: Int? (nullable)
-          (@param); -- col: Int? (inferred as nullable)
-
-        Flow:
-        DDL column type: Int?          (nullable from schema)
-          ↓
-        VALUES row 1:    Int           (strict literal)
-        ....
-          ↓
-        Aggregated type: Int?          (nullable wins)
-          ↓
-        VALUES(col) type: Int?         (overall nullable)
-
-        - ON DUPLICATE KEY UPDATE - this is part of UPDATE and should be checked then for non_nullifiable
-        this is why we build env.insert_resolved_types
-      *)
-      List.iter (fun (c, _, t) ->
-        match Hashtbl.find_opt env.insert_resolved_types c.cname with
-        | None ->
-          Hashtbl.add env.insert_resolved_types c.cname t
+      (* a column seen in several VALUES rows is nullable if any row makes it so;
+         VALUES(col) later reads this aggregated type *)
+      let of_values_types = List.fold_left (fun acc (c, _, t) ->
+        match List.assoc_opt c.cname acc with
+        | None -> (c.cname, t) :: acc
         | Some t0 ->
-          Hashtbl.replace env.insert_resolved_types c.cname
-
-          { t with Type.nullability =
-              if Type.is_nullable t || Type.is_nullable t0 then Nullable else Strict }
-      ) resolved;
+          (c.cname, { t with Type.nullability =
+            if Type.is_nullable t || Type.is_nullable t0 then Nullable else Strict })
+          :: List.remove_assoc c.cname acc)
+        [] resolved
+      in
       let p1 = List.concat_map (fun (_c, p, _t) -> p) resolved in
       let conflict_assigns = resolve_on_conflict_clause ~env table.tn on_conflict_clause in
-      let params2 = params_of_assigns { env with is_update = true; } conflict_assigns in
+      let params2 = params_of_assigns ~is_update:true { env with of_values_types } conflict_assigns in
       [], p1 @ params2, Insert (None, table)
     end
   | Insert { target=table; action=`Param (names, param_id); on_conflict_clause; _ } ->
@@ -842,8 +595,8 @@ let rec eval ~session (stmt:Sql.stmt) =
     let env = { empty_env with tables = [Tables.get table]; schema; } in
     let conflict_assigns = resolve_on_conflict_clause ~env table.tn on_conflict_clause in
     let expect = values_or_all table names in
-    List.iter (fun a -> Hashtbl.add env.insert_resolved_types a.attr.name a.attr.domain ) schema;
-    let params2 = params_of_assigns { env with is_update = true } conflict_assigns in
+    let of_values_types = List.map (fun a -> a.attr.name, a.attr.domain) schema in
+    let params2 = params_of_assigns ~is_update:true { env with of_values_types } conflict_assigns in
     let params = [ TupleList (param_id, Insertion expect) ] in
     [], params @ params2, Insert (None, table)
   | Insert { target=table; action=`Select (names, select); on_conflict_clause; _ } ->
@@ -852,16 +605,13 @@ let rec eval ~session (stmt:Sql.stmt) =
       schema = Schema.Source.of_schema ~sources:[table] (Tables.get_schema table);
     } in
     let (schema,params,_) = eval_select_full { env with insert_targets = Some expect } select in
-    let schema = List.map (function
-      | AttrWithSources attr -> attr
-      | DynamicWithSources _ -> failwith "INSERT ... SELECT cannot have dynamic columns"
-    ) schema in
+    let schema = static_cols "INSERT ... SELECT cannot have dynamic columns" schema in
     ignore (compound
       (Schema.Source.of_schema expect)
       (Schema.Source.of_schema (Schema.Source.to_schema schema))); (* test equal types once more (not really needed) *)
     let conflict_assigns = resolve_on_conflict_clause ~env table.tn on_conflict_clause in
-    List.iter2 (fun a1 a2 -> Hashtbl.add env.insert_resolved_types a2.name a1.attr.domain ) schema expect;
-    let params2 = params_of_assigns { env with is_update = true } conflict_assigns in
+    let of_values_types = List.map2 (fun a1 a2 -> a2.name, a1.attr.domain) schema expect in
+    let params2 = params_of_assigns ~is_update:true { env with of_values_types } conflict_assigns in
     [], params @ params2, Insert (None,table)
   | Insert { target=table; action=`Set ss; on_conflict_clause; _ } ->
     let env = { empty_env with tables = [Tables.get table];
@@ -872,7 +622,7 @@ let rec eval ~session (stmt:Sql.stmt) =
     | Some ss -> params_of_assigns env ss, None
     in
     let conflict_assigns = resolve_on_conflict_clause ~env table.tn on_conflict_clause in
-    let params2 = params_of_assigns { env with is_update = true } conflict_assigns in
+    let params2 = params_of_assigns ~is_update:true env conflict_assigns in
     [], params @ params2, Insert (inferred,table)
   | Delete (table, where) ->
     let t = Tables.get table in
@@ -898,19 +648,19 @@ let rec eval ~session (stmt:Sql.stmt) =
     end
   | Update (table,ss,w,o,lim) ->
     let f, s = Tables.get table in
-    let env = { empty_env with is_update = true } in
+    let env = empty_env in
     let r = Schema.Source.of_schema ~sources:[f] s in
-    let params = update_tables ~env [{ From.rsrc_schema = r; From.rsrc_params = []; From.rsrc_tables = [(f, s)]; From.rsrc_dynamic = [];
+    let params = update_tables ~is_update:true ~env [{ From.rsrc_schema = r; From.rsrc_params = []; From.rsrc_tables = [(f, s)]; From.rsrc_dynamic = [];
       From.rsrc_physical_table = Some { Sql.table = f; alias = None } }] ss w in
-    let env = { env with schema = update_schema_with_aliases [] r; is_update = true } in
+    let env = { env with schema = update_schema_with_aliases [] r } in
     let p3 = params_of_order o [] { env with tables = [(f, s)] } in
     let lim = List.map (fun p -> make_param ~id:p.id ~typ:(Source_type.to_infer_type p.typ)) lim in
     [], params @ p3 @ (List.map (fun p -> Single (p, Meta.empty())) lim), Update (Some table)
   | UpdateMulti (tables,ss,w,o,lim) ->
-    let env = { empty_env with is_update = true } in
+    let env = empty_env in
     let sources = List.map (fun src -> resolve_source { env with scope = Subquery } ((`Nested src), None)) tables in
     let tables = List.map (fun src -> src.From.rsrc_tables) sources |> List.flatten in
-    let params = update_tables ~env sources ss w in
+    let params = update_tables ~is_update:true ~env sources ss w in
     let p3 = params_of_order o [] { env with schema = Schema.cross_all @@ List.map (fun src -> src.From.rsrc_schema) sources; tables } in
     let lim = List.map (fun p -> make_param ~id:p.id ~typ:(Source_type.to_infer_type p.typ)) lim in
     [], params @ p3 @ (List.map (fun p -> Single (p, Meta.empty())) lim), Update None

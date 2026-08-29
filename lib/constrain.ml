@@ -5,10 +5,9 @@ module Meta = Sql.Meta
 type session = {
   nulls : Hmx_null.state;
   named : (string, Hmx_solver.var * Hmx_null.t) Hashtbl.t;
-  mutable seen : (Sql.param_id * (Hmx_solver.var * Hmx_null.t)) list;
 }
 
-let create () = { nulls = Hmx_null.create (); named = Hashtbl.create 8; seen = [] }
+let create () = { nulls = Hmx_null.create (); named = Hashtbl.create 8 }
 
 let named session name =
   match Hashtbl.find_opt session.named name with
@@ -189,7 +188,6 @@ and param env ~in_list (p : Sql.Source_type.t Sql.param) meta =
      Hmx_solver.same ty t;
      Hmx_null.unify null n
    | None -> ());
-  env.session.seen <- (p.id, (ty, null)) :: env.session.seen;
   let meta = ref meta in
   { ty; null; vars = [ PSingle { id = p.id; ty; null; meta; in_list } ];
     own = None; push = (fun ctx -> meta := Meta.merge_right ctx !meta); closed = None }
@@ -389,9 +387,10 @@ let solve_assign ?ctx ?fallback ?(lax = false) session scope ~column e =
 
 let read_param session ({ Sql.id; typ } : Sql.Type.t Sql.param) =
   Hmx_null.solve session.nulls;
-  match List.find_opt (fun (k, _) -> k == id) session.seen with
-  | Some (_, (ty, null)) -> { Sql.id; typ = read ty null }
-  | None -> { Sql.id; typ }
+  match id.value with
+  | Some name when Hashtbl.mem session.named name ->
+    let ty, null = Hashtbl.find session.named name in { Sql.id; typ = read ty null }
+  | _ -> { Sql.id; typ }
 
 let infer ?fallback scope e =
   match solve_expr ?fallback (create ()) scope e with Ok (ty, _, _) -> Ok ty | Error e -> Error e

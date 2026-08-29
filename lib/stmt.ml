@@ -10,8 +10,6 @@ type inferred = (insert_kind * Sql.schema) option [@@deriving show]
 (** possible number of rows in query result *)
 type cardinality = [`Zero_one | `One | `Nat] [@@deriving show]
 
-let cardinality_to_string = show_cardinality
-
 type kind = | Select of cardinality
             | Insert of inferred * Sql.table_name
             | Create of Sql.table_name

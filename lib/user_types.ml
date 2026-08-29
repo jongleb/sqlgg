@@ -17,8 +17,6 @@ let drop ~if_exists name =
   | false, true -> ()
   | false, false -> failwith (sprintf "no such type %S" name)
 
-let get_opt = Hashtbl.find_opt registry
-
 let get = Hashtbl.find registry
 
 let reset () = Hashtbl.reset registry

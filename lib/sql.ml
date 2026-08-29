@@ -273,22 +273,6 @@ let sub_exprs = function
     @ List.concat_map (fun (b : case_branch) -> [b.when_; b.then_]) branches
     @ option_list else_
 
-let map_sub_exprs f = function
-  | Value _ | Param _ | Inparam _ | Column _ | Of_values _ | SelectExpr _ as e -> e
-  | Choices (n, l) -> Choices (n, List.map (fun (n, e) -> n, Option.map f e) l)
-  | InChoice (n, k, e) -> InChoice (n, k, f e)
-  | OptionActions ({ choice; _ } as o) -> OptionActions { o with choice = f choice }
-  | Fun ({ kind; parameters; _ } as fn) ->
-    Fun { fn with kind = map_kind_exprs f kind; parameters = List.map f parameters }
-  | InTupleList ({ value = { exprs; _ } as tl; _ } as loc) ->
-    InTupleList { loc with value = { tl with exprs = List.map f exprs } }
-  | Case { case; branches; else_ } ->
-    Case {
-      case = Option.map f case;
-      branches = List.map (fun (b : case_branch) -> { when_ = f b.when_; then_ = f b.then_ }) branches;
-      else_ = Option.map f else_;
-    }
-
 let rec expr_exists p e = p e || List.exists (expr_exists p) (sub_exprs e)
 
 let make_partition_by = List.iter (function

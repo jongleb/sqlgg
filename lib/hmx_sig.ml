@@ -86,7 +86,6 @@ let mono ?nulls ?preds ret args = make ?nulls ?preds ~ret (Args (List.map (fun t
 
 let rep ?nulls ?preds ?ret ?(head = []) tail = make ?nulls ?preds ?ret (Varargs { head; tail })
 
-let as_ t = As t
 let anything = Free
 
 let names l sg = List.map (fun n -> n, sg) l
