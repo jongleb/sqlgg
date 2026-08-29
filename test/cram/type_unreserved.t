@@ -92,7 +92,6 @@ used a bare IDENT and rejected the TYPE token):
   > SET type = 1;
   > SELECT type(1);
   > EOF
-  W: unknown function "type" of 1 arguments, treating as untyped
 
 PostgreSQL: the hot zone where the TYPE keyword and the identifier meet.
 A type named "type", a column named "type" of type "type", and

@@ -346,7 +346,7 @@ ruleMain = parse
   | "+" { PLUS }
   | "-" { MINUS }
 
-  | "/" | "%" { NUM_DIV_OP } (* FIXME: in PostgreSQL, "%" is both int modulo and a trigram comparison operator *)
+  | "/" | "%" { NUM_DIV_OP }
   | "<<" | ">>" { NUM_BIT_SHIFT }
   | "|" { NUM_BIT_OR }
   | "&" { NUM_BIT_AND }

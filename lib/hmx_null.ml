@@ -1,21 +1,12 @@
-(** Nullability: a plain [bool], where [true] means the value may be NULL.
-
-    The one part of the constraint language a unifier cannot carry: the result
-    of an operator is the {e join} of its operands' nullabilities, and a join of
-    three variables is not an equality. Equality it can carry, so that half is
-    another {!Inferno.Unifier} over a two-point structure; the joins and meets
-    are a worklist run to a fixpoint. *)
 
 open Hmx_lattice
 
-(** [true] means the value may be NULL *)
 type nullable = bool
 
 let show n = if n then "nullable" else "not null"
 
 module S = struct
-  (* [None] is "nothing known yet", the same convention the type structure
-     uses; the unifier turns it into the other side on the first merge *)
+
   type 'a structure = nullable option
 
   exception InconsistentConjunction
@@ -36,10 +27,10 @@ let value v = U.get v
 
 type con =
   | Eq of t * t
-  | Join of t * t list   (** n is the join of ns *)
-  | Meet of t * t list   (** n is the meet of ns — COALESCE and relatives *)
+  | Join of t * t list
+  | Meet of t * t list
+  | Above of t * t list
 
-(** only the deferred constraints; the equalities live in the unifier *)
 type state = { mutable cons : con list }
 
 let create () = { cons = [] }
@@ -54,8 +45,6 @@ let unify a b =
 
 let set v n = unify v (const n)
 
-(* Partial knowledge is enough: one [top] argument settles the result, and a
-   [bottom] result forces every argument. *)
 let step ~top (n, args) =
   let bottom = not top in
   let known = List.filter_map value args in
@@ -69,13 +58,22 @@ let step ~top (n, args) =
     | Some m when Bool.equal m bottom -> List.iter (fun a -> set a bottom) args; `Done
     | Some _ | None -> `Defer
 
+let step_above (n, args) =
+  if List.exists (fun a -> value a = Some true) args then (set n true; `Done)
+  else
+    match value n with
+    | Some false -> List.iter (fun a -> set a false) args; `Done
+    | Some true -> `Done
+    | None -> if List.for_all (fun a -> value a <> None) args then `Done else `Defer
+
 let solve st =
-  List.iter (function Eq (a, b) -> unify a b | Join _ | Meet _ -> ()) st.cons;
+  List.iter (function Eq (a, b) -> unify a b | Join _ | Meet _ | Above _ -> ()) st.cons;
   let rec settle pending =
     let still =
       List.filter (function
         | Join (n, args) -> step ~top:true (n, args) = `Defer
         | Meet (n, args) -> step ~top:false (n, args) = `Defer
+        | Above (n, args) -> step_above (n, args) = `Defer
         | Eq _ -> false)
         pending
     in
@@ -83,7 +81,4 @@ let solve st =
   in
   settle st.cons
 
-(** [NotNull] is the identity of the join, so "no evidence that this can be
-    null" is exactly what an unconstrained variable means. §8 says [Nullable];
-    the code has always said otherwise, and the code is right. *)
 let get v = match value v with Some n -> n | None -> false

@@ -2,7 +2,6 @@
   Simple SQL parser
 */
 
-
 %{
   open Sql
   open Sql.Type
@@ -98,7 +97,7 @@
 
 input: statement EOF { $1 }
 
-param: 
+param:
   | QSTN { { value=None; pos = ($startofs, $endofs) } }
   | PARAM  { $1 }
 
@@ -106,7 +105,6 @@ if_not_exists: IF NOT EXISTS { }
 if_exists: IF EXISTS {}
 temporary: either(GLOBAL,LOCAL)? TEMPORARY { }
 assign: name=ident EQUAL e=expr { name, e }
-
 
 cte_item: | cte_name=ident names=maybe_parenth(sequence(ident))? AS LPAREN stmt=select_stmt_plain RPAREN
             {
@@ -195,9 +193,9 @@ statement: CREATE ioption(temporary) TABLE ioption(if_not_exists) name=table_nam
            AS? routine_body
            routine_extra?
               {
-                (* a routine's own signature is not tracked; calls to it are untyped *)
+
                 CreateRoutine (name, None, params)
-              }   
+              }
          | CREATE TYPE name=ident AS ENUM LPAREN ctors=commas(TEXT) RPAREN
               { CreateType (name, TypeEnum ctors) }
          | DROP TYPE ie=boption(if_exists) name=ident
@@ -226,8 +224,8 @@ ident: x=IDENT | x=TYPE { x }
 index_prefix: LPAREN n=INTEGER RPAREN { n }
 index_column: name=ident index_prefix? c=collate? order_type? { make_collated ?collation:c ~collated:name ()}
 
-table_definition: t=sequence_(column_def1) ignore_after(RPAREN) 
-                      { 
+table_definition: t=sequence_(column_def1) ignore_after(RPAREN)
+                      {
                         List.fold_right
                           (fun x { schema; constraints; indexes } -> match x with
                           | `Attr a -> { schema = a::schema; constraints; indexes }
@@ -285,16 +283,16 @@ join_source: COMMA src=source c=join_cond { src, make_located ~value:Schema.Join
            | j=straight_cond(located(straight_join)) { j }
 join_cond: ON e=expr { On e }
          | USING l=sequence(ident) { Using l }
-         | (* *) { Default }
+         |  { Default }
 
 source1: table_name { `Table $1 }
        | LPAREN s=select_stmt RPAREN { `Select s }
        | LPAREN s=table_list RPAREN { `Nested s }
        | LPAREN s=values_stmt RPAREN { `ValueRows s }
 
-source: src=source1 alias=maybe_as_with_detupled? { 
-  ( src, 
-    Option.map (fun (tbl, cols) -> 
+source: src=source1 alias=maybe_as_with_detupled? {
+  ( src,
+    Option.map (fun (tbl, cols) ->
       let column_aliases = Option.map (List.map (fun name -> make_attribute' name (depends Any) )) cols in
       { table_name = Sql.make_table_name tbl; column_aliases; }
     ) alias
@@ -311,7 +309,7 @@ on_conflict_action:
   | UPDATE SET ss=commas(set_column) { Do_update ss }
   | NOTHING { Do_nothing }
 
-conflict_clause: 
+conflict_clause:
   | ON DUPLICATE KEY UPDATE ss=commas(set_column)
     { On_duplicate { assignments = ss; }; }
   | ON CONFLICT LPAREN attrs=separated_nonempty_list(COMMA, attr_name) RPAREN DO action=on_conflict_action
@@ -474,7 +472,7 @@ default_value: e=single_literal_value
              | e=datetime_value { e } (* sub expr ? *)
              | LPAREN e=expr RPAREN { e }
 
-set_column: 
+set_column:
   | name=attr_name EQUAL e=set_column_expr { name, e }
 
 set_column_expr:
@@ -504,9 +502,7 @@ expr:
     | e1=expr XOR e2=expr %prec XOR { fn "xor" Named [e1;e2] }
     | e1=expr OR e2=expr %prec OR { fn "or" Named [e1;e2] }
     | e1=expr op=comparison_op q=anyall? e2=expr %prec EQUAL
-      {         (* names carry what typing and narrowing need to tell apart: the
-           null-safe operator has its own nullability, plain equality drives
-           column narrowing, and a quantifier changes what may be concluded *)
+      {
         let name = match q with Some `Any -> "any_cmp" | Some `All -> "all_cmp" | None -> op in
         fn name Named [e1;e2] }
     | e1=expr CONCAT_OP e2=expr { fn "concat" Named [e1;e2] }
@@ -569,7 +565,7 @@ expr:
     | CASE initial_expr=expr? branches_list=nonempty_list(case_branch) else_expr=preceded(ELSE,expr)? END
       {
         let case_record = {
-          Sql.case = initial_expr; 
+          Sql.case = initial_expr;
           Sql.branches = branches_list;
           Sql.else_ = else_expr;
         } in
@@ -580,13 +576,12 @@ expr:
     | f=table_name LPAREN p=func_params RPAREN OVER w=window_spec
         { fn ~over:w f.tn Named p }
 
-values_stmt1: 
+values_stmt1:
   | VALUES expr_list=commas(preceded(ROW, delimited(LPAREN, expr_list, RPAREN))) { RowExprList expr_list }
   | VALUES id=PARAM DOUBLECOLON types=sequence(manual_type) { RowParam { id={ id with pos=($startofs, $endofs) } ; types; values_start_pos = $startofs  } }
 
-values_stmt: 
+values_stmt:
   | kind=values_stmt1 row_order=loption(order) row_limit=limit_t? {{ row_constructor_list = kind; row_order; row_limit;}}
-  
 
 (* https://dev.mysql.com/doc/refman/8.0/en/window-functions-usage.html *)
 first_or_last: FIRST_VALUE { "first_value" } | LAST_VALUE { "last_value" }
@@ -652,15 +647,14 @@ single_literal_value:
 expr_list: l=commas(expr) { l }
 func_params: DISTINCT? l=expr_list { l }
            | ASTERISK { [] }
-           | (* *) { [] }
+           |  { [] }
 escape: ESCAPE expr { $2 }
 numeric_bin_op: PLUS | MINUS | ASTERISK | MOD | NUM_BIT_OR | NUM_BIT_AND | NUM_BIT_SHIFT { }
 comparison_op:
     | EQUAL { "eq" }
     | NOT_DISTINCT_OP { "not_distinct" }
-    (* == could be treated as equality too; conservatively it is a plain comparison *)
-    | NUM_CMP_OP | TEXT_CMP_OP | NUM_EQ_OP { "comparison" }
 
+    | NUM_CMP_OP | TEXT_CMP_OP | NUM_EQ_OP { "comparison" }
 
 interval_unit: INTERVAL_UNIT
              | SECOND_MICROSECOND | MINUTE_MICROSECOND | MINUTE_SECOND
@@ -679,7 +673,7 @@ int_type:
 
 (* expr_sql_type_flavor returns Type.kind for use in CAST *)
 expr_sql_type_flavor:
-                 | T_DECIMAL p=option(delimited(LPAREN, pair(INTEGER, option(preceded(COMMA, INTEGER))), RPAREN)) { 
+                 | T_DECIMAL p=option(delimited(LPAREN, pair(INTEGER, option(preceded(COMMA, INTEGER))), RPAREN)) {
                       match p with
                       | Some (precision, scale) -> Decimal { precision = Some precision; scale }
                       | None -> Decimal { precision = None; scale = None}
@@ -706,7 +700,7 @@ expr_sql_type_flavor:
   | T_VARCHAR2 n=int_arg? { Source_type.Varchar2 n }
 
 (* sql_type_flavor returns Source_type.kind *)
-sql_type_flavor: 
+sql_type_flavor:
   | t=int_type ZEROFILL? { t }
   | T_FLOAT { Source_type.Float Single }
   | T_DOUBLE PRECISION? { Source_type.Float Double }

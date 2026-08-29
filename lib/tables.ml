@@ -66,7 +66,6 @@ let get name = to_table (get_stored name)
 
 let get_schema name = snd (get name)
 
-
 let check name = ignore (get_stored name)
 
 let add_columns (name, cols) =
@@ -91,7 +90,6 @@ let set_charset name cs = alter name (fun t -> { t with tbl_charset = Some cs })
 let get_ttl name = with_stored name None (fun t -> t.tbl_ttl)
 
 let set_ttl name ttl = alter name (fun t -> { t with tbl_ttl = ttl })
-
 
 let add_constraint_to_columns columns ~cols constr =
   List.map (fun c ->

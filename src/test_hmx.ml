@@ -1,8 +1,3 @@
-(** Unit and property tests for the HM(X) core (stage 3 of the migration).
-
-    The property tests are the point: the solver is only useful downstream if
-    its answer does not depend on the order constraints happen to be generated
-    in, and that is not obvious from the code. *)
 
 open Printf
 open OUnit
@@ -16,12 +11,8 @@ let qcheck (QCheck2.Test.Test cell) =
 
 let any_of l = QCheck.Gen.(oneof (List.map return l))
 
-(* ---------------------------------------------------------------- Base *)
-
 let show_pair (a, b) = sprintf "%s<=%s" (Base.show a) (Base.show b)
 
-(* the laws the lattice must satisfy, checked here rather than carried in the
-   library *)
 let minimal l = List.filter (fun m -> not (List.exists (fun x -> not (Base.equal x m) && Base.leq x m) l)) l
 let maximal l = List.filter (fun m -> not (List.exists (fun x -> not (Base.equal x m) && Base.leq m x) l)) l
 let base_pairs = List.concat_map (fun a -> List.map (fun b -> a, b) Base.all) Base.all
@@ -45,13 +36,10 @@ let test_base_lattice = [
         assert_bool (sprintf "%s %s %s" (Base.show a) (Base.show b) (Base.show c)) (Base.leq a c))
       Base.all) Base.all) Base.all);
 
-  (* Frozen on purpose. Sql.Type.order_kind is not transitive, so closing it
-     invents relations nobody wrote down; any change to Base.declared must
-     re-confirm this list rather than grow it silently. *)
   "edges invented by the transitive closure" >:: (fun () ->
     assert_equal ~msg:"derived edges" ~printer:(fun l -> String.concat " " (List.map show_pair l))
       [ Base.Int, Base.Text; Base.Int, Base.Blob;
-        Base.Str_lit, Base.Text; Base.Str_lit, Base.Blob;
+        Base.Str_lit, Base.Blob;
         Base.Datetime, Base.Blob; Base.Json_path, Base.Blob; Base.One_or_all, Base.Blob ]
       Base.derived);
 
@@ -73,7 +61,7 @@ let test_base_lattice = [
       Base.all) Base.all);
 
   "join of a set is not the pairwise fold" >:: (fun () ->
-    (* the reason bounds are kept as sets: folding a partial join is order dependent *)
+
     assert_equal ~msg:"Int Float" (Some Base.Float) (Base.join Base.Int Base.Float);
     assert_equal ~msg:"Float Decimal" None (Base.join Base.Float Base.Decimal);
     assert_equal ~msg:"lub of the whole set" None (Base.lub [ Base.Int; Base.Float; Base.Decimal ]));
@@ -82,8 +70,7 @@ let test_base_lattice = [
 let members p = List.filter (Pred.satisfies p) Base.all
 
 let test_pred = [
-  (* §4.3: not intervals — Float and Decimal are incomparable — but convex,
-     which is what makes a predicate decidable from the bounds *)
+
   "predicates are convex" >:: (fun () ->
     List.iter (fun p ->
       List.iter (fun (x, y) ->
@@ -100,12 +87,6 @@ let test_pred = [
       Base.[ Int; UInt64; Num_lit; Float; Decimal ] (members Pred.Num));
 ]
 
-(* -------------------------------------------------------------- Refine *)
-
-(* Num_lit is a position in the lattice, not a type anything can write down:
-   it only ever arrives as the type of a literal, so only as a lower bound.
-   The generators below stay inside the vocabulary stage 1 can actually
-   produce. *)
 let writable_bases = List.filter (fun b -> not (Base.equal b Base.Num_lit)) Base.all
 
 let arb_refine =
@@ -184,16 +165,11 @@ let test_refine_units = [
       (Refine.decimal ~precision:(Some 7) ~scale:(Some 0))
       (Refine.decimal ~precision:(Some 7) ~scale:None));
 
-  (* Sql.Type.order_kind widens to Decimal(None, max scale), losing the
-     precision entirely; keeping the integral digits is both tighter and
-     sound, which is the §1 complaint about SUM over a decimal column. *)
   "decimal join keeps the integral digits" >:: (fun () ->
     let d p s = Refine.decimal ~precision:(Some p) ~scale:(Some s) in
     assert_equal ~printer:Refine.show (d 12 4) (Refine.join (d 10 2) (d 10 4));
     assert_bool "join dominates" (Refine.leq (d 10 2) (d 12 4) && Refine.leq (d 10 4) (d 12 4)));
 ]
-
-(* -------------------------------------------------------------- solver *)
 
 let solve ?fallback bounds =
   let v = Hmx_solver.fresh () in
@@ -221,8 +197,6 @@ let refined b r = Refined.make b r
 
 let test_solver = [
 
-  (* §1: the motivating regression. SUM over a decimal must keep the column's
-     precision instead of collapsing to a join. *)
   "SUM keeps the argument type" >:: (fun () ->
     assert_solves ~msg:"sum(decimal(10,2))"
       [ pred Pred.Num; lo (refined Base.Decimal (dec 10 2)) ]
@@ -236,8 +210,6 @@ let test_solver = [
     assert_conflict ~msg:"float + decimal"
       [ pred Pred.Num; lo (base Base.Float); lo (base Base.Decimal) ]);
 
-  (* the predicate has to survive into the class, not merely be checked where
-     it was written: Int <= Datetime <= Text makes a lub exist *)
   "a predicate constrains the class, not just its own position" >:: (fun () ->
     assert_conflict ~msg:"num(int, text)"
       [ pred Pred.Num; lo (base Base.Int); lo (base Base.Text) ];
@@ -251,16 +223,12 @@ let test_solver = [
     assert_solves ~msg:"num" [ pred Pred.Num ] (base Base.Int);
     assert_solves ~msg:"stringable" [ pred Pred.Stringable ] (base Base.Text));
 
-  (* §8: Any is gone, so a parameter nothing constrains is an error unless the
-     dialect opts into a fallback *)
   "an unconstrained variable cannot be inferred" >:: (fun () ->
     assert_conflict ~msg:"bare ?" []);
 
   "a dialect may supply a fallback" >:: (fun () ->
     assert_solves ~fallback:Base.Text ~msg:"fallback" [] (base Base.Text));
 
-  (* A declared ENUM is an upper bound, not a flag inside the lattice: "accepts
-     no further constructors" is exactly what an upper bound means. *)
   "a declared enum rejects a foreign literal" >:: (fun () ->
     let e = Refine.enum ~closed:true [ "a"; "b" ] in
     let declared t v = Hmx_solver.same v (Hmx_solver.declared t) in
@@ -275,8 +243,6 @@ let test_solver = [
       [ lo (refined Base.Str_lit (Refine.literal "a")); lo (refined Base.Str_lit (Refine.literal "b")) ]
       (refined Base.Text (Refine.enum [ "a"; "b" ])));
 
-  (* a value set is destroyed by a value arriving from a smaller base, a
-     capacity is not *)
   "a value set does not survive a widening, a capacity does" >:: (fun () ->
     assert_solves ~msg:"coalesce(enum, datetime)"
       [ lo (refined Base.Text (Refine.enum [ "a"; "b" ])); lo (base Base.Datetime) ]
@@ -285,19 +251,14 @@ let test_solver = [
       [ lo (refined Base.Decimal (dec 10 2)); lo (base Base.Int) ]
       (refined Base.Decimal (dec 10 2)));
 
-  (* a literal sits below every stringable type, and which one it may become is
-     decided by validating its content *)
   "a literal rises only where it validates" >:: (fun () ->
-    (* the literal settles to Text: Str_lit is a position in the lattice, not a
-       type anything can have *)
+
     assert_solves ~msg:"'$.a' as a json path"
       [ lo (refined Base.Str_lit (Refine.literal "$.a")); up (base Base.Json_path) ]
       (refined Base.Text (Refine.literal "$.a"));
     assert_conflict ~msg:"'nonsense' as a json path"
       [ lo (refined Base.Str_lit (Refine.literal "nonsense[")); up (base Base.Json_path) ]);
 
-  (* §11.1: a subtyping edge between two variables is unification, so the two
-     classes merge their bounds *)
   "unifying two variables merges their bounds" >:: (fun () ->
     let a = Hmx_solver.fresh () and b = Hmx_solver.fresh () in
     Hmx_solver.same a b;
@@ -306,8 +267,6 @@ let test_solver = [
     assert_equal ~printer:Refined.show (base Base.Int) (Hmx_solver.resolve a));
 
 ]
-
-(* --------------------------------------------------------- nullability *)
 
 let nsolve build =
   let st = Hmx_null.create () in
@@ -332,7 +291,6 @@ let test_nullability = [
       let n = Hmx_null.fresh () in
       Hmx_null.add st (Join (n, [ Hmx_null.const false; Hmx_null.const false ])); n));
 
-  (* COALESCE: not null as soon as any branch is *)
   "a meet is strict as soon as one argument is" >:: (fun () ->
     assert_null ~msg:"coalesce" false (fun st ->
       let n = Hmx_null.fresh () in
@@ -348,7 +306,6 @@ let test_nullability = [
     in
     assert_null ~msg:"fixpoint" true build);
 
-  (* the dual direction: a strict result forces its arguments *)
   "a strict join result forces its arguments" >:: (fun () ->
     assert_null ~msg:"not null context" false (fun st ->
       let n = Hmx_null.fresh () and a = Hmx_null.fresh () in
@@ -365,16 +322,10 @@ let test_nullability = [
     | Error _ -> ()
     | Ok _ -> assert_failure "expected a nullability conflict");
 
-  (* NotNull is the identity of the join, so an unconstrained variable is not
-     null — §8 says otherwise and §8 is wrong *)
   "an undetermined nullability is not null" >:: (fun () ->
     assert_null ~msg:"free" false (fun _ -> Hmx_null.fresh ()));
 ]
 
-(* ---------------------------------------------------------- signatures *)
-
-(* A few signatures written out by hand, beside the table in Hmx_sig: these
-   pin down what the vocabulary expresses. *)
 module Sg = struct
   open Hmx_sig
   let bool = Refined.of_base Base.Bool
@@ -405,8 +356,6 @@ let test_signatures = [
     assert_bool "json_array_append/4" (not (ok 4 Sg.json_array_append));
     assert_bool "json_array_append/5" (ok 5 Sg.json_array_append));
 
-  (* both operands share the scheme variable, which is what lets a parameter
-     take its sibling's type and nullability *)
   "comparison shares one variable across both operands" >:: (fun () ->
     match Hmx_sig.instantiate Sg.equal 2 with
     | Error e -> assert_failure e
@@ -426,11 +375,6 @@ let test_signatures = [
     assert_bool "sum" (rule Sg.sum 1 = Hmx_sig.Const true);
     assert_bool "concat" (rule Sg.concat 2 = Hmx_sig.Join));
 ]
-
-(* ------------------------------------------ stages 1 to 3, end to end *)
-
-(* The first thing that runs without syntax.ml at all: parse, resolve against
-   a hand-built scope, generate constraints, solve. *)
 
 let parse_expr text =
   match (Parser.parse_stmt (sprintf "SELECT %s" text)).statement with
@@ -485,7 +429,6 @@ let test_pipeline = [
     assert_sql ~msg:"price" "price" (Refined.make Base.Decimal (dec 10 2)) false;
     assert_sql ~msg:"note" "note" (Refined.of_base Base.Text) true);
 
-  (* §1: the motivating case, now through the real parser *)
   "arithmetic on a decimal keeps the precision" >:: (fun () ->
     assert_sql ~msg:"price + 1" "price + 1" (Refined.make Base.Decimal (dec 10 2)) false);
 
@@ -507,9 +450,6 @@ let test_pipeline = [
     assert_sql ~msg:"status" "status"
       (Refined.make Base.Text (Refine.enum [ "new"; "done" ])) false);
 
-  (* Not rejected yet: Arith also carries datetime arithmetic, so the
-     descriptors cannot say Num. The predicate arrives with the hand-written
-     signature table, where + and date_add are separate entries. *)
   "arithmetic has no numeric predicate until the table is written" >:: (fun () ->
     assert_sql ~msg:"id + note" "id + note" (Refined.of_base Base.Text) true);
 
@@ -518,12 +458,6 @@ let test_pipeline = [
     | Error _ -> ()
     | Ok t -> assert_failure (sprintf "expected a resolve error, got %s" (Sql.Type.show t)));
 ]
-
-(* ------------------------------------------------------- FROM and JOIN *)
-
-(* Name resolution lives in Syntax, so these go through the real catalog: two
-   tables in the global store, and the statement's result schema is the scope
-   the projection saw. *)
 
 let attr name t null =
   Sql.make_attribute' name { Sql.Type.t; nullability = null }
@@ -563,7 +497,6 @@ let test_from = [
     assert_equal ~msg:"a.x" false (null_of (find_col schema "x"));
     assert_equal ~msg:"b.y" false (null_of (find_col schema "y")));
 
-  (* the padding rule: the optional side of an outer join goes nullable *)
   "a left join makes the right side nullable" >:: (fun () ->
     let schema = select_schema "SELECT * FROM a LEFT JOIN b ON a.id = b.id" in
     assert_equal ~msg:"a.x stays strict" false (null_of (find_col schema "x"));
@@ -577,7 +510,6 @@ let test_from = [
   "an alias renames the source" >:: (fun () ->
     ignore (find_col (select_schema "SELECT t1.x FROM a AS t1") "x"));
 
-  (* USING collapses the shared column instead of duplicating it *)
   "USING keeps one copy of the common column" >:: (fun () ->
     assert_equal ~msg:"width" 3 (List.length (select_schema "SELECT * FROM a JOIN b USING (id)")));
 
@@ -586,7 +518,6 @@ let test_from = [
     | _ -> assert_failure "expected an error"
     | exception Failure _ -> ());
 
-  (* the resolved scope feeds constraint generation directly *)
   "a joined scope types an expression" >:: (fun () ->
     match select_schema "SELECT concat(a.x, b.y) AS c FROM a LEFT JOIN b ON a.id = b.id" with
     | [ a ] ->

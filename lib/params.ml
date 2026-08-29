@@ -1,13 +1,8 @@
-(** The parameter tree after compilation: its shape, and unifying parameters
-    that appear under the same name in several places.
-
-    A phase over {!Sql.var}: no expressions, no schemas, no catalog. *)
 
 open ExtLib
 open Prelude
 open Sql
 
-(* the synthetic name a dynamic-select column parameter carries *)
 let dynamic_col_param_name = "col"
 
 type var_shape =
@@ -39,48 +34,15 @@ and ctor_shape = function
   | Verbatim (n, _) -> Shape_verbatim n
 
 (* FIXME unify each choice separately *)
-let unify_params l =
-  (* A parameter standing in several places is one value, so it is one solver
-     variable: sharing a name is unification, and nullability joins over the
-     sightings rather than unifying. *)
-  let vars : (string, Hmx_solver.var) Hashtbl.t = Hashtbl.create 10 in
-  let nulls : (string, bool) Hashtbl.t = Hashtbl.create 10 in
-  let var name =
-    match Hashtbl.find_opt vars name with
-    | Some v -> v
-    | None -> let v = Hmx_solver.fresh () in Hashtbl.add vars name v; v
-  in
-  let nullable name = Option.default false (Hashtbl.find_opt nulls name) in
-  (* the value must be acceptable everywhere it stands, so each sighting is an
-     upper bound *)
-  let note name (ty : Type.t) =
-    (match Hmx_of_sql.of_kind ty.t with
-     | Some b ->
-       (try Hmx_solver.below (var name) b with
-        | Hmx_lattice.Conflict _ ->
-          fail "incompatible types for parameter %S : %s" name (Type.show ty))
-     | None -> ());
-    Hashtbl.replace nulls name (Type.is_nullable ty || nullable name)
-  in
-  let alias a b =
-    Hmx_solver.same (var a) (var b);
-    let n = nullable a || nullable b in
-    Hashtbl.replace nulls a n; Hashtbl.replace nulls b n
-  in
-  let solved name ~default =
-    match Hashtbl.find_opt vars name with
-    | None -> default
-    | Some v ->
-      match Hmx_solver.resolve v with
-      | r -> Hmx_of_sql.to_type r (nullable name)
-      | exception Hmx_lattice.Conflict _ -> default
-  in
+
+let unify_params session l =
   let choices = Hashtbl.create 10 in
   let rec bound_names vars =
     vars |> List.concat_map (function
       | Single (p, _) | SingleIn (p, _) -> [p.id.value]
       | v -> bound_names (sub_vars v))
   in
+  let alias a b = Constrain.alias session a b in
   let register p signature =
     match p.value with
     | None -> () (* anonymous ie non-shared *)
@@ -99,8 +61,7 @@ let unify_params l =
   in
   let rec collect var =
     begin match var with
-    | Single ({ id; typ; _ }, _) | SingleIn ({ id; typ; _ }, _) ->
-      Option.may (fun name -> note name typ) id.value
+    | Single _ | SingleIn _ -> ()
     | Choice (p, ctors) ->
       register p (`Branches (List.map ctor_shape ctors, bound_names (List.concat_map ctor_vars ctors)))
     | DynamicSelect (p, _) -> register p `Dynamic
@@ -108,12 +69,11 @@ let unify_params l =
     end;
     List.iter collect (sub_vars var)
   in
-  (* if no other clues - input parameters are strict *)
-  let final { id; typ; _ } =
-    let typ = Option.map_default (solved ~default:typ) typ id.value in
-    (* if nothing else said so, an input parameter is not null *)
-    let typ = match typ.Type.nullability with Depends -> Type.strict typ.t | _ -> typ in
-    make_param ~id ~typ
+  let final p =
+    let p = Constrain.read_param session p in
+
+    let typ = match p.typ.Type.nullability with Depends -> Type.strict p.typ.t | _ -> p.typ in
+    make_param ~id:p.id ~typ
   in
   let rec rewrite = function
     | Single (p, m) -> Single (final p, m)

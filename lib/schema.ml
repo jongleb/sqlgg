@@ -1,8 +1,3 @@
-(** Schemas: what a relation's columns are, and how relations combine.
-
-    Types, constraints, metadata and the relational algebra over them. None of
-    this is syntax — the parser never builds a schema, it appears when one is
-    computed — which is why it does not live with the dialect's AST. *)
 
 open Printf
 open ExtLib
@@ -13,12 +8,12 @@ struct
 
   module Enum_kind = struct
 
-    module Ctors =  struct 
+    module Ctors =  struct
       include Set.Make(String)
-  
-      let pp fmt s = 
-        Format.fprintf fmt "{%s}" 
-          (String.concat "; " (elements s))  
+
+      let pp fmt s =
+        Format.fprintf fmt "{%s}"
+          (String.concat "; " (elements s))
     end
 
     type t = Ctors.t [@@deriving eq, show{with_path=false}]
@@ -73,7 +68,7 @@ struct
   let make_nullable { t; nullability=_ } = nullable t
 
   let make_strict { t; nullability=_ } = strict t
-  
+
   let make_enum_kind ctors = Union { ctors = (Enum_kind.make ctors); is_closed = true }
 
   let is_nullable { nullability; _ } = nullability = Nullable
@@ -86,9 +81,6 @@ struct
 
   let type_name t = show_kind t.t
 
-  (* This is the declared type: what DDL says and what codegen reads. No order
-     is defined on it — inference happens in Hmx_lattice, and Hmx_of_sql maps
-     between the two. *)
 end
 
 module Constraint =
@@ -122,15 +114,14 @@ module Meta = struct
 
   module StringMap = Map.Make(String)
 
-  
   type t = string StringMap.t
-  
+
   let of_list list = List.fold_left (fun map (k, v) -> StringMap.add k v map) StringMap.empty list
-  
+
   let empty () = StringMap.empty
   let is_empty = StringMap.is_empty
   let find_opt map key = StringMap.find_opt key map
-  
+
   let pp fmt t =
     Format.fprintf fmt "{%s}"
       (String.concat "; " (List.map (fun (k, v) -> sprintf "%s = %s" k v) (StringMap.bindings t)))
@@ -154,7 +145,7 @@ module Meta = struct
 
   let of_domain m = List.fold_left (fun m k -> StringMap.remove k m) m internal_keys
 
-  let get_is_non_nullifiable meta = String.equal (Option.default "false" (find_opt meta "non_nullifiable")) "true" 
+  let get_is_non_nullifiable meta = String.equal (Option.default "false" (find_opt meta "non_nullifiable")) "true"
 end
 
 type attr = {name : string; domain : Type.t; extra : Constraints.t; meta: Meta.t; }
@@ -303,8 +294,6 @@ struct
 
   let cross_all l = List.fold_left Join.cross [] l
 
-  (* The type order is supplied from outside: combining columns is relational
-     algebra, and it has no business knowing how types compare. *)
   let compound ~merge t1 t2 =
     let open Source in
     let open Attr in
@@ -357,4 +346,3 @@ struct
   let print x = prerr_endline (to_string x)
 
 end
-

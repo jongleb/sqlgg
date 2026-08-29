@@ -30,14 +30,14 @@ type feature =
   | UserDefinedType [@as "user_defined_type"]
 [@@deriving show { with_path = false }, enumerate, to_string, of_string]
 
-let show_feature x = 
-  match x with 
+let show_feature x =
+  match x with
   | DefaultExpr -> "with this kind of default expressions"
   | x -> show_feature x
 
 type support_state = {
   supported : t list;
-  unsupported : t list; 
+  unsupported : t list;
   unknown : t list;
 }
 
@@ -71,7 +71,7 @@ let only feature l pos = {
 }
 
 let get_collation collation pos =
-  let clean_collation = 
+  let clean_collation =
     String.trim collation |> fun s ->
       if String.length s >= 2 && s.[0] = '"' && s.[String.length s - 1] = '"' then
         String.sub s 1 (String.length s - 2)
@@ -166,12 +166,12 @@ let get_default_expr ~kind ~expr pos =
             all
           else
             all_except [ TiDB ]
-      (* 
+      (*
         https://docs.pingcap.com/tidb/stable/data-type-default-values/
-        TiDB supports assigning default values to BLOB, TEXT, and JSON data types. 
+        TiDB supports assigning default values to BLOB, TEXT, and JSON data types.
         However, you can only use expressions, not literals, to define default values for these data types.
        *)
-      | Value _ when List.exists (fun x -> 
+      | Value _ when List.exists (fun x ->
           Option.map_default (Sql.Source_type.equal_kind (Sql.Source_type.Infer x)) false kind) [Json; Text; Blob] -> all_except [ TiDB ]
       | _ -> all
     in
@@ -180,8 +180,7 @@ let get_default_expr ~kind ~expr pos =
     in
     only DefaultExpr dialects pos
 
-
-module Semantic = struct 
+module Semantic = struct
   let is_where_aliases_dialect () = !selected = SQLite
 
   let is_non_strict_mode_is_exists () = List.mem !selected [MySQL; TiDB; SQLite]
@@ -208,7 +207,7 @@ let rec analyze_expr acc exprs k = match exprs with
     match expr with
     | Fun { parameters; _ } ->
         analyze_expr acc (parameters @ rest) k
-    | SelectExpr (select_full, _) -> 
+    | SelectExpr (select_full, _) ->
         analyze_select_full acc [select_full] (fun acc -> analyze_expr acc rest k)
     | e ->
         analyze_expr acc (sub_exprs e @ rest) k
@@ -318,10 +317,10 @@ and analyze_assignment_expr acc aes k = match aes with
 and analyze_column_def_internal acc cds k = match cds with
   | [] -> k acc
   | ({ kind; extra; _ }: Alter_action_attr.t) :: rest ->
-    let acc = 
+    let acc =
       let autoincrement = List.find_opt (fun c ->
-        match c.value with 
-        | Alter_action_attr.Syntax_constraint Autoincrement -> true 
+        match c.value with
+        | Alter_action_attr.Syntax_constraint Autoincrement -> true
         | _ -> false
       ) extra in
       match autoincrement with
@@ -350,7 +349,7 @@ and analyze_alter_action acc actions k = match actions with
     match action with
     | `Add (col, _) -> analyze_column_def_internal acc [col] (fun acc -> analyze_alter_action acc rest k)
     | `Change (_, col, _) -> analyze_column_def_internal acc [col] (fun acc -> analyze_alter_action acc rest k)
-    | `Default_or_convert_to (_, collation) -> 
+    | `Default_or_convert_to (_, collation) ->
         let acc = check_collation_opt collation @ acc in
         analyze_alter_action acc rest k
     | `TtlOptions (_, pos) | `RemoveTtl pos ->
@@ -384,7 +383,7 @@ and analyze_insert_action acc ias k = match ias with
           analyze_assignment_expr acc aes k
       | `Values (_, None) | `Param _ -> k acc
       | `Select (_, select_full) -> analyze_select_full acc [select_full] k
-      | `Set assignments -> 
+      | `Set assignments ->
           let aes = Option.map_default (List.map snd) [] assignments in
           analyze_assignment_expr acc aes k
     in
@@ -398,7 +397,7 @@ let analyze_schema_index idx = match idx.value.Sql.idx_kind with
   | Fulltext -> Some (get_fulltext_index idx.pos)
   | Spatial -> None
 
-let rec analyze stmt = 
+let rec analyze stmt =
   let acc = [] in
   match stmt with
   | Sql.Create (_, Schema { schema; indexes; _ }) ->

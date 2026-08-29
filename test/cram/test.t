@@ -795,7 +795,7 @@ Test MySQL dialect with WHERE aliasing (should fail):
   > SELECT id, name, score * 2 as double_score FROM users WHERE double_score > 100;
   > EOF
   Failed : SELECT id, name, score * 2 as double_score FROM users WHERE double_score > 100
-  Fatal error: exception Sqlgg.Sql.Schema.Error(_, "missing attribute : double_score")
+  Fatal error: exception Sqlgg.Schema.Schema.Error(_, "missing attribute : double_score")
   [2]
 
 Test PostgreSQL dialect with WHERE aliasing (should fail):
@@ -804,7 +804,7 @@ Test PostgreSQL dialect with WHERE aliasing (should fail):
   > SELECT id, name, score * 2 as double_score FROM users WHERE double_score > 100;
   > EOF
   Failed : SELECT id, name, score * 2 as double_score FROM users WHERE double_score > 100
-  Fatal error: exception Sqlgg.Sql.Schema.Error(_, "missing attribute : double_score")
+  Fatal error: exception Sqlgg.Schema.Schema.Error(_, "missing attribute : double_score")
   [2]
 
 Test TiDB dialect with WHERE aliasing (should fail):
@@ -813,7 +813,7 @@ Test TiDB dialect with WHERE aliasing (should fail):
   > SELECT id, name, score * 2 as double_score FROM users WHERE double_score > 100;
   > EOF
   Failed : SELECT id, name, score * 2 as double_score FROM users WHERE double_score > 100
-  Fatal error: exception Sqlgg.Sql.Schema.Error(_, "missing attribute : double_score")
+  Fatal error: exception Sqlgg.Schema.Schema.Error(_, "missing attribute : double_score")
   [2]
 
 Fix issue 96 (should fail):
@@ -822,7 +822,7 @@ Fix issue 96 (should fail):
   > SELECT x AS foo FROM test WHERE foo > 0;
   > EOF
   Failed : SELECT x AS foo FROM test WHERE foo > 0
-  Fatal error: exception Sqlgg.Sql.Schema.Error(_, "missing attribute : foo")
+  Fatal error: exception Sqlgg.Schema.Schema.Error(_, "missing attribute : foo")
   [2]
 
 Fix issue 96 (should work):
@@ -996,7 +996,7 @@ Test non_nullifiable when update (should fail):
   > UPDATE non_nullifiable SET updated_at = @updated_at :: Datetime Null WHERE name = 'example';
   > EOF
   Failed : UPDATE non_nullifiable SET updated_at = @updated_at :: Datetime Null WHERE name = 'example'
-  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column 'a -> 'a -> 'a applied to (Datetime, Datetime?)")
+  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column of type Datetime")
   [2]
 
 Test INSERT set NULL where NOT NULL col (should fail):
@@ -1008,7 +1008,7 @@ Test INSERT set NULL where NOT NULL col (should fail):
   > INSERT INTO non_nullifiable (id, name) VALUES (1, NULL);
   > EOF
   Failed : INSERT INTO non_nullifiable (id, name) VALUES (1, NULL)
-  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column 'a -> 'a -> 'a applied to (Text, Any?)")
+  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column of type Text")
   [2]
 
 Test UPDATE set NULL where NOT NULL col (should fail):
@@ -1020,7 +1020,7 @@ Test UPDATE set NULL where NOT NULL col (should fail):
   > UPDATE non_nullifiable SET x = @x + NULL WHERE id = 1;
   > EOF
   Failed : UPDATE non_nullifiable SET x = @x + NULL WHERE id = 1
-  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column 'a -> 'a -> 'a applied to (Text, Any?)")
+  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column of type Text")
   [2]
 
 
@@ -1035,7 +1035,7 @@ Test non_nullifiable when update set NULL (should fail):
   > UPDATE non_nullifiable SET updated_at = NULL WHERE name = 'example';
   > EOF
   Failed : UPDATE non_nullifiable SET updated_at = NULL WHERE name = 'example'
-  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column 'a -> 'a -> 'a applied to (Datetime, Any?)")
+  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column of type Datetime")
   [2]
 
 Test non_nullifiable when update insert NULL:
@@ -1098,7 +1098,7 @@ Test non_nullifiable with INSERT ... ON DUPLICATE KEY UPDATE (values nullable, N
   ON DUPLICATE KEY UPDATE 
     column1 = VALUES(column1),
     column2 = VALUES(column2)
-  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column 'a -> 'a -> 'a applied to (Int, Int?)")
+  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column of type Int")
   [2]
 
 Test non_nullifiable with INSERT ... ON DUPLICATE KEY UPDATE (values nullable, NEW strict) (should work):
@@ -1258,7 +1258,7 @@ Test non_nullifiable with multi-table UPDATE forcing Null via type spec (should 
   Failed : UPDATE nn_multi_t3 a INNER JOIN nn_multi_t4 b ON b.k = a.k
     SET a.refreshed_at = @refreshed_at :: Datetime Null
   WHERE b.id = 42
-  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column 'a -> 'a -> 'a applied to (Datetime, Datetime?)")
+  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column of type Datetime")
   [2]
 
 Test multi-table UPDATE set NULL where non_nullifiable col (should fail):
@@ -1279,7 +1279,7 @@ Test multi-table UPDATE set NULL where non_nullifiable col (should fail):
   Failed : UPDATE nn_multi_t5 a JOIN nn_multi_t6 b ON b.k = a.k
     SET a.locked_at = NULL
   WHERE b.id = 7
-  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column 'a -> 'a -> 'a applied to (Datetime, Any?)")
+  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column of type Datetime")
   [2]
 
 Test non_nullifiable with UPDATE using subquery (should fail):
@@ -1301,7 +1301,7 @@ Test non_nullifiable with UPDATE using subquery (should fail):
   Failed : UPDATE nn_main 
   SET updated_at = (SELECT ts FROM source_table WHERE id = 1)
   WHERE name = 'test'
-  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column 'a -> 'a -> 'a applied to (Datetime, Datetime?)")
+  Fatal error: exception Failure("Cannot assign nullable value to a non-nullable column of type Datetime")
   [2]
 
 Test non_nullifiable with UPDATE using subquery (should work):
@@ -1490,8 +1490,8 @@ Test GROUP_CONCAT with ORDER BY expressions and join:
       in
       let set_params stmt =
         let p = T.start_params stmt (2 + (match order_kind with `ASC -> 0 | `DESC -> 0)) in
-        T.set_param_Int p par;
-        T.set_param_Int p par;
+        begin match par with None -> T.set_param_null p | Some v -> T.set_param_Int p v end;
+        begin match par with None -> T.set_param_null p | Some v -> T.set_param_Int p v end;
         T.finish_params p
       in
       T.select db (Sqlgg_traits.Query.make ~sql:("SELECT \n\
@@ -1523,8 +1523,8 @@ Test GROUP_CONCAT with ORDER BY expressions and join:
         in
         let set_params stmt =
           let p = T.start_params stmt (2 + (match order_kind with `ASC -> 0 | `DESC -> 0)) in
-          T.set_param_Int p par;
-          T.set_param_Int p par;
+          begin match par with None -> T.set_param_null p | Some v -> T.set_param_Int p v end;
+          begin match par with None -> T.set_param_null p | Some v -> T.set_param_Int p v end;
           T.finish_params p
         in
         let r_acc = ref acc in
@@ -1560,8 +1560,8 @@ Test GROUP_CONCAT with ORDER BY expressions and join:
         in
         let set_params stmt =
           let p = T.start_params stmt (2 + (match order_kind with `ASC -> 0 | `DESC -> 0)) in
-          T.set_param_Int p par;
-          T.set_param_Int p par;
+          begin match par with None -> T.set_param_null p | Some v -> T.set_param_Int p v end;
+          begin match par with None -> T.set_param_null p | Some v -> T.set_param_Int p v end;
           T.finish_params p
         in
         let r_acc = ref [] in
@@ -1703,7 +1703,7 @@ Test GROUP_CONCAT with ORDER BY expressions and join (should fail):
   JOIN table_2_2025_09_26 t2 ON t1.table_no = t2.table_no AND t1.id > @par
   GROUP BY t1.table_no
   ORDER BY dates_from_t1
-  Fatal error: exception Sqlgg.Sql.Schema.Error(_, "missing attribute : idontknow")
+  Fatal error: exception Sqlgg.Schema.Schema.Error(_, "missing attribute : idontknow")
   [2]
 
 Test UINT64 mapping for UNSIGNED INT:
@@ -2422,7 +2422,7 @@ Test numeric literal to decimal - invalid (too large):
   > INSERT INTO items VALUES (9999.99);
   > EOF
   Failed : INSERT INTO items VALUES (9999.99)
-  Fatal error: exception Failure("types Decimal(5,2)? and FloatingLiteral (9999.99) for 'a do not match in 'a -> 'a -> 'a applied to (Decimal(5,2)?, FloatingLiteral (9999.99))")
+  Fatal error: exception Failure("cannot reconcile [Num_lit9999.99 <= _ <= ] with [ <= _ <= Decimal(5,2)]")
   [2]
 
 Test numeric literal to decimal - invalid (too many decimals):
@@ -2448,7 +2448,7 @@ Test numeric literal to decimal - invalid (too many decimals):
   > INSERT INTO items VALUES (99999.999);
   > EOF
   Failed : INSERT INTO items VALUES (99999.999)
-  Fatal error: exception Failure("types Decimal(5,2)? and FloatingLiteral (100000) for 'a do not match in 'a -> 'a -> 'a applied to (Decimal(5,2)?, FloatingLiteral (100000))")
+  Fatal error: exception Failure("cannot reconcile [Num_lit100000 <= _ <= ] with [ <= _ <= Decimal(5,2)]")
   [2]
 
 Test decimal to float - allowed:
@@ -2457,7 +2457,7 @@ Test decimal to float - allowed:
   > SELECT * FROM items WHERE price_float = price;
   > EOF
   Failed : SELECT * FROM items WHERE price_float = price
-  Fatal error: exception Failure("types Float? and Decimal(10,2)? for 'a do not match in 'a -> 'a -> Bool?? applied to (Float?, Decimal(10,2)?)")
+  Fatal error: exception Failure("cannot reconcile [Decimal(10,2) <= _ <= ] with [Float <= _ <= ]")
   [2]
 
 Test decimal to float - allowed:

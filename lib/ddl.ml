@@ -1,7 +1,3 @@
-(** DDL: statements that change the catalog and nothing else.
-
-    A phase of its own — it reads a statement and folds it into the table
-    registry. No expressions, no types, no queries. *)
 
 open ExtLib
 open Prelude
@@ -154,7 +150,6 @@ let create_type name ctors = User_types.add name (Type.make_enum_kind ctors)
 
 let drop_type ~if_exists name = User_types.drop ~if_exists name
 
-(* a routine's return type is declared, its arguments are not checked *)
 let create_routine name ret params =
   match ret with
   | None -> ()

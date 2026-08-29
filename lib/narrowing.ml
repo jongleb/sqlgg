@@ -47,7 +47,6 @@ module Attr_refinement = struct
 
   let with_not_null_of ~from t = { t with not_null = from.not_null }
 
-
   let inherit_meta ~constrains (col : table_name Schema.Source.Attr.t) ~(referenced : table_name Schema.Source.Attr.t) =
     let inherited = Meta.of_domain referenced.attr.meta in
     let carries =
@@ -71,13 +70,6 @@ module Attr_refinement = struct
   let apply t a = refine_nullability t (refine_meta t a)
 end
 
-(** Columns that a satisfied condition proves non-NULL, in three-valued logic.
-    N(e) is [req e true], N(NOT e) is [req e false].
-
-                     TRUE            FALSE
-       a AND b      N(a) u N(b)     N(a) n N(b)
-       a OR  b      N(a) n N(b)     N(a) u N(b)
-*)
 let narrow_columns ~resolve ~constrains e =
   let open Attr_refinement in
   let strict col =
@@ -97,7 +89,7 @@ let narrow_columns ~resolve ~constrains e =
   in
   let rec nn = function
     | Sql.Column col -> strict col.collated
-    (* a column is non-null here only if it is non-null in every branch *)
+
     | Fun { fn_name = ("coalesce" | "ifnull"); parameters; _ } -> keep_shared (List.map nn parameters)
     | Fun { fn_name; parameters; _ } ->
       let proven =
@@ -141,4 +133,3 @@ let narrow_columns ~resolve ~constrains e =
     keep_shared (taken @ Option.map_default (fun e -> [ result e ]) [] else_)
   in
   req e true
-

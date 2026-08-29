@@ -12,8 +12,6 @@ type 'a collated = { collated: 'a; collation: string located option } [@@derivin
 let dummy_pos : pos = (0, 0)
 let dummy_loc value = { value; pos = dummy_pos }
 
-(* Schemas and the algebra over them live in {!Schema}; these aliases keep the
-   familiar Sql.Type and Sql.Schema spellings everywhere downstream. *)
 module Type = Schema.Type
 module Constraint = Schema.Constraint
 module Constraints = Schema.Constraints
@@ -120,9 +118,9 @@ and var =
 (* It differs from Choice that in this case we should generate sql "TRUE", it doesn't seem reusable *)
 | OptionActionChoice of param_id * var list * (pos * pos) * option_actions_kind
 | SharedVarsGroup of vars * shared_query_ref_id
-and tuple_list_kind = 
-  | Insertion of schema 
-  | Where_in of ((Type.t * Meta.t) list * in_or_not_in) located 
+and tuple_list_kind =
+  | Insertion of schema
+  | Where_in of ((Type.t * Meta.t) list * in_or_not_in) located
   | ValueRows of { types: Type.t list; values_start_pos: int; }
 [@@deriving show]
 and vars = var list [@@deriving show]
@@ -197,29 +195,28 @@ and select_complete = {
   select_row_locking: select_row_locking_kind located option;
 }
 and select_full = { select_complete: select_complete; cte: cte option; }
-and row_constructor_list = RowExprList of expr list list | RowParam of { id : param_id; types : Source_type.t list; values_start_pos: int; } 
+and row_constructor_list = RowExprList of expr list list | RowParam of { id : param_id; types : Source_type.t list; values_start_pos: int; }
 and row_values = {
   row_constructor_list: row_constructor_list;
   row_order: order;
   row_limit: limit option;
 }
 and order = (expr * direction option) list
-and agg_with_order_kind = 
+and agg_with_order_kind =
     | Group_concat
     | Json_arrayagg
-(* Almost every function is looked up by name and arity in the signature
-   table; only these two carry something the name cannot. *)
+
 and 't func =
   | Named
-  | Cast of 't                                    (** the target type is not in the name *)
+  | Cast of 't
   | Agg_order of { with_order_kind : agg_with_order_kind; order : order }
-      (** GROUP_CONCAT and JSON_ARRAYAGG take an ORDER BY of their own *)
+
   [@@deriving show]
 and 'expr choices = (param_id * 'expr option) list
 and 't fun_ = { fn_name: string; kind: 't func; parameters: expr list; over: over option } [@@deriving show]
 and over = { frame_may_be_empty: bool } [@@deriving show]
 and case_branch = { when_: expr; then_: expr }
-and case = {  
+and case = {
   case: expr option;
   branches: case_branch list;
   else_: expr option;
@@ -251,7 +248,6 @@ let fn ?over fn_name kind parameters = Fun { fn_name; kind; parameters; over }
 
 let over_has_a_row = function None -> false | Some o -> not o.frame_may_be_empty
 
-(* where a frame boundary sits relative to the current row *)
 type frame_bound = [ `Before | `Current | `After ]
 
 let over_of_frame : (frame_bound * frame_bound) option -> over = function
@@ -299,8 +295,8 @@ let make_partition_by = List.iter (function
   | Value _ -> fail "ORDER BY or PARTITION BY uses legacy position indication which is not supported, use expression."
   | _ -> ())
 
-type assignment_expr = 
-  | RegularExpr of expr 
+type assignment_expr =
+  | RegularExpr of expr
   | AssignDefault
   | WithDefaultParam of expr * (pos * pos)
   [@@deriving show {with_path=false}]
@@ -309,7 +305,7 @@ type assignments = (col_name * assignment_expr) list [@@deriving show]
 
 type on_conflict = Do_update of assignments | Do_nothing [@@deriving show]
 
-type conflict_clause = 
+type conflict_clause =
   | On_duplicate of { assignments: assignments; }
   | On_conflict of { action: on_conflict; attrs: col_name list; }
   [@@deriving show]
@@ -330,7 +326,7 @@ type insert_action =
 type table_constraints = [ `Ignore | `Primary of string list | `Unique of string option * string list
   | `Foreign of string list * table_name * string list ] [@@deriving show {with_path=false}]
 
-type index_kind  = 
+type index_kind  =
   | Regular_idx
   | Fulltext
   | Spatial
@@ -344,11 +340,11 @@ module Alter_action_attr = struct
   type constraint_ = Syntax_constraint of Constraint.t | Default of default
     [@@deriving show {with_path=false}]
 
-  type t = {  
-    name : string; 
+  type t = {
+    name : string;
     kind : Source_type.kind collated located option;
     extra : constraint_ located list;
-    meta: (string * string) list; 
+    meta: (string * string) list;
   }
   [@@deriving show {with_path=false}]
 
@@ -363,7 +359,7 @@ module Alter_action_attr = struct
       | Syntax_constraint _ -> None
     ) col.extra
 
-  let to_attr (x: t): attr = make_attribute x.name 
+  let to_attr (x: t): attr = make_attribute x.name
     (Option.map (fun k -> Source_type.kind_to_type_kind k.value.collated) x.kind)
     (Constraints.of_list (List.map (fun c -> constraint_to_syntax_constraint c.value) x.extra))
     ~meta:x.meta
@@ -372,7 +368,7 @@ module Alter_action_attr = struct
      we deliberately make the fields dummy to reconstruct
    *)
   let from_attr (attr: attr): t =
-    let extra = attr.extra |> Constraints.elements |> List.map (fun c -> 
+    let extra = attr.extra |> Constraints.elements |> List.map (fun c ->
       let c = match c with
       | Constraint.WithDefault -> Default {
           expr = make_located ~pos:(0,0) ~value:(Value (make_collated ~collated:(Type.depends Any) ()));
@@ -413,14 +409,14 @@ type create_index_def = {
 }
 [@@deriving show {with_path=false}]
 
-type create_target_schema = { 
-  schema: Alter_action_attr.t list; 
-  constraints: table_constraints list; 
-  indexes: table_inline_index located list; 
+type create_target_schema = {
+  schema: Alter_action_attr.t list;
+  constraints: table_constraints list;
+  indexes: table_inline_index located list;
 }
 [@@deriving show]
 
-type create_target = 
+type create_target =
   | Schema of create_target_schema
   | Select of select_full located
 [@@deriving show {with_path=false}]
@@ -515,5 +511,3 @@ let drop_sources : schema_column_with_sources -> schema_column = function
   | DynamicWithSources (p, l) ->
     Dynamic (p, List.map (fun { field_id; field_attr = { Schema.Source.Attr.attr; _ }; join_deps } ->
       { field_id; field_attr = attr; join_deps }) l)
-
-

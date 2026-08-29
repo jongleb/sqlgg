@@ -1,10 +1,3 @@
-(** The domain: what is known about one type variable, and how two such things
-    combine.
-
-    This is the whole of what a unifier cannot supply. Inferno owns variables,
-    union-find and merging; the meaning of a merge is {!S.conjunction} below,
-    which is [merge_info] plus a feasibility check. Defaulting reads the same
-    record. Nothing here knows about variables or constraint order. *)
 
 open Printf
 open Hmx_lattice
@@ -15,9 +8,9 @@ let compare_refined (a : Refined.t) (b : Refined.t) =
   | n -> n
 
 type info = {
-  lowers : Refined.t list;  (** set: every l must satisfy l ≤ t *)
-  uppers : Refined.t list;  (** set: every u must satisfy t ≤ u *)
-  preds : Pred.t list;      (** set *)
+  lowers : Refined.t list;
+  uppers : Refined.t list;
+  preds : Pred.t list;
 }
 
 let no_info = { lowers = []; uppers = []; preds = [] }
@@ -36,29 +29,18 @@ let merge_info a b = {
   preds = merge_uniq Pred.compare a.preds b.preds;
 }
 
-(** The refinement the variable takes once its base is resolved to [base].
-
-    Lower bounds sitting on a strictly smaller base do not pass their own
-    refinement up, and they widen a value set to nothing: whatever those values
-    are, they are not known to be among the constructors. A capacity is left
-    alone. The result is checked against [Refined.leq] before it is returned, so
-    this function cannot disagree with the order. *)
 let resolve_refine base info =
   let lowers = List.map (fun (l : Refined.t) -> l.base, l.refine) info.lowers in
   let uppers_here = List.filter_map (fun (u : Refined.t) ->
     if Base.equal u.base base then Some u.refine else None) info.uppers in
-  (* Value sets and capacities accumulate differently. A lower that says
-     nothing about its values makes the result's value set unknown, wherever it
-     sits; but it says nothing about capacity either, and an Int landing in a
-     Decimal does not make that decimal unbounded. *)
+
   let value_sets = List.filter_map (fun (_, r) -> if Refine.is_value_set r then Some r else None) lowers in
   let capacities = List.filter_map (fun (_, r) ->
     match r with Refine.Dec _ -> Some r | Top | Enum _ | Flt _ -> None) lowers in
   let unknown_values = List.exists (fun (_, r) -> Refine.is_top r) lowers in
   let unknown_capacity =
     List.exists (fun (b, r) -> Refine.is_top r && Base.equal b base) lowers in
-  (* a capacity wins when both are present: a literal feeding a decimal column
-     contributes the requirement that it fit, not its own exact value *)
+
   let lo =
     match capacities, value_sets with
     | [], [] -> None
@@ -83,7 +65,6 @@ let resolve_refine base info =
     then `Ok r
     else `Conflict
 
-(** every base the variable could still take *)
 let candidates info =
   List.filter (fun b ->
     List.for_all (fun (l : Refined.t) -> Base.leq l.base b) info.lowers
@@ -92,19 +73,13 @@ let candidates info =
     && (match resolve_refine b info with `Ok _ -> true | `Conflict -> false))
     Base.all
 
-(** [Num_lit] says "an unsuffixed numeric literal", which is a position in the
-    lattice, not a type anything can be. Whatever else is decided, the answer
-    handed out is the dialect's default for such a literal. *)
 let settle (t : Refined.t) =
-  (* the literal itself does not survive: it is a value set, and a value set
-     does not cross a widening of the base *)
+
   match t.base with
   | Base.Num_lit -> Refined.of_base Base.Float
   | Base.Str_lit -> Refined.make Base.Text t.refine
   | _ -> t
 
-(** §8, refined: the choice is made over the set of bases that are still
-    feasible, so a predicate can never be violated by defaulting. *)
 let pick ?fallback info =
   match candidates info with
   | [] -> Error (Printf.sprintf "no type satisfies %s" (show_info info))
@@ -142,19 +117,8 @@ let pick ?fallback info =
       | `Conflict -> Error (Printf.sprintf "no type satisfies %s" (show_info info))
       | `Ok refine -> Ok (settle (Refined.make base refine))
 
-(** is [info] satisfiable at all? *)
 let feasible info = candidates info <> []
 
-(** The domain as Inferno's unifier sees it.
-
-    SQL base types are nullary, so a structure has no children and can simply
-    be the bounds record — which is why [iter], [fold] and [map] are not needed
-    and neither is [Structure.Option]: [None] is the absence of a constraint.
-
-    A subtyping bound is stated by unifying with a one-sided structure, and a
-    predicate rides inside the class, so it still constrains the outcome long
-    after the point where it was written. Qualified types, with the unifier
-    doing the propagation. *)
 module S = struct
   type 'a structure = info option
 

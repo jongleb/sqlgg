@@ -25,6 +25,8 @@ filenames would not resolve:
    (libraries sqlgg.traits))
 
   $ dune build --root .
+  ld: warning: -undefined suppress is deprecated
+  ld: warning: -undefined suppress is deprecated
 
 Each module contains exactly the functions of its own file, Shared is empty:
 

@@ -28,34 +28,34 @@ let parse sql =
     | #Main.token as x -> x)
   in
   match Main.extract_statement' tokens with
-  | None -> raise Enum.No_more_elements 
+  | None -> raise Enum.No_more_elements
   | Some (buffer, _) ->
       match Main.parse_one (buffer,[]) with
       | exception exn -> assert_failure @@ sprintf "failed : %s : %s" (Printexc.to_string exn) sql
       | [] -> assert_failure @@ sprintf "Failed to parse : %s" sql
       | stmt :: _ -> stmt
-let assert_params_with_meta stmt meta = 
+let assert_params_with_meta stmt meta =
     let meta = List.map (fun (p, m) -> p, Meta.of_list m) meta in
-    assert_equal 
-      ~msg:"params with meta" 
+    assert_equal
+      ~msg:"params with meta"
       ~cmp:(fun p1 p2 ->
         try
-          List.for_all2 
-            (fun (p1, m1) (p2, m2) -> cmp_param p1 p2 && Meta.equal m1 m2) 
-            p1 
+          List.for_all2
+            (fun (p1, m1) (p2, m2) -> cmp_param p1 p2 && Meta.equal m1 m2)
+            p1
             p2
         with _ -> false)
       ~printer:[%derive.show: (Type.t Sql.param * Sql.Meta.t) list]
       meta
-      (List.map 
+      (List.map
         (
           function
-          | Single (p, m) -> (p, m) 
-          | SingleIn (p, m) -> (p, m) 
+          | Single (p, m) -> (p, m)
+          | SingleIn (p, m) -> (p, m)
           | ChoiceIn { vars = [ SingleIn (p, m) ]; _ } -> (p, m)
           | DynamicSelect _ -> failwith "dynamic selects not supported for this host language"
           | _ -> assert false
-          ) 
+          )
         stmt.Gen.vars)
 
 let cmp_attrs = Stdlib.List.equal Sql.equal_attr
@@ -230,7 +230,7 @@ let test = Type.[
      [];
   (* should work with HAVING *)
   tt "SELECT name, COUNT(*) FROM test GROUP BY name HAVING name IS NOT NULL"
-     [attr' "name" Text; 
+     [attr' "name" Text;
       attr' "" Int]
      [];
   (* De Morgan's law: NOT (A OR name IS NULL) implies name IS NOT NULL *)
@@ -298,7 +298,8 @@ let test = Type.[
   tt "replace into test values (2,?,?)" [] [param_nullable Text; param_nullable Text;];
  tt "select str, case when id > @id then name when id < @id then 'qqq' else @def end as q from test"
     [attr' ~nullability:Nullable "str" Text; attr' ~nullability:Nullable "q" Text]
-    [named_nullable "id" Int; named_nullable "id" Int; named_nullable "def" Text];
+
+    [named "id" Int; named "id" Int; named "def" Text];
    wrong "insert into test values (1,2)";
   wrong "insert into test (str,name) values (1,'str','name')";
   (* check precedence of boolean and arithmetic operators *)
@@ -350,7 +351,7 @@ let test4 =
   tt "select greatest(10,x) from test4" [attr' ~nullability:Nullable "" Int] [] ~kind:(Select `Nat);
   tt "select 1+2 from test4 where x=y"  [attr' ~nullability:Strict "" Int] [] ~kind:(Select `Nat);
   tt "select max(x) as q from test4 where y = x + @n" [attr' ~nullability:Nullable "q" Int] [named_nullable "n" Int] ~kind:(Select `One);
-  tt "select coalesce(max(x),0) as q from test4 where y = x + @n" [attr' ~nullability:Strict "q" Int] [named_nullable "n" Int] ~kind:(Select `One); 
+  tt "select coalesce(max(x),0) as q from test4 where y = x + @n" [attr' ~nullability:Strict "q" Int] [named_nullable "n" Int] ~kind:(Select `One);
 ]
 
 let test_parsing = [
@@ -421,7 +422,7 @@ let test_left_join = [
   tt "CREATE TABLE account_types ( type_id INT NOT NULL PRIMARY KEY, type_name VARCHAR(255) NOT NULL )" [] [];
   tt "CREATE TABLE users (id INT NOT NULL, user_id INT NOT NULL PRIMARY KEY, name VARCHAR(255), email VARCHAR(255), account_type_id INT NULL, FOREIGN KEY (account_type_id) REFERENCES account_types(type_id))" [][];
   tt "SELECT users.name, users.email, account_types.type_name FROM users LEFT JOIN account_types ON users.account_type_id = account_types.type_id"
-  [attr "name" Text ~extra:[]; attr "email" Text ~extra:[]; 
+  [attr "name" Text ~extra:[]; attr "email" Text ~extra:[];
   {name="type_name"; domain=Type.nullable Text; extra=(Constraints.of_list [Constraint.NotNull]);meta = Meta.empty();}] [];
 ]
 
@@ -453,7 +454,7 @@ let test_update_join = [
     UPDATE test12
     JOIN test13 t13 ON t13.c_id = test12.c_id
     JOIN test14 t14 ON t14.s_id = t13.s_id
-    SET t14.g = t14.g + 100, 
+    SET t14.g = t14.g + 100,
     test12.c_name = @c_name,
     t13.s_name = @s_name
     WHERE test12.c_id = @c_id
@@ -467,9 +468,9 @@ let test_update_join = [
 let test_param_not_null_by_default = [
   tt "CREATE TABLE test15 (a INT, b INT NULL, c TEXT NULL)" [] [];
   tt "CREATE TABLE test16 (d INT)" [] [];
-  tt {| 
-    SELECT a FROM test15 
-    WHERE a = @a 
+  tt {|
+    SELECT a FROM test15
+    WHERE a = @a
     AND a + b = @ab
     AND a + @x = 10
     AND c = @c AND a < (@a2 :: Int Null)
@@ -483,8 +484,8 @@ let test_param_not_null_by_default = [
     named "d" Int;
   ];
   tt {|
-    UPDATE test15 
-    SET a = @a 
+    UPDATE test15
+    SET a = @a
     WHERE b = @b AND a = @where_a
   |} [] [
     named_nullable "a" Int;
@@ -494,10 +495,10 @@ let test_param_not_null_by_default = [
 ]
 
 (* Since @abc is tuple list, but TupleList isn't a Sql.type *)
-let test_in_clause_with_tuple_sets () = 
+let test_in_clause_with_tuple_sets () =
   do_test "CREATE TABLE test17 (a INT, b INT NULL, c TEXT NULL)" [] [];
-  let stmt = parse {| 
-    SELECT a FROM test17 
+  let stmt = parse {|
+    SELECT a FROM test17
     WHERE (a, b, c) IN @abc
   |} in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string [attr' ~nullability:Nullable "a" Int] (schema_to_attrs stmt.schema);
@@ -517,34 +518,34 @@ let test_agg_nullable = [
     )
   |} [] [];
   tt "CREATE TABLE test18 (id INT, value INT NOT NULL)" [] [];
-  tt {| 
+  tt {|
     SELECT AVG(value) as avg_value FROM test18
   |} [attr' ~nullability:Nullable "avg_value" Float] [];
-  tt {| 
+  tt {|
     SELECT MAX(value) as max_value FROM test18
   |} [attr' ~nullability:Nullable "max_value" Int] [];
-  tt {| 
+  tt {|
     SELECT MAX(value) as max_value FROM test18 GROUP BY id
   |} [attr' "max_value" Int] [];
-  tt {| 
+  tt {|
     SELECT MAX(value) as max_value, MAX(id) as max_id
     FROM test18 GROUP BY id
   |} [attr' "max_value" Int; attr' "max_id" ~nullability:Nullable Int] [];
-  tt {| 
+  tt {|
     SELECT AVG(value) as avg_value, AVG(id) as avg_id
     FROM test18
   |} [
-    attr' "avg_value" ~nullability:Nullable Float; 
+    attr' "avg_value" ~nullability:Nullable Float;
     attr' "avg_id" ~nullability:Nullable Float
   ] [];
-  tt {| 
+  tt {|
     SELECT MAX((SELECT value FROM test18 WHERE value = 100)) AS result
     FROM test18
     GROUP BY value
   |} [
-  attr' "result" ~nullability:Nullable Int; 
+  attr' "result" ~nullability:Nullable Int;
   ] [];
-  tt {| 
+  tt {|
     SELECT MAX((
       SELECT MAX((
         SELECT value FROM test18 WHERE value = 100 GROUP BY value
@@ -553,14 +554,14 @@ let test_agg_nullable = [
     FROM test18
     GROUP BY value
   |} [
-  attr' "result" ~nullability:Nullable Int; 
+  attr' "result" ~nullability:Nullable Int;
   ] [];
-  tt {| 
+  tt {|
     SELECT MAX(COALESCE(((SELECT value FROM test18 WHERE value = 100)), 1)) AS result
     FROM test18
     GROUP BY value
   |} [
-  attr' "result" Int; 
+  attr' "result" Int;
   ] [];
   tt {|
     SELECT MAX(c) as result
@@ -606,7 +607,7 @@ let cte_possible_rec_non_shared_select_only = [
       SELECT num + @param1
       FROM sequence_cte
       WHERE num < @param2
-      UNION ALL 
+      UNION ALL
       SELECT 'string'
     )
     SELECT num
@@ -634,7 +635,7 @@ let cte_possible_rec_non_shared_select_only = [
     )
   |} [][];
   tt {|
-    SELECT * FROM test22 
+    SELECT * FROM test22
     WHERE col_id IN (
         WITH cte_filtered_ids AS (
           SELECT col_id FROM test22 WHERE col_value > 60000
@@ -675,7 +676,7 @@ let cte_possible_rec_non_shared_select_only = [
     SELECT col_id, col_value, col_group
     FROM new_values
   |}[][];
-  
+
   tt {|
     WITH RECURSIVE cte(num_name_just_an_alias_here) AS (
       SELECT 1 AS n
@@ -719,7 +720,7 @@ let test_ambiguous = [
   tt "CREATE TABLE test24 (id INT, column_d INT)" [] [];
   wrong "select id from test23 join test24 on test23.id = test24.id order by id";
   (* The difference between this example, and the same but with WHERE (following "wrong" fn) is
-     sql engine uses those columns that were mentioned in the SELECT statement, 
+     sql engine uses those columns that were mentioned in the SELECT statement,
      while it doesn't do that for WHERE.
   *)
   tt "select test23.id from test23 join test24 on test23.id = test24.id order by id" [
@@ -790,19 +791,19 @@ let test_ambiguous = [
     SELECT MAX(id) AS max_id
     FROM test23
     WHERE max_id > 0
-  |};  
+  |};
 ]
 
 let test_subquery_nullability = [
-  tt {| 
+  tt {|
     CREATE TABLE table_30 (
       column_1 INT PRIMARY KEY,
       column_2 VARCHAR(50) NOT NULL,
       column_3 VARCHAR(50)
     )
   |} [] [];
-  
-  tt {| 
+
+  tt {|
     CREATE TABLE table_31 (
       column_4 INT PRIMARY KEY,
       column_5 INT NOT NULL,
@@ -811,10 +812,10 @@ let test_subquery_nullability = [
       FOREIGN KEY (column_5) REFERENCES table_30(column_1)
     )
   |} [] [];
-  
+
   (* Possible no rows and which means possible null *)
-  tt {| 
-    SELECT 
+  tt {|
+    SELECT
       t30.column_2 AS info1,
       t30.column_3 AS info2,
       (SELECT MAX(column_6)
@@ -831,10 +832,10 @@ let test_subquery_nullability = [
     attr' ~nullability:Nullable "info2" Text;
     attr' ~nullability:Nullable "max_info" Datetime;
   ] [];
-  
+
   (* Count never returns null, it's counter and it isn't aggregation *)
-  tt {| 
-    SELECT 
+  tt {|
+    SELECT
       t30.column_2 AS info1,
       t30.column_3 AS info2,
       (SELECT COUNT(column_6)
@@ -853,8 +854,8 @@ let test_subquery_nullability = [
   ] [];
 
   (* dependent + null = null *)
-  tt {| 
-    SELECT 
+  tt {|
+    SELECT
       t30.column_2 AS info1,
       t30.column_3 AS info2,
       (SELECT IF(COUNT(column_6) = 1111111, 3, NULL)
@@ -872,14 +873,14 @@ let test_subquery_nullability = [
     attr' ~nullability:Nullable "max_info" Int;
   ] [];
 
-  tt {| 
+  tt {|
     SELECT (SELECT 1 WHERE 0) as result
   |} [
     attr' ~nullability:Nullable  "result" Int;
   ] [];
 
  (* no way to have null *)
-  tt {| 
+  tt {|
     SELECT 1 as one, (SELECT COUNT(NULL)) as result
   |} [
     attr' "one" Int;
@@ -887,7 +888,7 @@ let test_subquery_nullability = [
   ] [];
 
   (* no way to have null *)
-  tt {| 
+  tt {|
    SELECT 1 as one, (SELECT COUNT(NULL) HAVING FALSE) as result
   |} [
    attr' "one" Int;
@@ -895,35 +896,35 @@ let test_subquery_nullability = [
   ] [];
 
   (* it doesn't return null, reason: WHERE is evaluated after the Aggregation *)
-  tt {| 
+  tt {|
     SELECT 1 as one, (SELECT COUNT(NULL) + 1 WHERE 0) as result
   |} [
     attr' "one" Int;
     attr' "result" Int;
   ] [];
 
-  tt {| 
+  tt {|
     SELECT 1 as one, (SELECT (SELECT (SELECT (SELECT COUNT(NULL))))) as result
   |} [
     attr' "one" Int;
     attr' "result" Int;
   ] [];
 
-  tt {| 
+  tt {|
     SELECT 1 as one, (SELECT (SELECT (SELECT (SELECT COUNT(NULL) + 1) + 1) + 1)) as result
   |} [
     attr' "one" Int;
     attr' "result" Int;
   ] [];
 
-  tt {| 
-   SELECT 1 AS one, 
-    (SELECT 
+  tt {|
+   SELECT 1 AS one,
+    (SELECT
         IF(
-            (SELECT 
+            (SELECT
                 (SELECT COUNT(NULL) + 1) + 1
-            ) + 1 > 49876, 
-            129, 
+            ) + 1 > 49876,
+            129,
             NULL
         )
     ) AS result
@@ -938,8 +939,8 @@ let test_subquery_nullability = [
    attr' ~nullability:Nullable "result" Int;
  ] [];
 
-  tt {| 
-    SELECT 
+  tt {|
+    SELECT
       1 as one,
       (SELECT column_6
        FROM table_31 t31
@@ -1008,7 +1009,7 @@ let test_select_exposed_alias = [
   ] [];
 
   tt {| SELECT z.* FROM (
-    SELECT 
+    SELECT
         t1.col_3,
         COUNT(*) as cnt,
         SUM(t2.col_3 * t1.col_4) as calc,
@@ -1027,7 +1028,7 @@ let test_select_exposed_alias = [
     SELECT inner_x.*,
            NOT inner_x.d as bonus_not
     FROM (
-        SELECT 
+        SELECT
             'abc' as str,
             42 as num,
             2.5 as price,
@@ -1036,7 +1037,7 @@ let test_select_exposed_alias = [
   ) as outer_x (str, num, price, flag, bonus) |} [
     attr' "str" (StringLiteral "abc");
     attr' "num" Int;
-    attr' "price" (FloatingLiteral 2.5);
+    attr' "price" Float;
     attr' "flag" Bool;
     attr' "bonus" Bool;
 ] [];
@@ -1046,34 +1047,34 @@ let test_enum_as_variant = [
   "test_enum_as_variant" >:: (fun _ ->
 
     do_test "CREATE TABLE test35 (status enum('active','pending','deleted') NOT NULL DEFAULT 'pending')" [] [];
- 
+
     do_test "SELECT status FROM test35" [
-      attr' ~extra:[NotNull; WithDefault] "status" 
+      attr' ~extra:[NotNull; WithDefault] "status"
         (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["active"; "pending"; "deleted"]); is_closed = true }))
     ] [];
-   
+
     do_test "INSERT INTO test35 (status) VALUES (@status)" [] [
       named "status" (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["active"; "pending"; "deleted"]); is_closed = true }))
     ];
   )
 ]
 
-let test_enum_literal () = 
+let test_enum_literal () =
 
   do_test "CREATE TABLE test36 (status enum('active','pending','deleted') NOT NULL DEFAULT 'pending')" [] [];
-  
+
   let stmt = parse {|INSERT INTO test36 VALUES('pending')|} in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string [] (schema_to_attrs stmt.schema);
 
   let stmt2 = parse {|INSERT INTO test36 VALUES('active')|} in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string [] (schema_to_attrs stmt2.schema);
-  
+
   let stmt3 = parse {|INSERT INTO test36 VALUES('deleted')|} in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string [] (schema_to_attrs stmt3.schema);
 
   let stmt4 = parse {|SELECT * FROM test36 WHERE status = 'active'|} in
-  assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string 
-    [attr' ~extra:[NotNull; WithDefault] "status" 
+  assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string
+    [attr' ~extra:[NotNull; WithDefault] "status"
       (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["active"; "pending"; "deleted"] ); is_closed = true }))]
     (schema_to_attrs stmt4.schema);
 
@@ -1081,12 +1082,12 @@ let test_enum_literal () =
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string [] (schema_to_attrs stmt5.schema);
 
   let stmt6 = parse {|
-    SELECT * FROM test36 
-    WHERE status IN ('active', 'pending') 
+    SELECT * FROM test36
+    WHERE status IN ('active', 'pending')
     AND status != 'deleted'
   |} in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string
-    [attr' ~extra:[NotNull; WithDefault] "status" 
+    [attr' ~extra:[NotNull; WithDefault] "status"
       (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["active"; "pending"; "deleted"]); is_closed = true }))]
     (schema_to_attrs stmt6.schema);
 
@@ -1102,7 +1103,7 @@ let test_enum_literal () =
   ignore @@ wrong {|SELECT * FROM test36 WHERE status = 'activee'|};
 
   let stmt8 = parse {|SELECT CONCAT(status, 'test') AS named FROM test36 WHERE status = 'active'|} in
-  assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string 
+  assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string
     [attr' ~extra:[] "named" Text]
     (schema_to_attrs stmt8.schema)
 
@@ -1115,7 +1116,6 @@ let test_add_with_window_function = [
   tt {| SELECT MAX(1) OVER() WHERE FALSE |} [attr' "" Int;] [];
   tt {| SELECT MAX(NULL) OVER() |} [attr' ~nullability:Nullable "" Any;] [];
 
-  (* A frame that never reaches the current row is empty on the rows at that edge *)
   tt "CREATE TABLE win_frame (a INT, b INT)" [] [];
   tt {| SELECT SUM(a) OVER (ORDER BY b) AS w FROM win_frame WHERE a IS NOT NULL |}
      [attr' "w" Int] [];
@@ -1137,11 +1137,11 @@ let test_add_with_window_function = [
 
   tt {| SELECT 1 + (SELECT COUNT(1) OVER() WHERE FALSE) |} [attr' ~nullability:Nullable "" Int;] [];
 
-  tt {| SELECT CASE WHEN SUM(2) OVER() > 100 THEN 'High' ELSE 'Low' END |} 
+  tt {| SELECT CASE WHEN SUM(2) OVER() > 100 THEN 'High' ELSE 'Low' END |}
     [attr' "" (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["High"; "Low"]); is_closed = false }));] [];
 
-  tt {| SELECT (NULL - MIN(2.0) OVER()) / (MAX(3) OVER() - MIN(4) OVER()) |} [attr' ~nullability:Nullable "" Float;] [];  
-  tt {| SELECT (0 - MIN(2.0) OVER()) / (MAX(3) OVER() - MIN(4) OVER()) |} [attr' "" Float;] [];  
+  tt {| SELECT (NULL - MIN(2.0) OVER()) / (MAX(3) OVER() - MIN(4) OVER()) |} [attr' ~nullability:Nullable "" Float;] [];
+  tt {| SELECT (0 - MIN(2.0) OVER()) / (MAX(3) OVER() - MIN(4) OVER()) |} [attr' "" Float;] [];
 
   tt {| SELECT 1 + (SELECT (0 - MIN(2.0) OVER()) / (MAX(3) OVER() - MIN(4) OVER()) ) |} [attr' ~nullability:Nullable "" Float;] [];
 
@@ -1197,10 +1197,10 @@ let test_meta_propagation = [
   ] [];
 
   tt {|
-    SELECT 
+    SELECT
       subquery.col_1 as from_subquery_col_1,
       subquery.col_2 as from_subquery_col_2
-    FROM 
+    FROM
       (SELECT col_1, col_2 FROM table_37) as subquery
   |} [
     attr' ~extra:[PrimaryKey;] ~meta:["module", "HelloWorld"] "from_subquery_col_1" Int;
@@ -1208,13 +1208,13 @@ let test_meta_propagation = [
   ] [];
 
   tt {|
-    SELECT 
+    SELECT
       outer_query.nested_col_1 as multi_level_col_1
-    FROM 
+    FROM
       (
-        SELECT 
+        SELECT
           inner_query.col_1 as nested_col_1
-        FROM 
+        FROM
           (SELECT col_1 FROM table_37) as inner_query
       ) as outer_query
   |} [
@@ -1222,9 +1222,9 @@ let test_meta_propagation = [
   ] [];
 
   tt {|
-    SELECT 
+    SELECT
       union_result.col_val as union_col_1
-    FROM 
+    FROM
       (
         SELECT col_1 as col_val FROM table_37
         UNION
@@ -1250,9 +1250,9 @@ let test_meta_propagation = [
   ] [];
 
   tt {|
-    SELECT 
+    SELECT
       (SELECT col_1 FROM table_37 LIMIT 1) as subquery_col_1,
-      col_2 
+      col_2
     FROM table_37
   |} [
     attr' ~meta:["module", "HelloWorld"] ~nullability:Nullable "subquery_col_1" Int;
@@ -1267,12 +1267,12 @@ let test_meta_propagation = [
   ] [];
 
   tt {|
-    SELECT 
+    SELECT
       (
         SELECT MAX(
           (
-            SELECT col_1 as col_val 
-            FROM table_37 
+            SELECT col_1 as col_val
+            FROM table_37
             WHERE col_1 > (SELECT MIN(col_1) FROM table_37)
             LIMIT 1
           )
@@ -1284,12 +1284,12 @@ let test_meta_propagation = [
   ] [];
 
   tt {|
-    SELECT 
+    SELECT
       (
-        SELECT MAX(x.col_val) 
+        SELECT MAX(x.col_val)
         FROM (
-          SELECT col_1 as col_val 
-          FROM table_37 
+          SELECT col_1 as col_val
+          FROM table_37
           WHERE col_1 > (SELECT MIN(col_1) FROM table_37)
         ) as x
       ) as deeply_nested_query
@@ -1304,37 +1304,37 @@ let test_case_enum = [
   tt "CREATE TABLE test38 (id INT PRIMARY KEY)" [][];
 
   (* not exhausted (C not matched) then null *)
-  tt "SELECT CASE status WHEN 'A' THEN 1 WHEN 'B' THEN 2 END `value` FROM test37" 
+  tt "SELECT CASE status WHEN 'A' THEN 1 WHEN 'B' THEN 2 END `value` FROM test37"
     [attr' ~nullability:Nullable "value" Int;] [];
 
   (* not exhausted, else branch is presented then not null *)
-  tt "SELECT CASE status WHEN 'A' THEN 1 WHEN 'B' THEN 2 ELSE 0 END `value` FROM test37" 
+  tt "SELECT CASE status WHEN 'A' THEN 1 WHEN 'B' THEN 2 ELSE 0 END `value` FROM test37"
     [attr' "value" Int;] [];
 
   (* exhausted, else isn't needed *)
-  tt "SELECT CASE status WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 0 END `value` FROM test37" 
+  tt "SELECT CASE status WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 0 END `value` FROM test37"
     [attr' "value" Int;] [];
 
   (* not exhausted, else branch isn't presented then null *)
-  tt "SELECT CASE WHEN 1 > 10 THEN 'High' END `value`" 
-    [attr' "value" ~nullability:Nullable (StringLiteral "High");][];  
+  tt "SELECT CASE WHEN 1 > 10 THEN 'High' END `value`"
+    [attr' "value" ~nullability:Nullable (StringLiteral "High");][];
 
   (* not exhausted, else branch isn't presented, 'High' and 'Low' literals make Union *)
-  tt "SELECT CASE WHEN 1 > 10 THEN 'High' WHEN FALSE THEN 'Low' END `value`" 
-    [attr' "value" ~nullability:Nullable 
-      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["High"; "Low"]); is_closed = false }));][]; 
-      
+  tt "SELECT CASE WHEN 1 > 10 THEN 'High' WHEN FALSE THEN 'Low' END `value`"
+    [attr' "value" ~nullability:Nullable
+      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["High"; "Low"]); is_closed = false }));][];
+
   (* exhausted (else is presented), Int <: Float *)
-  tt "SELECT CASE WHEN TRUE THEN 1 ELSE 0.2 END `value`" 
+  tt "SELECT CASE WHEN TRUE THEN 1 ELSE 0.2 END `value`"
     [attr' "value" Float;][];
 
   (* nullable since no rows possible inisde THEN *)
-  tt {| SELECT CASE WHEN FALSE THEN (SELECT id FROM test37 WHERE FALSE ) ELSE 1 END `value`|} 
+  tt {| SELECT CASE WHEN FALSE THEN (SELECT id FROM test37 WHERE FALSE ) ELSE 1 END `value`|}
     [attr' ~nullability:Nullable "value" Int;][];
 
-  tt {| 
+  tt {|
     SELECT CASE WHEN FALSE THEN (SELECT id FROM test37 WHERE FALSE ) ELSE 1 END `value`
-  |} 
+  |}
     [attr' ~nullability:Nullable "value" Int;][];
 
   (* If COUNT is presented at least in a one branch then the NO ROWS case isn't possible *)
@@ -1353,7 +1353,7 @@ let test_case_enum = [
     ) AS value
   |} [attr' "value" Int;][];
 
-  (* If COUNT is presented at least in a one branch then the NO ROWS case isn't possible, 
+  (* If COUNT is presented at least in a one branch then the NO ROWS case isn't possible,
     but if at least on NULL is presented then NULLABLE
   *)
   tt {|
@@ -1387,8 +1387,8 @@ let test_case_enum = [
   |} [attr' ~nullability:Nullable "value" Int;][];
 ]
 
-let test_type_mapping_params _ = 
-  do_test {| 
+let test_type_mapping_params _ =
+  do_test {|
     CREATE TABLE test39 (
       -- [sqlgg] module=HelloWorld
       id INT PRIMARY KEY,
@@ -1397,33 +1397,33 @@ let test_type_mapping_params _ =
   |} [] [];
 
   let stmt = parse {|SELECT id FROM test39 WHERE id = @id|} in
-  assert_equal 
-    ~msg:"schema" 
-    ~printer:Sql.Schema.to_string 
-    [attr' ~extra:[PrimaryKey] ~meta:["module", "HelloWorld"] "id" Int] 
+  assert_equal
+    ~msg:"schema"
+    ~printer:Sql.Schema.to_string
+    [attr' ~extra:[PrimaryKey] ~meta:["module", "HelloWorld"] "id" Int]
     (schema_to_attrs stmt.schema);
   assert_params_with_meta stmt [(named "id" Int, ["module", "HelloWorld"])];
 
   (* test in subqery *)
   let stmt = parse {|SELECT id FROM test39 WHERE txt = (SELECT txt FROM test39 WHERE id = @id)|} in
-  assert_equal 
-    ~msg:"schema" 
-    ~printer:Sql.Schema.to_string 
-    [attr' ~extra:[PrimaryKey] ~meta:["module", "HelloWorld"] "id" Int] 
+  assert_equal
+    ~msg:"schema"
+    ~printer:Sql.Schema.to_string
+    [attr' ~extra:[PrimaryKey] ~meta:["module", "HelloWorld"] "id" Int]
     (schema_to_attrs stmt.schema);
   assert_params_with_meta stmt [(named "id" Int, ["module", "HelloWorld"])];
 
   let stmt = parse {|SELECT id FROM test39 WHERE txt = (SELECT txt FROM test39 WHERE id = @id OR (txt = @txt OR TRUE) )|} in
-  assert_equal 
-    ~msg:"schema" 
-    ~printer:Sql.Schema.to_string 
+  assert_equal
+    ~msg:"schema"
+    ~printer:Sql.Schema.to_string
     [
       attr' ~extra:[PrimaryKey] ~meta:["module", "HelloWorld"] "id" Int;
-    ] 
+    ]
     (schema_to_attrs stmt.schema);
   assert_params_with_meta stmt [(named "id" Int, ["module", "HelloWorld"]); (named "txt" Text, [])];
 
-  do_test {| 
+  do_test {|
     CREATE TABLE test40 (
       -- [sqlgg] module=Txt_module_name
       txt2 TEXT NOT NULL
@@ -1436,16 +1436,16 @@ let test_type_mapping_params _ =
     JOIN test40 ON test39.txt = test40.txt2
     WHERE id = @id OR (txt2 = @txt2 OR TRUE)
   |} in
-  assert_equal 
-    ~msg:"schema" 
-    ~printer:Sql.Schema.to_string 
+  assert_equal
+    ~msg:"schema"
+    ~printer:Sql.Schema.to_string
     [
       attr' ~extra:[PrimaryKey] ~meta:["module", "HelloWorld"] "id" Int;
       attr' ~extra:[NotNull] ~meta:["module", "Txt_module_name"] "txt2" Text;
-    ] 
+    ]
     (schema_to_attrs stmt.schema);
   assert_params_with_meta stmt [
-    (named "id" Int, ["module", "HelloWorld"]); 
+    (named "id" Int, ["module", "HelloWorld"]);
     (named "txt2" Text, ["module", "Txt_module_name"])
   ];
 
@@ -1454,13 +1454,13 @@ let test_type_mapping_params _ =
     FROM test39
     JOIN test40 ON test39.txt = test40.txt2 AND test40.txt2 = @txt2
   |} in
-  assert_equal 
-    ~msg:"schema" 
-    ~printer:Sql.Schema.to_string 
+  assert_equal
+    ~msg:"schema"
+    ~printer:Sql.Schema.to_string
     [
       attr' ~extra:[PrimaryKey] ~meta:["module", "HelloWorld"] "id" Int;
       attr' ~extra:[NotNull] ~meta:["module", "Txt_module_name"] "txt2" Text;
-    ] 
+    ]
     (schema_to_attrs stmt.schema);
   assert_params_with_meta stmt [
     (named "txt2" Text, ["module", "Txt_module_name"])
@@ -1474,22 +1474,22 @@ let test_type_mapping_params _ =
   assert_params_with_meta stmt [
     (named "txt2" Text, ["module", "Txt_module_name"])
   ];
-  
+
   let stmt = parse {|
     SELECT id, txt2
     FROM test39
     JOIN test40 ON (test39.txt, test40.txt2) IN @txt2
   |} in
 
-  assert_equal 
-    ~msg:"params with meta" 
+  assert_equal
+    ~msg:"params with meta"
     ~cmp:(fun p1 p2 -> match List.hd p1, List.hd p2 with
-      | TupleList ({ value; _ }, Where_in { value = (l1, _); pos = _ }), TupleList ({ value = value2; _ }, Where_in { value = (l2, _); pos = _ }) -> 
+      | TupleList ({ value; _ }, Where_in { value = (l1, _); pos = _ }), TupleList ({ value = value2; _ }, Where_in { value = (l2, _); pos = _ }) ->
         value = value2 && l1 = l2
       | _ -> false
     )
     ~printer:show_vars
-    stmt.vars 
+    stmt.vars
     [
       TupleList (make_located ~value:(Some "txt2") ~pos:(0, 0), Where_in (make_located ~value:([
         Type.strict Text, Meta.empty ();
@@ -1501,12 +1501,12 @@ let test_type_mapping_params _ =
     FROM test39
     LIMIT 1
   |} in
-  assert_equal 
-    ~msg:"schema" 
-    ~printer:Sql.Schema.to_string 
+  assert_equal
+    ~msg:"schema"
+    ~printer:Sql.Schema.to_string
     [
       attr' "booo" Bool;
-    ] 
+    ]
     (schema_to_attrs stmt.schema);
 
   (* not only in WHERE expr *)
@@ -1518,13 +1518,13 @@ let test_type_mapping_params _ =
     CREATE TABLE test41 (
       -- [sqlgg] module=Module1
       col_1 INT PRIMARY KEY,
-      
-      -- [sqlgg] module=Module2  
+
+      -- [sqlgg] module=Module2
       col_2 CHAR(36) NOT NULL,
-      
+
       -- [sqlgg] module=Module3
       col_3 DECIMAL(10,2) NOT NULL,
-      
+
       -- [sqlgg] module=Module4
       col_4 ENUM('status_1', 'status_2', 'status_3', 'status_4') NOT NULL,
       col_5 TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -1535,25 +1535,25 @@ let test_type_mapping_params _ =
     CREATE TABLE test42 (
       -- [sqlgg] module=Module2
       col_2 CHAR(36) PRIMARY KEY,
-      
+
       -- [sqlgg] module=Module5
       col_6 VARCHAR(255) NOT NULL UNIQUE,
-      
+
       -- [sqlgg] module=Module3
       col_7 DECIMAL(10,2) NOT NULL DEFAULT 0.0,
-      
+
       -- [sqlgg] module=Module6
       col_8 ENUM('status_a', 'status_b', 'status_c') NOT NULL,
-      
+
       col_9 TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   |} [] [];
 
   let stmt = parse {|
-    WITH 
+    WITH
       subquery_1 AS (
-        SELECT 
-          col_2, 
+        SELECT
+          col_2,
           SUM(col_3) as computed_1,
           COUNT(*) as computed_2
         FROM test41
@@ -1561,9 +1561,9 @@ let test_type_mapping_params _ =
         GROUP BY col_2
         HAVING SUM(col_3) > @param_3
       )
-    SELECT 
-      t2.col_2 as a, 
-      t2.col_6 as b, 
+    SELECT
+      t2.col_2 as a,
+      t2.col_6 as b,
       t2.col_8 as c,
       sq.computed_1 as d,
       sq.computed_2 as e
@@ -1572,32 +1572,32 @@ let test_type_mapping_params _ =
     WHERE t2.col_8 = @param_4
     ORDER BY sq.computed_1 DESC
     LIMIT @param_5
-  |} in 
-  assert_equal 
-    ~msg:"schema" 
-    ~printer:Sql.Schema.to_string 
+  |} in
+  assert_equal
+    ~msg:"schema"
+    ~printer:Sql.Schema.to_string
     [
       attr' ~extra:[PrimaryKey] ~meta:["module", "Module2"] "a" Text;
       attr' ~extra:[NotNull; Unique] ~meta:["module", "Module5"] "b" Text;
-      attr' ~extra:[NotNull] ~meta:["module", "Module6"] "c" 
+      attr' ~extra:[NotNull] ~meta:["module", "Module6"] "c"
         (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["status_a"; "status_b"; "status_c"]); is_closed = true }));
       attr' ~extra:[] ~meta:["module", "Module3"] "d" (Decimal { precision = Some 10; scale = Some 2; });
       attr' "e" Int;
-    ] 
+    ]
     (schema_to_attrs stmt.schema);
 
   assert_params_with_meta stmt [
     (named "param_1" Datetime, []);
     (named "param_2" (Decimal { precision = Some 10; scale = Some 2; }), ["module", "Module3"]);
     (named "param_3" (Decimal { precision = Some 10; scale = Some 2; }), ["module", "Module3"]);
-    (named "param_4" 
-      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["status_a"; "status_b"; "status_c"]); is_closed = true })), 
+    (named "param_4"
+      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["status_a"; "status_b"; "status_c"]); is_closed = true })),
       ["module", "Module6"]);
     (named "param_5" Int, []);
   ]
 
-let test_meta_insert_update _ = 
-  do_test {| 
+let test_meta_insert_update _ =
+  do_test {|
     CREATE TABLE test43 (
       -- [sqlgg] module=Test43Id
       id INT PRIMARY KEY,
@@ -1609,26 +1609,26 @@ let test_meta_insert_update _ =
   |} [] [];
 
   let stmt = parse {|
-    INSERT INTO test43 (id, txt, status) 
+    INSERT INTO test43 (id, txt, status)
     VALUES (@param_1, @param_2, @param_3)
   |} in
 
   assert_params_with_meta stmt [
     (named "param_1" Int, ["module", "Test43Id"]);
     (named "param_2" Text, ["module", "ImportantTxt"]);
-    (named "param_3" 
+    (named "param_3"
       (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["active"; "inactive"]); is_closed = true })), ["module", "Test43Status"]);
   ];
 
   let stmt = parse {|
-    UPDATE test43 
-    SET txt = @param_1, status = @param_2 
+    UPDATE test43
+    SET txt = @param_1, status = @param_2
     WHERE id = @param_3
   |} in
 
   assert_params_with_meta stmt [
     (named "param_1" Text, ["module", "ImportantTxt"]);
-    (named "param_2" 
+    (named "param_2"
       (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["active"; "inactive"]); is_closed = true })), ["module", "Test43Status"]);
     (named "param_3" Int, ["module", "Test43Id"]);
   ];
@@ -1636,7 +1636,7 @@ let test_meta_insert_update _ =
   let stmt = parse {|
     INSERT INTO test43 (id, txt, status)
     SELECT id, txt, status
-    FROM test43 
+    FROM test43
     WHERE id = @param_1
   |} in
 
@@ -1644,7 +1644,7 @@ let test_meta_insert_update _ =
     (named "param_1" Int, ["module", "Test43Id"]);
   ];
 
-  do_test {| 
+  do_test {|
     CREATE TABLE test44 (
       -- [sqlgg] module=Module1
       col_1 INT PRIMARY KEY,
@@ -1658,7 +1658,7 @@ let test_meta_insert_update _ =
     )
   |} [] [];
 
-  do_test {| 
+  do_test {|
     CREATE TABLE test45 (
       -- [sqlgg] module=Module1
       col_1 INT NOT NULL,
@@ -1671,14 +1671,14 @@ let test_meta_insert_update _ =
   |} [] [];
 
   let stmt = parse {|
-    INSERT INTO test44 (col_1, col_2, col_3, col_4, col_5) 
+    INSERT INTO test44 (col_1, col_2, col_3, col_4, col_5)
     VALUES (@param1, @param2, @param3, @param4, @param5)
   |} in
   assert_params_with_meta stmt [
     (named "param1" Int, ["module", "Module1"]);
     (named "param2" Text, ["module", "Module2"]);
-    (named "param3" 
-      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })), 
+    (named "param3"
+      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })),
       ["module", "Module3"]);
     (named_nullable "param4" (Decimal { precision = Some 10; scale = Some 2; }), ["module", "Module4"]);
     (named_nullable "param5" Datetime, []);
@@ -1694,11 +1694,11 @@ let test_meta_insert_update _ =
   |} in
   assert_params_with_meta stmt [
     (named_nullable "param1" (Decimal { precision = Some 10; scale = Some 2; }), []);
-    (named "param2" 
-      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })), 
+    (named "param2"
+      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })),
       ["module", "Module3"]);
-    (named "param3" 
-      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["read"; "write"; "delete"]); is_closed = true })), 
+    (named "param3"
+      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["read"; "write"; "delete"]); is_closed = true })),
       ["module", "Module5"]);
     (named "param4" Int, ["module", "Module1"]);
   ];
@@ -1712,18 +1712,18 @@ let test_meta_insert_update _ =
   assert_params_with_meta stmt [
     (named "param1" Int, ["module", "Module1"]);
     (named "param2" Text, ["module", "Module2"]);
-    (named "param3" 
-      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })), 
+    (named "param3"
+      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })),
       ["module", "Module3"]);
     (named "param4" Int, ["module", "Module1"]);
     (named "param5" Text, ["module", "Module2"]);
-    (named "param6" 
-      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })), 
+    (named "param6"
+      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })),
       ["module", "Module3"]);
     (named "param7" Int, ["module", "Module1"]);
     (named "param8" Text, ["module", "Module2"]);
-    (named "param9" 
-      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })), 
+    (named "param9"
+      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })),
       ["module", "Module3"]);
   ];
 
@@ -1738,22 +1738,22 @@ let test_meta_insert_update _ =
   assert_params_with_meta stmt [
     (named "param1" Int, ["module", "Module1"]);
     (named "param2" Text, ["module", "Module2"]);
-    (named "param3" 
-      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })), 
+    (named "param3"
+      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })),
       ["module", "Module3"]);
     (named_nullable "param4" (Decimal { precision = Some 10; scale = Some 2; }), ["module", "Module4"]);
     (named "param5" Text, ["module", "Module2"]);
-    (named "param6" 
-      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })), 
+    (named "param6"
+      (Type.(Union { ctors = (Enum_kind.Ctors.of_list ["admin"; "user"; "moderator"]); is_closed = true })),
       ["module", "Module3"]);
     (named_nullable "param7" (Decimal { precision = Some 10; scale = Some 2; }), []);
   ];
 
   let stmt = parse {|
-    UPDATE test44 
+    UPDATE test44
     SET col_4 = (
-      SELECT MAX(col_3) 
-      FROM test45 
+      SELECT MAX(col_3)
+      FROM test45
       WHERE col_1 = @param1
     )
     WHERE col_1 = @param2 AND col_2 = @param3
@@ -1765,7 +1765,7 @@ let test_meta_insert_update _ =
   ];
 
   let stmt = parse {|
-    UPDATE test44 
+    UPDATE test44
     SET col_4 = col_4 + @param1,
         col_2 = CONCAT(@param2, col_2)
     WHERE col_1 = @param3
@@ -1905,7 +1905,6 @@ let test_meta_lattice =
       assert_bool "shared ignores empty"
         (Meta.equal (Meta.shared [Meta.empty (); a; b]) (Meta.shared [a; b]))) metas) metas);
 ]
-
 
 let test_meta_equality =
   [
@@ -2050,7 +2049,7 @@ let test_meta_functions =
   tt "SELECT LEAST(0, cid) AS c FROM rows_" [attr' ~meta:["module", "Cid"] "c" Int] [];
 
   tt "SELECT NULLIF(status, 'active') AS s FROM rows_"
-    [attr' ~nullability:Nullable ~meta:["module", "Status"] "s" (Type.StringLiteral "active")] [];
+    [attr' ~nullability:Nullable ~meta:["module", "Status"] "s" Text] [];
 
   tt "SELECT CONCAT(status, plain) AS s FROM rows_" [attr' "s" Text] [];
 
@@ -2298,13 +2297,11 @@ let test_operand_order =
   tt "CREATE TABLE txt (label TEXT NOT NULL)" [] [];
   tt "CREATE TABLE prices (price DECIMAL(10,2) NOT NULL)" [] [];
 
-  (* TODO asymmetric on purpose: PostgreSQL enums are nominal and this join is an error there.
-     See the TODO in order_kind. *)
-  wrong "SELECT narrow.s AS x FROM narrow JOIN wide ON narrow.s = wide.s";
+  tt "SELECT narrow.s AS x FROM narrow JOIN wide ON narrow.s = wide.s" [ attr' ~extra:[NotNull] "x" narrow_t ] [];
   tt "SELECT narrow.s AS x FROM narrow JOIN wide ON wide.s = narrow.s" [ attr' ~extra:[NotNull] "x" narrow_t ] [];
 
-  tt "SELECT COALESCE(narrow.s, txt.label) AS x FROM narrow, txt" [ attr' "x" narrow_t ] [];
-  tt "SELECT COALESCE(txt.label, narrow.s) AS x FROM narrow, txt" [ attr' "x" narrow_t ] [];
+  tt "SELECT COALESCE(narrow.s, txt.label) AS x FROM narrow, txt" [ attr' "x" Text ] [];
+  tt "SELECT COALESCE(txt.label, narrow.s) AS x FROM narrow, txt" [ attr' "x" Text ] [];
 
   tt "SELECT COALESCE(narrow.s, 'draft') AS x FROM narrow" [ attr' "x" narrow_t ] [];
   tt "SELECT COALESCE('draft', narrow.s) AS x FROM narrow" [ attr' "x" narrow_t ] [];
@@ -2318,41 +2315,40 @@ let test_operand_order =
 
 let test_multi_functions = [
   tt "CREATE TABLE test_multi (id INT, txt1 TEXT, txt2 TEXT NULL, txt3 TEXT NOT NULL)" [] [];
-  
-  tt "SELECT CONCAT(txt1, txt2) as result FROM test_multi" 
+
+  tt "SELECT CONCAT(txt1, txt2) as result FROM test_multi"
     [attr' ~nullability:Nullable "result" Text] [];
-    
-  tt "SELECT CONCAT('hello', 'world') as result" 
+
+  tt "SELECT CONCAT('hello', 'world') as result"
     [attr' "result" Text] [];
-    
-  tt "SELECT CONCAT('hello', txt2) as result FROM test_multi" 
+
+  tt "SELECT CONCAT('hello', txt2) as result FROM test_multi"
     [attr' ~nullability:Nullable "result" Text] [];
-    
-  tt "SELECT CONCAT(txt1, @param) as result FROM test_multi" 
-    [attr' ~nullability:Nullable "result" Text] 
+
+  tt "SELECT CONCAT(txt1, @param) as result FROM test_multi"
+    [attr' ~nullability:Nullable "result" Text]
     [named "param" Text];
 
-  tt "SELECT CONCAT(txt3, @param) as result FROM test_multi" 
+  tt "SELECT CONCAT(txt3, @param) as result FROM test_multi"
     [attr' "result" Text]
     [named "param" Text];
-    
+
   tt "SELECT STRFTIME('%Y-%m-%d', txt1) as result FROM test_multi"
     [attr' ~nullability:Nullable "result" Text] [];
-    
+
   tt "SELECT CONCAT_WS(',', txt1, txt2, 'static') as result FROM test_multi"
     [attr' ~nullability:Nullable "result" Text] [];
-    
+
   tt "SELECT CONCAT(txt1, CONCAT_WS('-', txt2, 'suffix')) as result FROM test_multi"
     [attr' ~nullability:Nullable "result" Text] [];
-    
+
   tt "SELECT id FROM test_multi WHERE CONCAT(txt1, txt2) = @search"
     [attr' ~nullability:Nullable "id" Int]
     [named "search" Text];
-    
+
   tt "SELECT CONCAT('prefix:', (SELECT txt1 FROM test_multi LIMIT 1)) as result"
     [attr' ~nullability:Nullable "result" Text] [];
 ]
-
 
 let test_on_conflict_do_update = [
   tt {|
@@ -2439,7 +2435,7 @@ let test_enum_with_in_and_between = [
   tt {|
     SELECT IF (col_1 IN ('todo', 'in_progress', 'review'), 'valid', 'invalid') AS status
     FROM table_20250807
-  |} [attr' "status" (Type.(Union { ctors = 
+  |} [attr' "status" (Type.(Union { ctors =
     (Enum_kind.Ctors.of_list ["valid"; "invalid"]); is_closed = false }));
   ][]
 ]
@@ -2483,13 +2479,13 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
   tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$', '\"new_val\"') WHERE id = 3" [] [];
   tt "UPDATE test46 SET data = JSON_ARRAY_APPEND(data, '$[0][1][2].three.four.five', 'false') WHERE id = 3" [] [];
   tt {| SELECT JSON_ARRAY_APPEND(
-       data, 
-       '$[0].items',     123,          
-       '$[1].props',     '"hello"',       
-       '$[2].flags',     true,          
-       '$[3].meta',      null,         
+       data,
+       '$[0].items',     123,
+       '$[1].props',     '"hello"',
+       '$[2].flags',     true,
+       '$[3].meta',      null,
        '$[4].nested',    JSON_OBJECT('x', 'y')
-     ) as result FROM test46 WHERE id = 3 
+     ) as result FROM test46 WHERE id = 3
     |} [ attr' ~nullability:Nullable "result" Json ] [];
   wrong "UPDATE test46 SET data = JSON_ARRAY_APPEND('NOT_A_VALID_JSON', '$[0][1][2].three.four.five', 'this is a string') WHERE id = 3";
   tt {| UPDATE test46 SET data = JSON_ARRAY_APPEND(data, @path, @data :: Text) WHERE id = 3 |} [] [
@@ -2499,18 +2495,18 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
   tt "SELECT JSON_REMOVE(@json, '$[1]') as result" [ attr' "result" Json ][ named "json" Json;];
   wrong "SELECT JSON_REMOVE(@json, 'invalid path') as result";
   tt "SELECT JSON_REMOVE(@json, @path) as result" [ attr' "result" Json ][ named "json" Json; named "path" Json_path;];
-  
-  tt "SELECT JSON_REMOVE(@json, '$.field1', '$.field2', '$.nested.prop') as result" 
+
+  tt "SELECT JSON_REMOVE(@json, '$.field1', '$.field2', '$.nested.prop') as result"
     [ attr' "result" Json ] [ named "json" Json ];
   tt "UPDATE test46 SET data = JSON_REMOVE(data, '$.old_field') WHERE id = 1" [] [];
   tt "UPDATE test46 SET data = JSON_SET(data, '$.name', 'John') WHERE id = 1" [] [];
   tt {| UPDATE test46 SET data = JSON_SET(
-        data, 
+        data,
         '$.name',     'Alice',
         '$.age',      25,
         '$.active',   true,
         '$.balance',  null
-      ) WHERE id = 2 
+      ) WHERE id = 2
     |} [] [];
   tt {| SELECT JSON_SET(
         data,
@@ -2519,7 +2515,7 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
         '$.user.count',   42
       ) as result FROM test46 WHERE id = 1
     |} [ attr' ~nullability:Nullable "result" Json ] [];
-  tt {| UPDATE test46 SET data = JSON_SET(data, @path, @value :: Text, '$.timestamp', @time :: Int) WHERE id = 3 |} 
+  tt {| UPDATE test46 SET data = JSON_SET(data, @path, @value :: Text, '$.timestamp', @time :: Int) WHERE id = 3 |}
   [] [
     named "path" Json_path;
     named "value" Text;
@@ -2528,48 +2524,48 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
   wrong "UPDATE test46 SET data = JSON_SET('INVALID_JSON', '$.field', 'value') WHERE id = 1";
   tt "SELECT JSON_OBJECT() as result" [ attr' "result" Json ] [];
   tt "SELECT JSON_OBJECT('name', 'John') as result" [ attr' "result" Json ] [];
-  tt "SELECT JSON_OBJECT('name', 'Alice', 'age', 25, 'active', true) as result" 
+  tt "SELECT JSON_OBJECT('name', 'Alice', 'age', 25, 'active', true) as result"
     [ attr' "result" Json ] [];
   tt "UPDATE test46 SET data = JSON_OBJECT('user', JSON_OBJECT('id', 1, 'name', 'Bob')) WHERE id = 1" [] [];
-  tt "SELECT JSON_OBJECT(@key, @value :: Text) as result" 
+  tt "SELECT JSON_OBJECT(@key, @value :: Text) as result"
     [ attr' "result" Json ] [ named "key" Text; named "value" Text ];
-  tt "SELECT JSON_OBJECT('meta', JSON_EXTRACT(data, '$.info')) as result FROM test46" 
+  tt "SELECT JSON_OBJECT('meta', JSON_EXTRACT(data, '$.info')) as result FROM test46"
     [ attr' "result" Json ] [];
   tt "SELECT JSON_ARRAY() as result" [ attr' "result" Json ] [];
   tt "SELECT JSON_ARRAY(1, 'hello', true, null) as result" [ attr' "result" Json ] [];
   tt "UPDATE test46 SET data = JSON_ARRAY(JSON_OBJECT('id', 1), JSON_OBJECT('id', 2)) WHERE id = 1" [] [];
-  tt "SELECT JSON_ARRAY(@val1 :: Int, @val2 :: Text, @val3 :: Bool) as result" 
-    [ attr' "result" Json ] [ 
-      named "val1" Int; 
-      named "val2" Text; 
-      named "val3" Bool 
+  tt "SELECT JSON_ARRAY(@val1 :: Int, @val2 :: Text, @val3 :: Bool) as result"
+    [ attr' "result" Json ] [
+      named "val1" Int;
+      named "val2" Text;
+      named "val3" Bool
     ];
-  tt "SELECT JSON_CONTAINS(@json :: Json, @search) as result" 
+  tt "SELECT JSON_CONTAINS(@json :: Json, @search) as result"
     [ attr' ~nullability:Nullable  "result" Bool ] [ named "json" Json; named "search" Json ];
   tt {| SELECT JSON_CONTAINS(data, '"target_value"') as found FROM test46 |}
     [ attr' ~nullability:Nullable "found" Bool ] [];
   wrong "SELECT JSON_CONTAINS(@json, @search :: Int, @path) as result";
-  
-  tt "SELECT JSON_CONTAINS(data, JSON_OBJECT('key', 'value'), '$.objects') as found FROM test46" 
+
+  tt "SELECT JSON_CONTAINS(data, JSON_OBJECT('key', 'value'), '$.objects') as found FROM test46"
     [ attr' ~nullability:Nullable "found" Bool ] [];
   wrong "SELECT JSON_CONTAINS('INVALID_JSON', 'search') as result";
   wrong "SELECT JSON_CONTAINS('{\"a\": 2}', 'INVALID') as result";
   (* tt "SELECT JSON_CONTAINS('{\"a\": 2}', NULL) as result" [][]; *)
-  tt "SELECT JSON_UNQUOTE(@json_val) as result" 
+  tt "SELECT JSON_UNQUOTE(@json_val) as result"
     [ attr' "result" Text ] [ named "json_val" Json ];
-  tt "SELECT JSON_UNQUOTE(JSON_EXTRACT(data, '$.name')) as name FROM test46" 
+  tt "SELECT JSON_UNQUOTE(JSON_EXTRACT(data, '$.name')) as name FROM test46"
     [ attr' ~nullability:Nullable "name" Text ] [];
   wrong "SELECT JSON_UNQUOTE('not a json value') as result";
-  tt "SELECT JSON_SEARCH(@json, 'one', @pattern) as result" 
-    [ attr' ~nullability:Nullable "result" Json ] [ 
-      named "json" Json; 
-      named "pattern" Text 
+  tt "SELECT JSON_SEARCH(@json, 'one', @pattern) as result"
+    [ attr' ~nullability:Nullable "result" Json ] [
+      named "json" Json;
+      named "pattern" Text
     ];
-  tt "SELECT JSON_SEARCH(data, 'all', 'search%', '\\\\', '$.users') as paths FROM test46" 
+  tt "SELECT JSON_SEARCH(data, 'all', 'search%', '\\\\', '$.users') as paths FROM test46"
     [ attr' ~nullability:Nullable "paths" Json ] [];
-  tt "SELECT JSON_SEARCH(@json, 'one', @pattern, @escape, @path1, @path2) as result" 
-    [ attr' ~nullability:Nullable "result" Json ] [ 
-      named "json" Json; 
+  tt "SELECT JSON_SEARCH(@json, 'one', @pattern, @escape, @path1, @path2) as result"
+    [ attr' ~nullability:Nullable "result" Json ] [
+      named "json" Json;
       named "pattern" Text;
       named "escape" Text;
       named "path1" Json_path;
@@ -2583,21 +2579,20 @@ let test_json_and_fixed_then_pairs_fn_kind  = [
         ),
         '$.meta', JSON_OBJECT('version', 2, 'updated', true)
       ) WHERE id = 1 |} [] [];
-  tt {| SELECT 
+  tt {| SELECT
         JSON_UNQUOTE(JSON_EXTRACT(data, '$.name')) as name,
         JSON_CONTAINS(data, '"admin"', '$.roles') as is_admin,
         JSON_SEARCH(data, 'one', 'test%') as test_path
       FROM test46 WHERE id = 1 |} [
         attr' ~nullability:Nullable "name" Text;
-        attr' ~nullability:Nullable "is_admin" Bool; 
+        attr' ~nullability:Nullable "is_admin" Bool;
         attr' ~nullability:Nullable "test_path" Json;
       ] [];
 
   tt "SELECT JSON_DEPTH(@json) as depth" [ attr' ~nullability:Strict "depth" Int ] [ named "json" Json ];
   tt "SELECT JSON_DEPTH(@json_nullable :: Json Null) as depth_n" [ attr' ~nullability:Nullable "depth_n" Int ] [ named_nullable "json_nullable" Json ];
-  
-  
-  tt "SELECT JSON_REMOVE(@json, '$.field1', '$.field2', '$.nested.prop') as result" 
+
+  tt "SELECT JSON_REMOVE(@json, '$.field1', '$.field2', '$.nested.prop') as result"
     [ attr' "result" Json ] [ named "json" Json ];
 ]
 
@@ -2731,7 +2726,7 @@ let test_cardinality =
   tt "select a,b from test_cardinality where a = 1 and b = 1" (refined a @ refined b) [] ~kind:(Select `Nat);
 ]
 
-let test_cardinality_optimization_validity = 
+let test_cardinality_optimization_validity =
   let x = [attr' ~nullability:Strict "x" ~extra:[PrimaryKey] Int] in
   let id = [attr' ~nullability:Nullable "id" Int] in
   let one_x = [attr' ~nullability:Strict "one_x" Int] in
@@ -2831,7 +2826,7 @@ let test_fn_group_by_arg = [
   |} [] [];
 
   tt {|
-    SELECT 
+    SELECT
       t1.table_no,
       GROUP_CONCAT(t1.date_1 ORDER BY t1.date_1 DESC) AS dates_from_t1,
       GROUP_CONCAT(t1.date1_strict ORDER BY t1.date1_strict DESC) AS dates_from_t1_strict,
@@ -2839,7 +2834,7 @@ let test_fn_group_by_arg = [
     FROM table_1_2025_09_26 t1
     JOIN table_2_2025_09_26 t2 ON t1.table_no = t2.table_no
     GROUP BY t1.table_no
-    ORDER BY dates_from_t1; 
+    ORDER BY dates_from_t1;
   |} [
     attr' ~nullability:Strict "table_no" Int;
     attr' ~nullability:Nullable "dates_from_t1" Text;
@@ -2848,14 +2843,14 @@ let test_fn_group_by_arg = [
   ] [];
 
   tt {|
-    SELECT 
+    SELECT
       t1.table_no,
       GROUP_CONCAT(
-          t1.date_1 
+          t1.date_1
           ORDER BY YEAR(t1.date_1) * 10000 + MONTH(t1.date_1) * 100 + DAY(t1.date_1) DESC
       ) AS dates_from_t1,
       GROUP_CONCAT(
-          t2.date_2 
+          t2.date_2
           ORDER BY DAYOFYEAR(t2.date_2) ASC
       ) AS dates_from_t2
   FROM table_1_2025_09_26 t1
@@ -2869,7 +2864,7 @@ let test_fn_group_by_arg = [
   ] [];
 
   tt {|
-    SELECT 
+    SELECT
       t1.table_no,
       GROUP_CONCAT(t1.date_1 ORDER BY YEAR(t1.date_1) + @delta) AS dates_from_t1
     FROM table_1_2025_09_26 t1
@@ -2878,11 +2873,11 @@ let test_fn_group_by_arg = [
     attr' ~nullability:Nullable "table_no" Int;
     attr' ~nullability:Nullable "dates_from_t1" Text;
   ] [
-    named "delta" Int;
+    named_nullable "delta" Int;
   ];
 
   tt {|
-    SELECT 
+    SELECT
       t1.table_no,
       GROUP_CONCAT(t1.date_1 ORDER BY YEAR(t1.date_1) + @delta) AS dates_from_t1
     FROM table_1_2025_09_26 t1
@@ -2892,8 +2887,8 @@ let test_fn_group_by_arg = [
     attr' ~nullability:Strict "table_no" Int;
     attr' ~nullability:Nullable "dates_from_t1" Text;
   ] [
-    named "delta" Int;
-    named "delta" Int;
+    named_nullable "delta" Int;
+    named_nullable "delta" Int;
   ];
 ]
 
@@ -3038,16 +3033,12 @@ let test_meta_laws = List.map qcheck [
     arb_meta (fun a -> Meta.equal (Meta.shared [ a; Meta.empty () ]) a);
 ]
 
-
-
-
 module Narrowing_soundness = struct
 
   let col = [| "a"; "b"; "c" |]
 
   let column i = Sql.column { cname = col.(i); tname = None }
-  (* narrowing keys on the name now, so these build the same shapes the parser
-     would *)
+
   let call name parameters = Sql.fn name Sql.Named parameters
   let conj a b = call "and" [ a; b ]
   let disj a b = call "or" [ a; b ]

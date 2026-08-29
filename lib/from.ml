@@ -1,7 +1,3 @@
-(** The shape of a resolved FROM clause.
-
-    Structure only: which sources a query reads and how they are joined. No
-    types, no scope — those are {!Resolve}'s business. *)
 
 open ExtLib
 open Sql
@@ -29,4 +25,3 @@ type t = {
 let dynamic_columns from =
   let sources { base; joins } = base :: List.map (fun j -> j.src) joins in
   List.concat_map (fun src -> src.rsrc_dynamic) (Option.map_default sources [] from)
-

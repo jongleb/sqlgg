@@ -277,7 +277,7 @@ Test DynamicSelect with applicative combinators generates proper SQL:
   [SQL] SELECT (SELECT
   CASE
   WHEN p2.id = 2 THEN
-  CASE WHEN 1 = 1 THEN 'then_v' ELSE 'else_v' END
+  CASE WHEN 1 = 1 THEN 0 ELSE 0 END
   ELSE 0
   END
   FROM products p2
@@ -295,7 +295,7 @@ Test DynamicSelect with applicative combinators generates proper SQL:
   [SQL] SELECT id, (SELECT
   CASE
   WHEN p2.id = 2 THEN
-  CASE WHEN 1 = 1 THEN 'then_v' ELSE 'else_v' END
+  CASE WHEN 1 = 1 THEN 0 ELSE 0 END
   ELSE 0
   END
   FROM products p2
@@ -375,7 +375,7 @@ Test DynamicSelect with applicative combinators generates proper SQL:
   [TEST 19] All fields combined
   [MOCK SELECT] Connection type: [> `RO ]
   [SQL] SELECT
-  id, name, category, stock, price * (1 + 10)
+  id, name, category, stock, price * (1 + 10.)
   FROM products
   [MOCK] Returning 1 rows
     Row 0: col0=1 col1=Widget col2=Electronics col3=50 col4=119.99 
@@ -2085,7 +2085,7 @@ Test DynamicSelect comprehensive list:
           }
         let price_with_tax tax_rate : _ t =
           let _set_price_with_tax p =
-            T.set_param_Int p tax_rate;
+            T.set_param_Decimal p tax_rate;
             ()
           in
           {

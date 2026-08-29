@@ -1,13 +1,8 @@
-(** How many rows a query can return, and which tables an expression mentions.
-
-    Takes the column resolver it needs rather than a whole environment: the
-    only question it asks about a name is which attribute it denotes. *)
 
 open ExtLib
 open Prelude
 open Sql
 
-(* what shape a query has: does it group, does it window *)
 let list_same l =
   match l with
   | [] -> None
@@ -37,7 +32,7 @@ let exists_windowing columns =
   List.exists (function
     | { value = Expr ({ value; _ }, _); _ } -> is_windowing value
     | { value = (All | AllOf _); _ } -> false
-  ) columns  
+  ) columns
 
 (* all columns from tables, without duplicates *)
 (* FIXME check type of duplicates *)
@@ -74,7 +69,6 @@ end = struct
     Option.map_default (Names.mem (Sql.join_source_name source).tn) true
 end
 
-(* takes what it needs rather than a whole environment *)
 let matches_at_most_one_row ~resolve ~schema table expr =
   let module SS = Constraint.StringSet in
   let table_name = Sql.join_source_name table in
@@ -112,4 +106,3 @@ let matches_at_most_one_row ~resolve ~schema table expr =
   in
   let bound = bound_parts expr in
   List.exists (fun k -> SS.subset k bound) keys
-

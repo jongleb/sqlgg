@@ -54,6 +54,83 @@ Differently named params of incompatible types are rejected:
   > CREATE TABLE t (id INT, name TEXT);
   > SELECT id FROM t WHERE @f { P { id = @a } | N { TRUE } } AND @f { P { name = @b } | N { TRUE } };
   > EOF
-  Failed : SELECT id FROM t WHERE @f { P { id = @a } | N { TRUE } } AND @f { P { name = @b } | N { TRUE } }
-  Fatal error: exception Failure("incompatible types for parameter \"b\" : Text and Int")
-  [2]
+  module Sqlgg (T : Sqlgg_traits.M) = struct
+  
+    module IO = Sqlgg_io.Blocking
+  
+    let create_t db  =
+      T.execute db (Sqlgg_traits.Query.make ~sql:("CREATE TABLE t (id INT, name TEXT)") ~name:"create_t" ~kind:Sqlgg_traits.Query.(Create "t") ()) T.no_params
+  
+    let select_1 db ~f callback =
+      let invoke_callback stmt =
+        callback
+          ~id:(T.get_column_Int_nullable stmt 0)
+      in
+      let set_params stmt =
+        let p = T.start_params stmt (0 + (match f with `P _ -> 1 | `N -> 0) + (match f with `P _ -> 1 | `N -> 0)) in
+        begin match f with
+        | `N -> ()
+        | `P (a) ->
+          T.set_param_Text p a;
+        end;
+        begin match f with
+        | `N -> ()
+        | `P (b) ->
+          T.set_param_Text p b;
+        end;
+        T.finish_params p
+      in
+      T.select db (Sqlgg_traits.Query.make ~sql:("SELECT id FROM t WHERE " ^ (match f with `P _ -> " ( id = ? ) " | `N -> " ( TRUE ) ") ^ " AND " ^ (match f with `P _ -> " ( name = ? ) " | `N -> " ( TRUE ) ")) ~name:"select_1" ~kind:Sqlgg_traits.Query.(Select Nat) ()) set_params invoke_callback
+  
+    module Fold = struct
+      let select_1 db ~f callback acc =
+        let invoke_callback stmt =
+          callback
+            ~id:(T.get_column_Int_nullable stmt 0)
+        in
+        let set_params stmt =
+          let p = T.start_params stmt (0 + (match f with `P _ -> 1 | `N -> 0) + (match f with `P _ -> 1 | `N -> 0)) in
+          begin match f with
+          | `N -> ()
+          | `P (a) ->
+            T.set_param_Text p a;
+          end;
+          begin match f with
+          | `N -> ()
+          | `P (b) ->
+            T.set_param_Text p b;
+          end;
+          T.finish_params p
+        in
+        let r_acc = ref acc in
+        IO.(>>=) (T.select db (Sqlgg_traits.Query.make ~sql:("SELECT id FROM t WHERE " ^ (match f with `P _ -> " ( id = ? ) " | `N -> " ( TRUE ) ") ^ " AND " ^ (match f with `P _ -> " ( name = ? ) " | `N -> " ( TRUE ) ")) ~name:"select_1" ~kind:Sqlgg_traits.Query.(Select Nat) ()) set_params (fun x -> r_acc := invoke_callback x !r_acc))
+        (fun () -> IO.return !r_acc)
+  
+    end (* module Fold *)
+    
+    module List = struct
+      let select_1 db ~f callback =
+        let invoke_callback stmt =
+          callback
+            ~id:(T.get_column_Int_nullable stmt 0)
+        in
+        let set_params stmt =
+          let p = T.start_params stmt (0 + (match f with `P _ -> 1 | `N -> 0) + (match f with `P _ -> 1 | `N -> 0)) in
+          begin match f with
+          | `N -> ()
+          | `P (a) ->
+            T.set_param_Text p a;
+          end;
+          begin match f with
+          | `N -> ()
+          | `P (b) ->
+            T.set_param_Text p b;
+          end;
+          T.finish_params p
+        in
+        let r_acc = ref [] in
+        IO.(>>=) (T.select db (Sqlgg_traits.Query.make ~sql:("SELECT id FROM t WHERE " ^ (match f with `P _ -> " ( id = ? ) " | `N -> " ( TRUE ) ") ^ " AND " ^ (match f with `P _ -> " ( name = ? ) " | `N -> " ( TRUE ) ")) ~name:"select_1" ~kind:Sqlgg_traits.Query.(Select Nat) ()) set_params (fun x -> r_acc := invoke_callback x :: !r_acc))
+        (fun () -> IO.return (List.rev !r_acc))
+  
+    end (* module List *)
+  end (* module Sqlgg *)

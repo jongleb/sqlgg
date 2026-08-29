@@ -322,7 +322,7 @@ let parse_args () =
     let key = canonical s in
     let stmts =
       match Hashtbl.find_opt files key with
-      | Some (`Open stmts) -> (* was used with -open before so we reuse *) stmts
+      | Some (`Open stmts) ->  stmts
       | Some `Positional | None -> read_statements s
     in
     Hashtbl.replace files key `Positional;
@@ -410,8 +410,7 @@ let parse_args () =
       max_id_length = !max_id_length;
       ddl_as_migration = !ddl_as_migration }
   in
-  (* these modes reset the schema and rebuild it from -base/-target/-initial,
-     silently discarding whatever -open loaded *)
+
   let has_open =
     Hashtbl.fold (fun _ v acc -> acc || (match v with `Open _ -> true | `Positional -> false)) files false
   in
@@ -502,7 +501,7 @@ let run_materialize_schema ({ base_files } : materialize_args) =
     | files -> load_schema files
   in
   let ddl = Schema_diff.dump state in
-  begin 
+  begin
     try Schema_diff.verify_ddl ~replay:Main.replay_sql state ddl
     with Schema_diff.Verification_failed _ as e ->
       fatal "schema materialization failed verification:\n%s" (Printexc.to_string e)

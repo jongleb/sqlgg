@@ -30,7 +30,7 @@
  <stmt name="find2" sql="SELECT * FROM foo&#x0A;WHERE (id IN @@ids) AND foo NOT IN @@foos" category="DQL" kind="select" cardinality="n">
   <in>
    <value name="ids" type="set(Int)"/>
-   <value name="foos" type="set(Text)" nullable="true"/>
+   <value name="foos" type="set(Text)"/>
   </in>
   <out>
    <value name="id" type="Int"/>
@@ -40,7 +40,7 @@
  <stmt name="find_with_bar" sql="SELECT * FROM foo&#x0A;WHERE CONCAT(foo, @suffix) IN @@foos_with_suffix" category="DQL" kind="select" cardinality="n">
   <in>
    <value name="suffix" type="Text"/>
-   <value name="foos_with_suffix" type="set(Text)" nullable="true"/>
+   <value name="foos_with_suffix" type="set(Text)"/>
   </in>
   <out>
    <value name="id" type="Int"/>
@@ -50,7 +50,7 @@
  <stmt name="get2" sql="SELECT * FROM foo&#x0A;WHERE id IN @@ids AND (foo NOT IN @@foos)&#x0A;LIMIT 1" category="DQL" kind="select" cardinality="0,1">
   <in>
    <value name="ids" type="set(Int)"/>
-   <value name="foos" type="set(Text)" nullable="true"/>
+   <value name="foos" type="set(Text)"/>
   </in>
   <out>
    <value name="id" type="Int"/>

@@ -96,7 +96,7 @@
  </stmt>
  <stmt name="insert_test_16" sql="INSERT INTO test VALUES (20, 'twenty') ON DUPLICATE KEY UPDATE x = VALUES(x) + @_0" category="DML" kind="insert" target="test" cardinality="0">
   <in>
-   <value name="_0" type="Int" nullable="true"/>
+   <value name="_0" type="Int"/>
   </in>
   <out/>
  </stmt>
@@ -197,8 +197,8 @@
  </stmt>
  <stmt name="delete_test_33" sql="delete from test&#x0A;where x in (@x1, @x2)&#x0A;  and not exists (select 1 from workareas where work_id = test.x)" category="DML" kind="delete" target="test" cardinality="0">
   <in>
-   <value name="x1" type="Int" nullable="true"/>
-   <value name="x2" type="Int" nullable="true"/>
+   <value name="x1" type="Int"/>
+   <value name="x2" type="Int"/>
   </in>
   <out/>
  </stmt>

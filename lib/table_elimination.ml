@@ -1,12 +1,7 @@
-(** Dropping joins whose table contributes nothing to the result.
-
-  A rewrite over the resolved FROM clause: pure structure and cardinality, no
-  typing. *)
 
 open ExtLib
 open Prelude
 open Sql
-
 
 module Id_set = Set.Make(Int)
 module Id_map = Map.Make(Int)

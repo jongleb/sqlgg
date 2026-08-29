@@ -1,13 +1,6 @@
-(** Bridge between the declared type, {!Sql.Type}, and the HM(X) lattice.
-
-    {!Sql.Type.t} is what DDL declares and what codegen consumes; the solver
-    works on {!Hmx_lattice.Refined}. Everything crosses here, in both
-    directions, and nothing else knows both representations. *)
 
 open Hmx_lattice
 
-(** [None] is [Any], which has no counterpart: its two roles (bottom of the
-    lattice, and "not yet known") are a fresh variable in the new world. *)
 let of_kind (k : Sql.Type.kind) : Refined.t option =
   match k with
   | Int -> Some (Refined.of_base Base.Int)
@@ -23,24 +16,17 @@ let of_kind (k : Sql.Type.kind) : Refined.t option =
   | Decimal { precision; scale } -> Some (Refined.make Base.Decimal (Refine.decimal ~precision ~scale))
   | StringLiteral s -> Some (Refined.make Base.Str_lit (Refine.literal s))
   | FloatingLiteral f -> Some (Refined.make Base.Num_lit (Refine.Flt f))
-  (* is_closed takes no part in the order — "accepts no further constructors"
-     is an upper bound on the variable, not a flag inside the type — but it is
-     carried so the declared type can be rebuilt *)
+
   | Union { ctors; is_closed } ->
     Some (Refined.make Base.Text
             (Refine.enum ~closed:is_closed (Sql.Type.Enum_kind.Ctors.elements ctors)))
   | Any -> None
 
-(** [None] is [Depends], which is a fresh nullability variable *)
 let of_nullability (n : Sql.Type.nullability) =
   match n with Strict -> Some false | Nullable -> Some true | Depends -> None
 
 let of_type (t : Sql.Type.t) = of_kind t.t, of_nullability t.nullability
 
-(* ------------------------------------------------------------- back *)
-
-(** Rebuild a declared type. Lossy in one direction only: [Num_lit] has no
-    counterpart and is settled before it gets here. *)
 let to_kind (r : Refined.t) : Sql.Type.kind =
   match r.base, r.refine with
   | Base.Int, _ -> Int
@@ -52,8 +38,7 @@ let to_kind (r : Refined.t) : Sql.Type.kind =
   | Bool, _ -> Bool
   | Datetime, _ -> Datetime
   | Str_lit, Enum { ctors; closed } | Text, Enum { ctors; closed } ->
-    (* a lone constructor is a string literal, which is how the old type
-       records the same thing *)
+
     (match Refine.Ctors.elements ctors with
      | [ one ] when not closed -> StringLiteral one
      | l -> Union { ctors = Sql.Type.Enum_kind.make l; is_closed = closed })

@@ -154,7 +154,7 @@ module L = struct
   | { t = Blob; nullability } -> type_name { t = Text; nullability }
   | { t = StringLiteral _; nullability } -> type_name { t = Text; nullability }
   | { t = FloatingLiteral _; nullability } -> type_name { t = Float; nullability }
-  | { t = Decimal _; nullability; } -> type_name { t = Decimal { precision = None; scale = None }; nullability } 
+  | { t = Decimal _; nullability; } -> type_name { t = Decimal { precision = None; scale = None }; nullability }
   | { t = Int; _ }
   | { t = Text; _ }
   | { t = Float; _ }
@@ -183,7 +183,6 @@ module L = struct
   | { t = Json; _ } -> "json"
   | { t = UInt64; _ } -> "uint64"
   | { t = One_or_all; _ } -> "text"
-
 
   let as_api_type = as_lang_type
 end
@@ -404,13 +403,13 @@ let complete_func c =
   empty_line ()
 
 let make_variant_name i name ~is_poly =
-  let prefix = if is_poly then "`" else "" in 
+  let prefix = if is_poly then "`" else "" in
   prefix ^ match name with
   | None -> sprintf "V_%d" i
   | Some n -> String.capitalize_ascii n
 
 let vname n = make_variant_name 0 (Some n)
-  
+
 let match_variant_pattern i name args ~is_poly =
   let variant_name = make_variant_name i name ~is_poly in
   match args with
@@ -418,7 +417,7 @@ let match_variant_pattern i name args ~is_poly =
   | Some arg_list ->
     let (_, _, all_wildcard), patterns =
       List.fold_left_map (fun (seen_wildcards, seen_names, all_wc) arg ->
-        let make_wildcard_param value = 
+        let make_wildcard_param value =
           if List.mem value seen_wildcards
             then ((seen_wildcards, seen_names, all_wc), None)
             else ((value :: seen_wildcards, seen_names, all_wc), Some "_") in
@@ -426,12 +425,12 @@ let match_variant_pattern i name args ~is_poly =
         | Sql.Single (param, _) | SingleIn (param, _) -> make_wildcard_param param.id.value
         | SharedVarsGroup _
         | Choice ({ value = None; _ }, _)
-        | TupleList ({ value = None; _ }, _) 
+        | TupleList ({ value = None; _ }, _)
         | OptionActionChoice ({ value = None; _ }, _, _, _)
         | ChoiceIn { param = { value = None; _ }; _ }
         | DynamicSelect ({ value = None; _ }, _) ->
           ((seen_wildcards, seen_names, all_wc), Some "_")
-        | TupleList ({ value = Some s; _ }, _) 
+        | TupleList ({ value = Some s; _ }, _)
         | Choice ({ value = Some s; _ }, _)
         | DynamicSelect ({ value = Some s; _ }, _)
         | OptionActionChoice ({ value = Some s; _ }, _, _, _)
@@ -643,7 +642,6 @@ let output_params_binder _ vars =
   | [] -> "T.no_params"
   | vars -> emit_set_params ~count:(eval_count_params vars) (fun () -> List.iteri set_var vars)
 
-
 let make_to_literal meta typ =
   match resolve_codec codec_set_param typ meta with
   | Custom_codec setter ->
@@ -672,7 +670,7 @@ let gen_tuple_printer ~is_row _label schema =
         (if idx = 0 then "" else {|Buffer.add_string _sqlgg_b ", "; |}) ^
         sprintf {|Buffer.add_string _sqlgg_b (%s);|}
           (let to_literal = sprintf "%s %s" (make_to_literal meta domain) in
-           if is_attr_nullable attr then 
+           if is_attr_nullable attr then
            (sprintf {|match %s with None -> "NULL" | Some v -> %s|} name (to_literal "v") )
            else to_literal name))
      (List.combine params schema))
@@ -685,12 +683,12 @@ let gen_tuple_substitution ~is_row label schema =
   sprintf
     {|(let _sqlgg_b = Buffer.create 13 in List.iteri %s %s; Buffer.contents _sqlgg_b)|}
     (gen_tuple_printer ~is_row label schema)
-    label 
+    label
 
 let make_schema_of_tuple_types label =
   List.mapi (fun idx (domain, meta) -> {
     name=(sprintf "%s_%Ln" label idx); domain; extra = Constraints.empty; meta;
-  })   
+  })
 
 let join_ctors_of_vars vars =
   let module SM = Map.Make(String) in
@@ -1006,7 +1004,7 @@ let generate_stmt ~module_kind index stmt =
 let sanitize_to_variant_name s =
   let normalized =
     let open String in
-    s 
+    s
     |> lowercase_ascii
     |> map (function 'a'..'z' | 'A'..'Z' | '0'..'9' | '_' as c -> c | _ -> '_')
     |> capitalize_ascii
@@ -1014,13 +1012,13 @@ let sanitize_to_variant_name s =
     | '0'..'9' -> "Num_" ^ normalized
     | _ -> normalized
 
-let generate_enum_modules stmts = 
+let generate_enum_modules stmts =
   let open Sql.Type.Enum_kind in
 
   let schemas = List.concat_map (fun stmt -> stmt.Gen.schema) stmts in
   let vars = List.concat_map (fun stmt -> stmt.Gen.vars) stmts in
 
-  let get_enum typ = match typ.Sql.Type.t with 
+  let get_enum typ = match typ.Sql.Type.t with
     | Union { ctors; _ } -> Some ctors
     | Int | Text | Blob | Float | Bool | Json | UInt64
     | Datetime | Decimal _ | FloatingLiteral _ | Any | StringLiteral  _ | Json_path | One_or_all -> None
@@ -1050,7 +1048,7 @@ let generate_enum_modules stmts =
     List.concat_map (function
       | Single ({ typ; _ }, meta)
       | SingleIn ({ typ; _ }, meta) -> enum_opt_with_meta typ meta
-      | TupleList (_,  ValueRows { types; _ }) -> 
+      | TupleList (_,  ValueRows { types; _ }) ->
         List.concat_map enum_opt types
       | TupleList (_, Where_in { value = (types, _); pos = _ }) ->
         List.concat_map (fun (typ, meta) -> enum_opt_with_meta typ meta) types
@@ -1059,8 +1057,8 @@ let generate_enum_modules stmts =
     ) vars in
 
   Hashtbl.reset enums_hash_tbl;
-  
-  let generate_enum_module enum_count enum = 
+
+  let generate_enum_module enum_count enum =
     let get_ctor_name x = x |> sanitize_to_variant_name |> vname ~is_poly:true in
     let ctor_list = Ctors.elements enum in
     output {|
@@ -1074,7 +1072,7 @@ let generate_enum_modules stmts =
     (ctor_list |> List.map get_ctor_name |> String.concat " | ")
     (String.concat " "
     (List.map (fun ctor -> Printf.sprintf "| \"%s\" -> %s" (String.escaped ctor) (get_ctor_name ctor)) ctor_list))
-    (String.concat "" 
+    (String.concat ""
     (List.map (fun ctor -> Printf.sprintf "| %s -> \"%s\"" (get_ctor_name ctor) (String.escaped ctor)) ctor_list))
   in
 
@@ -1091,7 +1089,6 @@ let generate_enum_modules stmts =
       end) 0 result
     in ())
 
-  
 let get_all_dynamic_select_infos index stmt =
   let query_name = Gen.choose_name stmt.Gen.props stmt.Gen.kind index in
   let ds_from_vars = stmt.Gen.vars |> List.filter_map (function Sql.DynamicSelect (param_id, ctors) -> Some (param_id, ctors) | _ -> None) in
@@ -1125,11 +1122,11 @@ let generate_dynamic_select_modules stmts =
     all_dis |> List.iter (fun di ->
       let module_name = di.module_name in
       let field_sqls = List.find_map (function
-        | Gen.Dynamic (pid, ctors) when pid = di.param_id -> 
+        | Gen.Dynamic (pid, ctors) when pid = di.param_id ->
           Some (List.map (fun c -> c.Gen.ctor, c.Gen.sql) ctors)
         | _ -> None
       ) sql_pieces |> Option.default [] in
-      
+
       let fields = List.map2 (fun ctor field ->
         let name, args = match ctor with
           | Sql.Simple (ctor_param_id, args) -> field_name_of_param_id ctor_param_id, Option.default [] args
@@ -1137,7 +1134,7 @@ let generate_dynamic_select_modules stmts =
         in
         { field_name = scoped_field_name name; field_args = args; field_schema = field; field_ctor = ctor }
       ) di.ctors di.schema_fields in
-      
+
       emit_module module_name (fun () ->
         let emit_field { field_name; field_args; field_schema; field_ctor } (_, sql) =
           let read_body = sprintf "(fun row idx -> (%s, idx + 1))" (format_get_column ~row:"row" ~idx:"idx" field_schema.Sql.field_attr) in
