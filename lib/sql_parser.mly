@@ -18,9 +18,9 @@
     in
     List.filter_map param l, List.mem (`Limit,`Const 1) l
 
-  let call name parameters = fn name (Function.lookup name (List.length parameters)) parameters
+  let call name parameters = fn name Named parameters
 
-  let arith name ret e1 e2 = fn name (Arith (Source_type.depends ret)) [e1; e2]
+  let arith name _ret e1 e2 = fn name Named [e1; e2]
 %}
 
 %token <int> INTEGER
@@ -188,7 +188,6 @@ statement: CREATE ioption(temporary) TABLE ioption(if_not_exists) name=table_nam
            AS? routine_body
            routine_extra?
               {
-                Function.add (List.length params) (Ret { Source_type.t = ret.value.collated; nullability = Type.Depends }) name.tn; (* FIXME store function namespace *)
                 CreateRoutine (name, Some ret, params)
               }
          | CREATE or_replace? PROCEDURE name=table_name params=sequence(proc_parameter)
@@ -196,7 +195,7 @@ statement: CREATE ioption(temporary) TABLE ioption(if_not_exists) name=table_nam
            AS? routine_body
            routine_extra?
               {
-                Function.add (List.length params) (Ret (Source_type.depends Any)) name.tn; (* FIXME void *)
+                (* a routine's own signature is not tracked; calls to it are untyped *)
                 CreateRoutine (name, None, params)
               }   
          | CREATE TYPE name=ident AS ENUM LPAREN ctors=commas(TEXT) RPAREN
@@ -493,7 +492,7 @@ attr_name: cname=ident { { cname; tname=None} }
 
 distinct_from: DISTINCT FROM { }
 
-like_expr: e1=expr mnot(like) e2=expr %prec LIKE { fn "like" (Like { escaped = false }) [e1;e2] }
+like_expr: e1=expr mnot(like) e2=expr %prec LIKE { fn "like" Named [e1;e2] }
 
 expr:
       e1=expr numeric_bin_op e2=expr %prec PLUS { arith "numeric_bin_op" Any e1 e2 } (* TODO default Int *)
@@ -501,37 +500,47 @@ expr:
     | e1=expr NUM_DIV_OP e2=expr %prec PLUS { arith "num_div" Float e1 e2 }
     | e1=expr TEXT_DIST_OP e2=expr { arith "text_dist" Float e1 e2 }
     | e1=expr DIV e2=expr %prec PLUS { arith "div" Int e1 e2 }
-    | e1=expr op=and_op e2=expr %prec AND { fn "boolean_bin_op" (Logical op) [e1;e2] }
-    | e1=expr op=xor_op e2=expr %prec XOR { fn "boolean_bin_op" (Logical op) [e1;e2] }
-    | e1=expr op=or_op e2=expr %prec OR { fn "boolean_bin_op" (Logical op) [e1;e2] }
+    | e1=expr op=and_op e2=expr %prec AND { fn "and" Named [e1;e2] }
+    | e1=expr op=xor_op e2=expr %prec XOR { fn "xor" Named [e1;e2] }
+    | e1=expr op=or_op e2=expr %prec OR { fn "or" Named [e1;e2] }
     | e1=expr op=comparison_op q=anyall? e2=expr %prec EQUAL
-      { let kind = Option.map_default (fun quantifier -> Quantified_comparison { op; quantifier }) (Comparison op) q in
-        fn "comparison" kind [e1;e2] }
-    | e1=expr CONCAT_OP e2=expr { fn "concat" (fixed Text [Text;Text]) [e1;e2] }
+      {         (* names carry what typing and narrowing need to tell apart: the
+           null-safe operator has its own nullability, plain equality drives
+           column narrowing, and a quantifier changes what may be concluded *)
+        let name =
+          match q, op with
+          | Some `Any, _ -> "any_cmp"
+          | Some `All, _ -> "all_cmp"
+          | None, Not_distinct_op -> "not_distinct"
+          | None, Comp_equal -> "eq"
+          | None, (Comp_num_cmp | Comp_text_cmp | Comp_num_eq | Is_null | Is_not_null) -> "comparison"
+        in
+        fn name Named [e1;e2] }
+    | e1=expr CONCAT_OP e2=expr { fn "concat" Named [e1;e2] }
     | e1=expr JSON_EXTRACT_OP e2=expr { call "json_extract" [e1;e2] }
     | e1=expr JSON_UNQUOTE_EXTRACT_OP e2=expr { call "json_unquote" [call "json_extract" [e1;e2]] }
     | e=like_expr esc=escape?
-      { Option.map_default (fun esc -> fn "like_escape" (Like { escaped = true }) [e;esc]) e esc }
+      { Option.map_default (fun esc -> fn "like_escape" Named [e;esc]) e esc }
     | EXCL e=expr %prec EXCL
       (* Some SQLs use ! as negation, some don't. play it safe and negate it,
          since negation is currently only used to verify cardinality constraints *)
-      { fn "excl" Negation [e] }
+      { fn "excl" Named [e] }
     | TILDE e=expr %prec TILDE { e }
-    | NOT e=expr %prec NOT { fn "not" Negation [e] }
+    | NOT e=expr %prec NOT { fn "not" Named [e] }
     | MINUS e=expr %prec UNARY_MINUS { e }
-    | INTERVAL e=expr interval_unit { fn "interval" (fixed Datetime [Int]) [e] }
+    | INTERVAL e=expr interval_unit { fn "interval" Named [e] }
     | LPAREN e=expr RPAREN { e }
     | a=attr_name c=collate? { column ?collation:c a }
     | VALUES LPAREN n=ident RPAREN { Of_values n }
     | v=literal_value | v=datetime_value { v }
     | INTERVAL_UNIT { Value (make_collated ~collated:(strict Datetime) ()) }
-    | e1=expr mnot(IN) l=sequence(expr) { fn "in" Membership (e1::l) }
-    | e1=expr mnot(IN) LPAREN select=select_stmt RPAREN { fn "in_select" Membership [e1; SelectExpr (select, `AsValue)] }
+    | e1=expr mnot(IN) l=sequence(expr) { fn "in" Named (e1::l) }
+    | e1=expr mnot(IN) LPAREN select=select_stmt RPAREN { fn "in_select" Named [e1; SelectExpr (select, `AsValue)] }
     | e1=expr IN table=table_name { Tables.check table; e1 }
     | e1=expr k=in_or_not_in p=param
       {
         let arg = Inparam (make_param ~id:p ~typ:(Source_type.depends Any), Meta.empty()) in
-        let e = fn "in_param" Membership [e1; arg] in
+        let e = fn "in_param" Named [e1; arg] in
         InChoice (make_located ~value:p.value ~pos:($startofs, $endofs), k, e )
       }
     | LPAREN exprs=commas(expr) RPAREN k=in_or_not_in p=param
@@ -550,20 +559,20 @@ expr:
     | TIME LPAREN e=expr RPAREN { call "time" [e] }
     | f=INTERVAL_UNIT LPAREN e=expr RPAREN { call f [e] }
     | EXTRACT LPAREN interval_unit FROM e=expr RPAREN { call "extract" [e] }
-    | DEFAULT LPAREN a=attr_name RPAREN { fn "default" fun_identity [Column (make_collated ~collated:a ())] }
+    | DEFAULT LPAREN a=attr_name RPAREN { fn "default" Named [Column (make_collated ~collated:a ())] }
     | CONVERT LPAREN e=expr USING IDENT RPAREN { e }
     | CONVERT LPAREN e=expr COMMA f=cast_as RPAREN { f e }
     | GROUP_CONCAT LPAREN p=func_params order=loption(order) preceded(SEPARATOR, TEXT)? RPAREN
-      { fn "group_concat" (Agg (With_order { with_order_kind = Group_concat; order })) p }
+      { fn "group_concat" (Agg_order { with_order_kind = Group_concat; order }) p }
     | JSON_ARRAYAGG LPAREN p=func_params order=loption(order) limit_t? RPAREN
-      { fn "json_arrayagg" (Agg (With_order { with_order_kind = Json_arrayagg; order })) p }
+      { fn "json_arrayagg" (Agg_order { with_order_kind = Json_arrayagg; order }) p }
     | CAST LPAREN e=expr AS f=cast_as RPAREN { f e }
     | f=table_name LPAREN p=func_params RPAREN { call f.tn p }
-    | e=expr IS NOT NULL { fn "is_not_null" (Comparison Is_not_null) [e] }
-    | e=expr IS NULL { fn "is_null" (Comparison Is_null) [e] }
-    | e1=expr IS NOT? distinct_from? e2=expr { fn "is_distinct" (Comparison Not_distinct_op) [e1;e2] }
-    | e=expr mnot(BETWEEN) a=expr AND b=expr { fn "between" Range [e;a;b] }
-    | mnot(EXISTS) LPAREN select=select_stmt RPAREN { fn "exists" (F (Typ (strict Bool), [Typ (depends Any)])) [SelectExpr (select,`Exists)] }
+    | e=expr IS NOT NULL { fn "is_not_null" Named [e] }
+    | e=expr IS NULL { fn "is_null" Named [e] }
+    | e1=expr IS NOT? distinct_from? e2=expr { fn "is_distinct" Named [e1;e2] }
+    | e=expr mnot(BETWEEN) a=expr AND b=expr { fn "between" Named [e;a;b] }
+    | mnot(EXISTS) LPAREN select=select_stmt RPAREN { fn "exists" Named [SelectExpr (select,`Exists)] }
     | CASE initial_expr=expr? branches_list=nonempty_list(case_branch) else_expr=preceded(ELSE,expr)? END
       {
         let case_record = {
@@ -573,10 +582,10 @@ expr:
         } in
         Sql.Case case_record
       }
-    | IF LPAREN e1=expr COMMA e2=expr COMMA e3=expr RPAREN { fn "if" (F (Var 0, [Typ (depends Bool); Var 0; Var 0])) [e1;e2;e3] }
+    | IF LPAREN e1=expr COMMA e2=expr COMMA e3=expr RPAREN { fn "if" Named [e1;e2;e3] }
     | w=window_function OVER spec=window_spec { w spec }
     | f=table_name LPAREN p=func_params RPAREN OVER w=window_spec
-        { fn ~over:w f.tn (Function.lookup_agg f.tn (List.length p)) p }
+        { fn ~over:w f.tn Named p }
 
 values_stmt1: 
   | VALUES expr_list=commas(preceded(ROW, delimited(LPAREN, expr_list, RPAREN))) { RowExprList expr_list }
@@ -591,14 +600,14 @@ first_or_last: FIRST_VALUE { "first_value" } | LAST_VALUE { "last_value" }
 lag_or_lead: LAG { "lag" } | LEAD { "lead" }
 
 window_function:
-  | f=first_or_last LPAREN e=expr RPAREN { fun over -> fn ~over f (Agg Self) [e] }
+  | f=first_or_last LPAREN e=expr RPAREN { fun over -> fn ~over f Named [e] }
   | NTH_VALUE LPAREN e=expr COMMA INTEGER RPAREN
-    { fun _ -> fn ~over:{ frame_may_be_empty = true } "nth_value" (Agg Self) [e] }
+    { fun _ -> fn ~over:{ frame_may_be_empty = true } "nth_value" Named [e] }
   | f=lag_or_lead LPAREN e=expr offset=pair(COMMA, pair(MINUS?,INTEGER))? RPAREN
     {
       match offset with
       | Some (_, (_, 0)) -> (fun _ -> e)
-      | None | Some _ -> (fun _ -> fn ~over:{ frame_may_be_empty = true } f (Agg Self) [e])
+      | None | Some _ -> (fun _ -> fn ~over:{ frame_may_be_empty = true } f Named [e])
     }
 
 frame: either(ROWS,RANGE) f=frame_extent { f }
@@ -729,9 +738,9 @@ binary: BINARY | BINARY VARYING { }
 text: CHARACTER { }
 
 cast_as:
-    | t=cast_sql_type { (fun e -> fn "cast" (Ret (Source_type.depends t)) [e]) }
-    | UNSIGNED { (fun e -> fn "cast_unsigned" (Ret (Source_type.depends UInt64)) [e]) }
-    | SIGNED { (fun e -> fn "cast_signed" (Ret (Source_type.depends Int)) [e]) }
+    | t=cast_sql_type { (fun e -> fn "cast" (Cast (Source_type.depends t)) [e]) }
+    | UNSIGNED { (fun e -> fn "cast_unsigned" Named [e]) }
+    | SIGNED { (fun e -> fn "cast_signed" Named [e]) }
 
 %inline either(X,Y): X | Y { }
 %inline commas(X): l=separated_nonempty_list(COMMA,X) { l }

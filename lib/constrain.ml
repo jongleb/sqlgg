@@ -97,19 +97,27 @@ let rec gen env (e : Sql.expr) : t =
       vars = [ PChoice (id, List.map (fun (n, r) -> n, Option.map (fun r -> r.vars) r) branches) ] }
   | Case { case; branches; else_ } -> gen_case env case branches else_
   | Fun { fn_name; kind; parameters; over } ->
+    let arity = List.length parameters in
     (* §6: the mode is an index on the judgment, not a type, so this is decided
        here and never reaches the solver *)
-    if Sql.is_grouping kind && not env.scope.allow_aggregates then
+    if Hmx_sig.is_agg fn_name arity && not env.scope.allow_aggregates then
       conflict "%s is an aggregate and cannot appear here" fn_name;
     let sg =
-      match Hmx_of_sql.of_func ~arity:(List.length parameters) kind with
-      | Ok sg -> sg
-      | Error msg -> conflict "%s: %s" fn_name msg
+      match kind with
+      (* the one function whose type is not in its name *)
+      | Sql.Cast t ->
+        let t = Sql.Source_type.to_infer_type t in
+        Hmx_sig.make ?ret:(Hmx_of_sql.of_kind t.t) (Args [ Free ])
+      | Named | Agg_order _ ->
+        match Hmx_sig.find fn_name arity with
+        | Some sg -> sg
+        (* an unknown function is accepted as untyped, as it always was *)
+        | None -> Hmx_sig.make (Varargs { head = []; tail = [ Free ] })
     in
-    let order = match kind with Agg (With_order { order; _ }) -> order | _ -> [] in
+    let order = match kind with Agg_order { order; _ } -> order | Named | Cast _ -> [] in
     (* an aggregate takes a group to a value, so its argument is per-row again *)
     let inner =
-      if Sql.is_grouping kind
+      if Hmx_sig.is_agg fn_name arity
       then { env with scope = { env.scope with allow_aggregates = false } }
       else env
     in

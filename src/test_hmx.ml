@@ -254,10 +254,10 @@ let test_solver = [
   (* §8: Any is gone, so a parameter nothing constrains is an error unless the
      dialect opts into a fallback *)
   "an unconstrained variable cannot be inferred" >:: (fun () ->
-    assert_conflict ~msg:"bare ?" [ pred Pred.Comparable ]);
+    assert_conflict ~msg:"bare ?" []);
 
   "a dialect may supply a fallback" >:: (fun () ->
-    assert_solves ~fallback:Base.Text ~msg:"fallback" [ pred Pred.Comparable ] (base Base.Text));
+    assert_solves ~fallback:Base.Text ~msg:"fallback" [] (base Base.Text));
 
   (* A declared ENUM is an upper bound, not a flag inside the lattice: "accepts
      no further constructors" is exactly what an upper bound means. *)
@@ -383,7 +383,7 @@ module Sg = struct
   let int = Refined.of_base Base.Int
 
   let arith = make ~preds:[ Pred.Num ] (Args [ Same; Same ])
-  let equal = make ~compares:true ~preds:[ Pred.Comparable ] ~ret:bool (Args [ Same; Same ])
+  let equal = make ~compares:true ~ret:bool (Args [ Same; Same ])
   let sum = make ~preds:[ Pred.Num ] ~nulls:(Const true) (Args [ Same ])
   let count = make ~nulls:(Const false) ~ret:int (Varargs { head = []; tail = [ Free ] })
   let coalesce = make ~nulls:Meet (Varargs { head = [ Same ]; tail = [ Same ] })
@@ -426,80 +426,6 @@ let test_signatures = [
     assert_bool "count" (rule Sg.count 1 = Hmx_sig.Const false);
     assert_bool "sum" (rule Sg.sum 1 = Hmx_sig.Const true);
     assert_bool "concat" (rule Sg.concat 2 = Hmx_sig.Join));
-]
-
-(* ------------------------------------------- coverage of the old registry *)
-
-(** which arities the current inference accepts, mirroring Sql.signature where
-    it is defined and infer_fn where it is not *)
-let old_accepts (kind : Sql.Source_type.t Sql.func) arity =
-  match kind with
-  | Agg Count -> arity = 0 || arity = 1
-  | Agg (Self | Avg) -> arity = 1
-  | Agg (With_order { with_order_kind = Group_concat; _ }) -> arity >= 1
-  | Agg (With_order { with_order_kind = Json_arrayagg; _ }) -> arity = 1
-  | Logical _ -> arity = 2
-  | Negation -> arity = 1
-  | Ret _ | Arith _ -> true
-  | Null_handling _ | Comparison _ | Quantified_comparison _ | Membership | Range
-  | Like _ | F _ | Col_assign _ | Multi _ -> Option.is_some (Sql.signature kind arity)
-
-let new_accepts kind arity =
-  match Hmx_of_sql.of_func ~arity kind with
-  | Error _ -> false
-  | Ok sg -> Result.is_ok (Hmx_sig.instantiate sg arity)
-
-(** Divergences we accept, with the reason. COALESCE of no arguments passes the
-    old signature check and then dies in Hashtbl.find; the new one says so. *)
-let known_divergence name arity = String.equal name "coalesce" && arity = 0
-
-let test_registry_coverage = [
-  "every registered function translates" >:: (fun () ->
-    let total = Sql.Function.fold (fun _ _ _ n -> n + 1) 0 in
-    assert_bool (sprintf "the registry looks empty: %d entries" total) (total > 100);
-    let bad =
-      Sql.Function.fold (fun name narg kind acc ->
-        match kind with
-        | None -> acc
-        | Some kind ->
-          let arity = match narg with Some n -> n | None -> 1 in
-          match Hmx_of_sql.of_func ~arity kind with
-          | Ok _ -> acc
-          | Error e -> sprintf "%s: %s" name e :: acc)
-        []
-    in
-    assert_equal ~msg:"untranslatable registrations" ~printer:(String.concat "\n") [] bad);
-
-  "a registered arity is accepted" >:: (fun () ->
-    let bad =
-      Sql.Function.fold (fun name narg kind acc ->
-        match kind, narg with
-        | None, _ | _, None -> acc
-        | Some kind, Some n -> if new_accepts kind n then acc else sprintf "%s/%d" name n :: acc)
-        []
-    in
-    assert_equal ~msg:"rejected registrations" ~printer:(String.concat " ") [] bad);
-
-  (* the entries registered without an arity are exactly the varargs ones, so
-     this compares the old arity rule against the new one head on *)
-  "varargs arities agree with the old rule" >:: (fun () ->
-    let varargs = Sql.Function.fold (fun _ narg k n ->
-      match k, narg with Some _, None -> n + 1 | _ -> n) 0 in
-    assert_bool (sprintf "no varargs registrations found: %d" varargs) (varargs > 0);
-    let bad =
-      Sql.Function.fold (fun name narg kind acc ->
-        match kind, narg with
-        | None, _ | _, Some _ -> acc
-        | Some kind, None ->
-          List.fold_left (fun acc arity ->
-            if known_divergence name arity then acc
-            else if Bool.equal (old_accepts kind arity) (new_accepts kind arity) then acc
-            else sprintf "%s/%d: old=%b new=%b" name arity
-                   (old_accepts kind arity) (new_accepts kind arity) :: acc)
-            acc [ 0; 1; 2; 3; 4; 5; 6 ])
-        []
-    in
-    assert_equal ~msg:"arity disagreements" ~printer:(String.concat " ") [] bad);
 ]
 
 (* ------------------------------------------ stages 1 to 3, end to end *)
@@ -691,7 +617,6 @@ let tests = [
   "hmx_solver" >::: test_solver;
   "hmx_nullability" >::: test_nullability;
   "hmx_signatures" >::: test_signatures;
-  "hmx_registry_coverage" >::: test_registry_coverage;
   "hmx_pipeline" >::: test_pipeline;
   "hmx_from" >::: test_from;
 ]

@@ -66,7 +66,6 @@ let get name = to_table (get_stored name)
 
 let get_schema name = snd (get name)
 
-let get_columns name = (get_stored name).columns
 
 let check name = ignore (get_stored name)
 
@@ -93,9 +92,6 @@ let get_ttl name = with_stored name None (fun t -> t.tbl_ttl)
 
 let set_ttl name ttl = alter name (fun t -> { t with tbl_ttl = ttl })
 
-let index_find name ~index_name = with_stored name None (fun t -> SMap.find_opt index_name t.tbl_indexes)
-
-let column_find name ~column_name = with_stored name None (fun t -> find_column ~name:column_name t.columns)
 
 let add_constraint_to_columns columns ~cols constr =
   List.map (fun c ->

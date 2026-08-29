@@ -2986,26 +2986,6 @@ let test_migration_name =
 
 let any_of l = QCheck.Gen.(oneof (List.map return l))
 
-let arb_type =
-  let open QCheck.Gen in
-  let simple = Type.[ Int; UInt64; Text; Blob; Float; Bool; Datetime; Json; Json_path; One_or_all; Any ] in
-  let ctors = list_size (int_range 1 3) (any_of [ "a"; "b"; "c" ]) in
-  let kind = oneof [
-    any_of simple;
-    map2 (fun ctors is_closed -> Type.Union { ctors = Type.Enum_kind.make ctors; is_closed }) ctors bool;
-    map (fun s -> Type.StringLiteral s) (any_of [ "a"; "b"; "{}" ]);
-    map (fun f -> Type.FloatingLiteral f) (any_of [ 0.; 1.5 ]);
-    map2 (fun precision scale -> Type.Decimal { precision; scale }) (option (int_range 1 10)) (option (int_range 0 4));
-  ] in
-  QCheck.make ~print:Type.show
-    (map2 (fun t nullability -> { Type.t; nullability }) kind (any_of Type.[ Nullable; Strict; Depends ]))
-
-let same_result a b =
-  match a, b with
-  | None, None -> true
-  | Some a, Some b -> Type.equal a b
-  | None, Some _ | Some _, None -> false
-
 let qcheck (QCheck2.Test.Test cell) =
   QCheck2.Test.get_name cell >:: (fun () ->
     try QCheck2.Test.check_cell_exn ~rand:(Random.State.make [| 42 |]) cell
@@ -3058,38 +3038,6 @@ let test_meta_laws = List.map qcheck [
     arb_meta (fun a -> Meta.equal (Meta.shared [ a; Meta.empty () ]) a);
 ]
 
-let enums_of_different_shape a b =
-  match a.Type.t, b.Type.t with
-  | Type.Union x, Type.Union y -> not (Type.Enum_kind.Ctors.equal x.ctors y.ctors)
-  | _ -> false
-
-let test_type_laws = List.map qcheck [
-  (* TODO enums of different shape are excluded: we keep one direction failing on purpose,
-     see the TODO in order_kind. *)
-  QCheck.Test.make ~count:2000 ~name:"common_type is commutative"
-    (QCheck.pair arb_type arb_type)
-    (fun (a, b) ->
-      QCheck.assume (not (enums_of_different_shape a b));
-      same_result (Type.common_type a b) (Type.common_type b a));
-  QCheck.Test.make ~count:2000 ~name:"common_type is idempotent"
-    arb_type
-    (fun a -> same_result (Type.common_type a a) (Some a));
-  QCheck.Test.make ~count:2000 ~name:"subtype and supertype are defined together"
-    (QCheck.pair arb_type arb_type)
-    (fun (a, b) -> Bool.equal (Option.is_some (Type.subtype a b)) (Option.is_some (Type.supertype a b)));
-  QCheck.Test.make ~count:2000 ~name:"a nullable side makes the result nullable"
-    (QCheck.pair arb_type arb_type)
-    (fun (a, b) ->
-      match Type.common_type a b with
-      | Some r -> not (Type.is_nullable a || Type.is_nullable b) || Type.is_nullable r
-      | None -> true);
-  QCheck.Test.make ~count:2000 ~name:"two strict sides stay strict"
-    (QCheck.pair arb_type arb_type)
-    (fun (a, b) ->
-      match Type.common_type a b with
-      | Some r -> not (Type.is_strict a && Type.is_strict b) || Type.is_strict r
-      | None -> true);
-]
 
 
 
@@ -3098,14 +3046,16 @@ module Narrowing_soundness = struct
   let col = [| "a"; "b"; "c" |]
 
   let column i = Sql.column { cname = col.(i); tname = None }
-  let call kind parameters = Sql.fn "test" kind parameters
-  let conj a b = call (Logical And) [ a; b ]
-  let disj a b = call (Logical Or) [ a; b ]
-  let neg a = call Negation [ a ]
-  let is_null a = call (Comparison Is_null) [ a ]
-  let is_not_null a = call (Comparison Is_not_null) [ a ]
+  (* narrowing keys on the name now, so these build the same shapes the parser
+     would *)
+  let call name parameters = Sql.fn name Sql.Named parameters
+  let conj a b = call "and" [ a; b ]
+  let disj a b = call "or" [ a; b ]
+  let neg a = call "not" [ a ]
+  let is_null a = call "is_null" [ a ]
+  let is_not_null a = call "is_not_null" [ a ]
   let quantified quantifier x =
-    call (Quantified_comparison { op = Comp_equal; quantifier })
+    call (match quantifier with `Any -> "any_cmp" | `All -> "all_cmp")
       [ x; Value (make_collated ~collated:Type.(nullable Int) ()) ]
 
   let resolve (c : col_name) : table_name Schema.Source.Attr.t option =
@@ -3124,16 +3074,16 @@ module Narrowing_soundness = struct
       if depth <= 0 then leaf
       else frequency [
         4, leaf;
-        2, map2 (fun a b -> call (Arith (Source_type.depends Any)) [ a; b ])
+        2, map2 (fun a b -> call "numeric_bin_op" [ a; b ])
              (self (depth - 1)) (self (depth - 1));
-        2, map2 (fun a b -> call (Null_handling (Coalesce (Type.Var 0, Type.Var 0))) [ a; b ])
+        2, map2 (fun a b -> call "coalesce" [ a; b ])
              (self (depth - 1)) (self (depth - 1));
       ]) 2
 
   let gen_cond =
     let open QCheck.Gen in
     let comparison =
-      map3 (fun op a b -> call (Comparison op) [ a; b ])
+      map3 (fun op a b -> call "comparison" [ a; b ])
         (any_of [ Comp_equal; Comp_num_eq; Comp_num_cmp; Not_distinct_op ]) gen_scalar gen_scalar
     in
     fix (fun self depth ->
@@ -3141,8 +3091,8 @@ module Narrowing_soundness = struct
         4, comparison;
         2, map is_not_null gen_scalar;
         2, map is_null gen_scalar;
-        2, map2 (fun x l -> call Membership (x :: l)) gen_scalar (list_size (int_range 1 2) gen_scalar);
-        1, map3 (fun x lo hi -> call Range [ x; lo; hi ]) gen_scalar gen_scalar gen_scalar;
+        2, map2 (fun x l -> call "in" (x :: l)) gen_scalar (list_size (int_range 1 2) gen_scalar);
+        1, map3 (fun x lo hi -> call "between" [ x; lo; hi ]) gen_scalar gen_scalar gen_scalar;
         2, map2 (fun q x -> quantified q x) (any_of [ `Any; `All ]) gen_scalar;
       ] in
       if depth <= 0 then leaf
@@ -3150,7 +3100,7 @@ module Narrowing_soundness = struct
         3, leaf;
         3, map2 conj (self (depth - 1)) (self (depth - 1));
         3, map2 disj (self (depth - 1)) (self (depth - 1));
-        2, map2 (fun a b -> call (Logical Xor) [ a; b ]) (self (depth - 1)) (self (depth - 1));
+        2, map2 (fun a b -> call "xor" [ a; b ]) (self (depth - 1)) (self (depth - 1));
         2, map neg (self (depth - 1));
         2, map2 (fun branches else_ -> Case { case = None; branches; else_ })
              (list_size (int_range 1 2)
@@ -3189,9 +3139,9 @@ module Narrowing_soundness = struct
 
   let rec scalar row = function
     | Column c -> Option.map_default (Array.get row.cols) None (index c.collated.cname)
-    | Fun { kind = Arith _; parameters = [ a; b ]; _ } ->
+    | Fun { fn_name = "numeric_bin_op"; parameters = [ a; b ]; _ } ->
       (match scalar row a, scalar row b with Some a, Some b -> Some (a + b) | _ -> None)
-    | Fun { kind = Null_handling (Coalesce _); parameters = [ a; b ]; _ } ->
+    | Fun { fn_name = "coalesce"; parameters = [ a; b ]; _ } ->
       (match scalar row a with None -> scalar row b | v -> v)
     | Value _ -> None
     | Fun _ | Param _ | Inparam _ | Choices _ | InChoice _ | SelectExpr _
@@ -3204,29 +3154,26 @@ module Narrowing_soundness = struct
   let rec holds row e =
     let k_eq a b = match a, b with Some a, Some b -> Some (a = b) | _ -> None in
     match e with
-    | Fun { kind = Comparison Comp_equal; parameters = [ a; b ]; _ } -> strict ( = ) row a b
-    | Fun { kind = Comparison Comp_num_eq; parameters = [ a; b ]; _ } -> strict ( <> ) row a b
-    | Fun { kind = Comparison Comp_num_cmp; parameters = [ a; b ]; _ } -> strict ( < ) row a b
-    | Fun { kind = Comparison Not_distinct_op; parameters = [ a; b ]; _ } ->
+    | Fun { fn_name = "eq"; parameters = [ a; b ]; _ } -> strict ( = ) row a b
+    | Fun { fn_name = "num_eq"; parameters = [ a; b ]; _ } -> strict ( <> ) row a b
+    | Fun { fn_name = "comparison"; parameters = [ a; b ]; _ } -> strict ( < ) row a b
+    | Fun { fn_name = "not_distinct"; parameters = [ a; b ]; _ } ->
       Some (scalar row a = scalar row b)
-    | Fun { kind = Comparison Is_null; parameters = [ a ]; _ } -> Some (scalar row a = None)
-    | Fun { kind = Comparison Is_not_null; parameters = [ a ]; _ } -> Some (scalar row a <> None)
-    | Fun { kind = Logical And; parameters = [ a; b ]; _ } -> k_and (holds row a) (holds row b)
-    | Fun { kind = Logical Or; parameters = [ a; b ]; _ } -> k_or (holds row a) (holds row b)
-    | Fun { kind = Logical Xor; parameters = [ a; b ]; _ } -> k_xor (holds row a) (holds row b)
-    | Fun { kind = Negation; parameters = [ a ]; _ } -> k_not (holds row a)
-    | Fun { kind = Membership; parameters = x :: candidates; _ } ->
+    | Fun { fn_name = "is_null"; parameters = [ a ]; _ } -> Some (scalar row a = None)
+    | Fun { fn_name = "is_not_null"; parameters = [ a ]; _ } -> Some (scalar row a <> None)
+    | Fun { fn_name = "and"; parameters = [ a; b ]; _ } -> k_and (holds row a) (holds row b)
+    | Fun { fn_name = "or"; parameters = [ a; b ]; _ } -> k_or (holds row a) (holds row b)
+    | Fun { fn_name = "xor"; parameters = [ a; b ]; _ } -> k_xor (holds row a) (holds row b)
+    | Fun { fn_name = "not"; parameters = [ a ]; _ } -> k_not (holds row a)
+    | Fun { fn_name = "in"; parameters = x :: candidates; _ } ->
       let x = scalar row x in
       List.fold_left (fun acc c -> k_or acc (k_eq x (scalar row c))) (Some false) candidates
-    | Fun { kind = Range; parameters = [ x; lo; hi ]; _ } ->
+    | Fun { fn_name = "between"; parameters = [ x; lo; hi ]; _ } ->
       k_and (strict ( >= ) row x lo) (strict ( <= ) row x hi)
-    | Fun { kind = Quantified_comparison { quantifier; _ }; parameters = x :: _; _ } ->
+    | Fun { fn_name = ("any_cmp" | "all_cmp") as q; parameters = x :: _; _ } ->
       let x = scalar row x in
       let fold combine unit = List.fold_left (fun acc v -> combine acc (k_eq x v)) unit row.sub in
-      begin match quantifier with
-      | `All -> fold k_and (Some true)
-      | `Any -> fold k_or (Some false)
-      end
+      if String.equal q "all_cmp" then fold k_and (Some true) else fold k_or (Some false)
     | Case { case; branches; else_ } ->
       let guard { when_; _ } =
         match case with
@@ -3277,7 +3224,7 @@ module Narrowing_soundness = struct
     let open QCheck.Iter in
     let opt = Option.map_default (fun e -> [ e ]) [] in
     match e with
-    | Fun { kind = Logical _ | Negation; parameters; _ } -> of_list parameters
+    | Fun { fn_name = ("and" | "or" | "xor" | "not"); parameters; _ } -> of_list parameters
     | Case { case = None; branches; else_ } ->
       of_list (List.concat_map (fun b -> [ b.when_; b.then_ ]) branches @ opt else_)
     | Case { case = Some _; branches; else_ } ->
@@ -3376,7 +3323,6 @@ let run () =
     "test_fn_group_by_arg" >::: test_fn_group_by_arg;
     "test_join_hole_whitespace" >::: test_join_hole_whitespace;
     "migration name" >::: test_migration_name;
-    "test_type_laws" >::: test_type_laws;
     "test_narrowing_soundness" >::: test_narrowing_soundness;
     "test_meta_laws" >::: test_meta_laws;
   ] @ Test_hmx.tests

@@ -266,7 +266,10 @@ end
 
 
 module Pred = struct
-  type t = Num | Ord | Comparable | Stringable | Aggregatable
+  (* Comparable and Aggregatable used to be here and were dropped: in SQL
+     everything is comparable and everything aggregates, so they admitted every
+     base type and could never reject anything. *)
+  type t = Num | Ord | Stringable
     [@@deriving eq, ord, show { with_path = false }, enumerate]
 
   let satisfies p (b : Base.t) =
@@ -277,10 +280,8 @@ module Pred = struct
        holding at both ends must hold here too — that is what convexity means,
        and they are stored as text anyway *)
     | Ord, _ -> true
-    | Comparable, _ -> true
     | Stringable, (Str_lit | Text | Blob | Datetime | Json | Json_path | One_or_all) -> true
     | Stringable, (Int | UInt64 | Num_lit | Float | Decimal | Bool) -> false
-    | Aggregatable, _ -> true
 
   (* §4.3 wants these predicates convex — not intervals, [Num] is not one —
      because that is what makes them decidable from the bounds. The tests
@@ -290,9 +291,9 @@ module Pred = struct
   let default p : Base.t option =
     match p with
     | Num -> Some Base.Int
-    | Ord | Comparable -> None
+    | Ord -> None
     | Stringable -> Some Base.Text
-    | Aggregatable -> None
+
 end
 
 (** a base type together with its refinement *)

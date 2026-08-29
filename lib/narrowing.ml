@@ -87,7 +87,7 @@ let narrow_columns ~resolve ~constrains e =
     | Some _ | None -> empty
   in
   let borrowed = function
-    | Sql.Fun { kind = Comparison (Comp_equal | Not_distinct_op); parameters = [Column a; Column b]; _ } ->
+    | Sql.Fun { fn_name = ("eq" | "not_distinct"); parameters = [Column a; Column b]; _ } ->
       begin match resolve a.collated, resolve b.collated with
       | Some a, Some b ->
         let borrow = inherit_meta ~constrains in
@@ -98,8 +98,16 @@ let narrow_columns ~resolve ~constrains e =
   in
   let rec nn = function
     | Sql.Column col -> strict col.collated
-    | Fun { kind = Null_handling (Coalesce _ | If_null); parameters; _ } -> keep_shared (List.map nn parameters)
-    | Fun { kind; parameters; _ } -> keep_all (List.map nn (Sql.strict_args kind parameters))
+    (* a column is non-null here only if it is non-null in every branch *)
+    | Fun { fn_name = ("coalesce" | "ifnull"); parameters; _ } -> keep_shared (List.map nn parameters)
+    | Fun { fn_name; parameters; _ } ->
+      let proven =
+        match Hmx_sig.find fn_name (List.length parameters) with
+        | Some { proves_not_null = `All; _ } -> parameters
+        | Some { proves_not_null = `First; _ } -> List.take 1 parameters
+        | Some { proves_not_null = `None; _ } | None -> []
+      in
+      keep_all (List.map nn proven)
     | Case c -> paths ~result:nn c
     | Value _ | Param _ | Inparam _ | Choices _ | InChoice _ | InTupleList _
     | SelectExpr _ | OptionActions _ | Of_values _ -> empty
@@ -108,16 +116,16 @@ let narrow_columns ~resolve ~constrains e =
     let same e = req e tv in
     let required =
       match (e : Sql.expr) with
-      | Fun { kind = Logical (And | Or as op); parameters; _ } ->
-        let combine = if Bool.equal tv (equal_logical_op op And) then keep_all else keep_shared in
+      | Fun { fn_name = ("and" | "or") as op; parameters; _ } ->
+        let combine = if Bool.equal tv (String.equal op "and") then keep_all else keep_shared in
         combine (List.map same parameters)
-      | Fun { kind = Logical Xor; parameters; _ } ->
+      | Fun { fn_name = "xor"; parameters; _ } ->
         keep_all (List.map (fun e -> keep_shared [req e true; req e false]) parameters)
-      | Fun { kind = Negation; parameters = [e]; _ } -> req e (not tv)
-      | Fun { kind = Comparison (Is_null | Is_not_null as op); parameters = [e]; _ } ->
-        if Bool.equal tv (equal_comparison_op op Is_not_null) then nn e else empty
-      | Fun { kind = Quantified_comparison { quantifier = `Any; _ }; parameters = x :: _; _ } when tv -> nn x
-      | Fun { kind = Quantified_comparison _; _ } -> empty
+      | Fun { fn_name = ("not" | "excl"); parameters = [e]; _ } -> req e (not tv)
+      | Fun { fn_name = ("is_null" | "is_not_null") as op; parameters = [e]; _ } ->
+        if Bool.equal tv (String.equal op "is_not_null") then nn e else empty
+      | Fun { fn_name = "any_cmp"; parameters = x :: _; _ } when tv -> nn x
+      | Fun { fn_name = ("any_cmp" | "all_cmp"); _ } -> empty
       | Case c -> paths ~result:same c
       | Choices (_, alternatives) ->
         keep_shared (List.map (fun (_, e) -> Option.map_default same empty e) alternatives)
