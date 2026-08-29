@@ -3083,8 +3083,7 @@ module Narrowing_soundness = struct
   let gen_cond =
     let open QCheck.Gen in
     let comparison =
-      map3 (fun op a b -> call "comparison" [ a; b ])
-        (any_of [ Comp_equal; Comp_num_eq; Comp_num_cmp; Not_distinct_op ]) gen_scalar gen_scalar
+      map2 (fun a b -> call "comparison" [ a; b ]) gen_scalar gen_scalar
     in
     fix (fun self depth ->
       let leaf = frequency [

@@ -373,9 +373,8 @@ let test_nullability = [
 
 (* ---------------------------------------------------------- signatures *)
 
-(* The target table, written the way the final version will write it. Until
-   Sql.Function is retired the authoritative version is derived by
-   Hmx_of_sql.of_func; these pin down what the vocabulary expresses. *)
+(* A few signatures written out by hand, beside the table in Hmx_sig: these
+   pin down what the vocabulary expresses. *)
 module Sg = struct
   open Hmx_sig
   let bool = Refined.of_base Base.Bool
@@ -441,12 +440,14 @@ let parse_expr text =
      | All | AllOf _ -> assert_failure "expected a single expression")
   | _ -> assert_failure (sprintf "not a select: %s" text)
 
-let col ?(sources = [ "t" ]) name base null =
-  { Resolve.name; sources; ty = { base = Some base; null = Some null }; meta = Sql.Meta.empty () }
+let col name base null =
+  { Resolve.name; domain = Hmx_of_sql.to_type base null; meta = Sql.Meta.empty () }
 
 let scope columns = {
-  Resolve.columns;
-  named = (fun _ -> None);
+  Resolve.column = (fun (c : Sql.col_name) ->
+    match List.find_opt (fun (x : Resolve.column) -> String.equal x.name c.cname) columns with
+    | Some c -> c
+    | None -> conflict "missing attribute: %s" c.cname);
   grouping = false;
   allow_aggregates = true;
   subquery = (fun _ _ -> conflict "no subqueries in this scope");
@@ -518,95 +519,80 @@ let test_pipeline = [
     | Ok t -> assert_failure (sprintf "expected a resolve error, got %s" (Sql.Type.show t)));
 ]
 
-(* ------------------------------------------------ stage 1: FROM and JOIN *)
+(* ------------------------------------------------------- FROM and JOIN *)
+
+(* Name resolution lives in Syntax, so these go through the real catalog: two
+   tables in the global store, and the statement's result schema is the scope
+   the projection saw. *)
 
 let attr name t null =
   Sql.make_attribute' name { Sql.Type.t; nullability = null }
 
-let demo_catalog = {
-  Resolve.table = (fun (n : Sql.table_name) ->
-    match n.tn with
-    | "a" -> Resolve.sourced n [ attr "id" Sql.Type.Int Strict; attr "x" Sql.Type.Text Strict ]
-    | "b" -> Resolve.sourced n [ attr "id" Sql.Type.Int Strict; attr "y" Sql.Type.Text Strict ]
-    | other -> conflict "no such table %s" other);
-  select = (fun _ -> conflict "subqueries not wired yet");
-  values = (fun _ -> conflict "value rows not wired yet");
-}
+let with_catalog f =
+  let saved = Tables.snapshot () in
+  Tables.reset ();
+  Tables.add (Sql.make_table_name "a", [ attr "id" Sql.Type.Int Strict; attr "x" Sql.Type.Text Strict ]);
+  Tables.add (Sql.make_table_name "b", [ attr "id" Sql.Type.Int Strict; attr "y" Sql.Type.Text Strict ]);
+  Fun.protect ~finally:(fun () -> Tables.restore saved) f
 
-let parse_from text =
-  match (Parser.parse_stmt text).statement with
-  | Sql.Select { select_complete = { select = (sel, _); _ }; _ } -> sel.from
-  | _ -> assert_failure (sprintf "not a select: %s" text)
+let select_schema text =
+  with_catalog (fun () ->
+    let _, schema, _, _, _ = Syntax.parse text in
+    List.map (function
+      | Sql.Attr a -> a
+      | Sql.Dynamic _ -> assert_failure "dynamic columns are not expected here") schema)
 
-let resolve_from text =
-  match parse_from text with
-  | None -> assert_failure "no FROM clause"
-  | Some n ->
-    match Resolve.nested demo_catalog n with
-    | schema -> Resolve.scope_of_schema schema
-    | exception Conflict e -> assert_failure e
-
-let find_col scope name sources =
-  match List.find_opt (fun (c : Resolve.column) ->
-    String.equal c.name name && c.sources = sources) scope with
-  | Some c -> c
+let find_col schema name =
+  match List.find_opt (fun (a : Sql.attr) -> String.equal a.name name) schema with
+  | Some a -> a
   | None ->
-    assert_failure (sprintf "no %s from %s in scope [%s]" name (String.concat "," sources)
-      (String.concat " " (List.map (fun (c : Resolve.column) ->
-        sprintf "%s.%s" (String.concat "," c.sources) c.name) scope)))
+    assert_failure (sprintf "no %s in [%s]" name
+      (String.concat " " (List.map (fun (a : Sql.attr) -> a.name) schema)))
 
-let null_of (c : Resolve.column) =
-  match c.ty.null with Some n -> n | None -> assert_failure "no nullability on a declared column"
+let null_of (a : Sql.attr) = Sql.Type.is_nullable a.domain
 
 let test_from = [
 
   "a plain table puts its columns in scope" >:: (fun () ->
-    let scope = resolve_from "SELECT 1 FROM a" in
-    assert_equal ~msg:"width" 2 (List.length scope);
-    assert_equal ~msg:"x" false (null_of (find_col scope "x" [ "a" ])));
+    let schema = select_schema "SELECT * FROM a" in
+    assert_equal ~msg:"width" 2 (List.length schema);
+    assert_equal ~msg:"x" false (null_of (find_col schema "x")));
 
   "an inner join keeps both sides strict" >:: (fun () ->
-    let scope = resolve_from "SELECT 1 FROM a JOIN b ON a.id = b.id" in
-    assert_equal ~msg:"a.x" false (null_of (find_col scope "x" [ "a" ]));
-    assert_equal ~msg:"b.y" false (null_of (find_col scope "y" [ "b" ])));
+    let schema = select_schema "SELECT * FROM a JOIN b ON a.id = b.id" in
+    assert_equal ~msg:"a.x" false (null_of (find_col schema "x"));
+    assert_equal ~msg:"b.y" false (null_of (find_col schema "y")));
 
   (* the padding rule: the optional side of an outer join goes nullable *)
   "a left join makes the right side nullable" >:: (fun () ->
-    let scope = resolve_from "SELECT 1 FROM a LEFT JOIN b ON a.id = b.id" in
-    assert_equal ~msg:"a.x stays strict" false (null_of (find_col scope "x" [ "a" ]));
-    assert_equal ~msg:"b.y goes nullable" true (null_of (find_col scope "y" [ "b" ])));
+    let schema = select_schema "SELECT * FROM a LEFT JOIN b ON a.id = b.id" in
+    assert_equal ~msg:"a.x stays strict" false (null_of (find_col schema "x"));
+    assert_equal ~msg:"b.y goes nullable" true (null_of (find_col schema "y")));
 
   "a right join pads the other side" >:: (fun () ->
-    let scope = resolve_from "SELECT 1 FROM a RIGHT JOIN b ON a.id = b.id" in
-    assert_equal ~msg:"a.x" true (null_of (find_col scope "x" [ "a" ]));
-    assert_equal ~msg:"b.y" false (null_of (find_col scope "y" [ "b" ])));
+    let schema = select_schema "SELECT * FROM a RIGHT JOIN b ON a.id = b.id" in
+    assert_equal ~msg:"a.x" true (null_of (find_col schema "x"));
+    assert_equal ~msg:"b.y" false (null_of (find_col schema "y")));
 
   "an alias renames the source" >:: (fun () ->
-    let scope = resolve_from "SELECT 1 FROM a AS t1" in
-    ignore (find_col scope "x" [ "t1" ]));
+    ignore (find_col (select_schema "SELECT t1.x FROM a AS t1") "x"));
 
   (* USING collapses the shared column instead of duplicating it *)
   "USING keeps one copy of the common column" >:: (fun () ->
-    let scope = resolve_from "SELECT 1 FROM a JOIN b USING (id)" in
-    assert_equal ~msg:"width" 3 (List.length scope));
+    assert_equal ~msg:"width" 3 (List.length (select_schema "SELECT * FROM a JOIN b USING (id)")));
 
   "an unknown table is reported" >:: (fun () ->
-    match parse_from "SELECT 1 FROM nosuch" with
-    | None -> assert_failure "no FROM"
-    | Some n ->
-      match Resolve.nested demo_catalog n with
-      | _ -> assert_failure "expected an error"
-      | exception Conflict _ -> ());
+    match select_schema "SELECT * FROM nosuch" with
+    | _ -> assert_failure "expected an error"
+    | exception Failure _ -> ());
 
-  (* stage 1 output feeds stage 2 directly *)
+  (* the resolved scope feeds constraint generation directly *)
   "a joined scope types an expression" >:: (fun () ->
-    let cols = resolve_from "SELECT 1 FROM a LEFT JOIN b ON a.id = b.id" in
-    let env = scope cols in
-    match Constrain.infer env (parse_expr "concat(a.x, b.y)") with
-    | Error e -> assert_failure e
-    | Ok t ->
+    match select_schema "SELECT concat(a.x, b.y) AS c FROM a LEFT JOIN b ON a.id = b.id" with
+    | [ a ] ->
       assert_equal ~msg:"nullable through the outer join" ~printer:Sql.Type.show
-        (Hmx_of_sql.to_type (Refined.of_base Base.Text) true) t);
+        (Hmx_of_sql.to_type (Refined.of_base Base.Text) true) a.domain
+    | l -> assert_failure (sprintf "expected one column, got %d" (List.length l)));
 ]
 
 let tests = [

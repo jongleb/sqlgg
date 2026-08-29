@@ -500,21 +500,14 @@ expr:
     | e1=expr NUM_DIV_OP e2=expr %prec PLUS { arith "num_div" Float e1 e2 }
     | e1=expr TEXT_DIST_OP e2=expr { arith "text_dist" Float e1 e2 }
     | e1=expr DIV e2=expr %prec PLUS { arith "div" Int e1 e2 }
-    | e1=expr op=and_op e2=expr %prec AND { fn "and" Named [e1;e2] }
-    | e1=expr op=xor_op e2=expr %prec XOR { fn "xor" Named [e1;e2] }
-    | e1=expr op=or_op e2=expr %prec OR { fn "or" Named [e1;e2] }
+    | e1=expr AND e2=expr %prec AND { fn "and" Named [e1;e2] }
+    | e1=expr XOR e2=expr %prec XOR { fn "xor" Named [e1;e2] }
+    | e1=expr OR e2=expr %prec OR { fn "or" Named [e1;e2] }
     | e1=expr op=comparison_op q=anyall? e2=expr %prec EQUAL
       {         (* names carry what typing and narrowing need to tell apart: the
            null-safe operator has its own nullability, plain equality drives
            column narrowing, and a quantifier changes what may be concluded *)
-        let name =
-          match q, op with
-          | Some `Any, _ -> "any_cmp"
-          | Some `All, _ -> "all_cmp"
-          | None, Not_distinct_op -> "not_distinct"
-          | None, Comp_equal -> "eq"
-          | None, (Comp_num_cmp | Comp_text_cmp | Comp_num_eq | Is_null | Is_not_null) -> "comparison"
-        in
+        let name = match q with Some `Any -> "any_cmp" | Some `All -> "all_cmp" | None -> op in
         fn name Named [e1;e2] }
     | e1=expr CONCAT_OP e2=expr { fn "concat" Named [e1;e2] }
     | e1=expr JSON_EXTRACT_OP e2=expr { call "json_extract" [e1;e2] }
@@ -662,21 +655,12 @@ func_params: DISTINCT? l=expr_list { l }
            | (* *) { [] }
 escape: ESCAPE expr { $2 }
 numeric_bin_op: PLUS | MINUS | ASTERISK | MOD | NUM_BIT_OR | NUM_BIT_AND | NUM_BIT_SHIFT { }
-comparison_op: 
-    | EQUAL { Comp_equal }
-    | NUM_CMP_OP { Comp_num_cmp }
-    | TEXT_CMP_OP { Comp_text_cmp }
-    | NOT_DISTINCT_OP { Not_distinct_op }
-    | NUM_EQ_OP { 
-      (* it would be nice to go into num_eq_op, 
-         and consider == as equal as well. but for now
-         we conservatively return `Comp_num_eq *)  
-      Comp_num_eq 
-    }
+comparison_op:
+    | EQUAL { "eq" }
+    | NOT_DISTINCT_OP { "not_distinct" }
+    (* == could be treated as equality too; conservatively it is a plain comparison *)
+    | NUM_CMP_OP | TEXT_CMP_OP | NUM_EQ_OP { "comparison" }
 
-and_op: AND { And }
-xor_op: XOR { Xor }
-or_op: OR { Or }
 
 interval_unit: INTERVAL_UNIT
              | SECOND_MICROSECOND | MINUTE_MICROSECOND | MINUTE_SECOND

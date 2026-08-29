@@ -1,12 +1,8 @@
-(** Bridge from the existing type and overload descriptors to the HM(X) core.
+(** Bridge between the declared type, {!Sql.Type}, and the HM(X) lattice.
 
-    Transitional by design: it exists so the new pipeline can run against the
-    function registry that is already there, and so coverage is a test rather
-    than a hand transcription of 120 entries. It is deleted together with
-    {!Sql.Type} and {!Sql.Function}.
-
-    Everything here is total and returns [result]. What it cannot express is
-    reported, not approximated. *)
+    {!Sql.Type.t} is what DDL declares and what codegen consumes; the solver
+    works on {!Hmx_lattice.Refined}. Everything crosses here, in both
+    directions, and nothing else knows both representations. *)
 
 open Hmx_lattice
 
@@ -40,23 +36,6 @@ let of_nullability (n : Sql.Type.nullability) =
   match n with Strict -> Some false | Nullable -> Some true | Depends -> None
 
 let of_type (t : Sql.Type.t) = of_kind t.t, of_nullability t.nullability
-
-let of_tyvar (v : Sql.Type.tyvar) : Hmx_sig.param_spec =
-  match v with
-  | Var _ -> Hmx_sig.Same
-  | Typ t ->
-    (match of_kind t.t with
-     | None -> Hmx_sig.Free
-     | Some ty -> Hmx_sig.As ty)
-
-(* Ret Any means "the common supertype of the arguments", which is the shared
-   variable, not an unconstrained one *)
-let ret_of_tyvar (v : Sql.Type.tyvar) : Refined.t option =
-  match v with
-  | Var _ -> None
-  | Typ t -> of_kind t.t
-
-let base b = Refined.of_base b
 
 (* ------------------------------------------------------------- back *)
 

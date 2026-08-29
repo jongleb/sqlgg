@@ -76,8 +76,6 @@ struct
   
   let make_enum_kind ctors = Union { ctors = (Enum_kind.make ctors); is_closed = true }
 
-  let is_strict { nullability; _ } = nullability = Strict
-
   let is_nullable { nullability; _ } = nullability = Nullable
 
   let (=) : t -> t -> bool = equal
@@ -88,14 +86,9 @@ struct
 
   let type_name t = show_kind t.t
 
-  let is_any { t; nullability = _ } = equal_kind t Any
-
-  (* The type order used to live here: order_kind, common_type_ and their
-     family. It was not transitive and its join was not associative, and it is
-     replaced by Hmx_lattice, which is. *)
-
-  type tyvar = Typ of t | Var of int [@@deriving show{with_path=false}]
-  let string_of_tyvar = function Typ t -> show t | Var i -> sprintf "'%c" (Char.chr @@ Char.code 'a' + i)
+  (* This is the declared type: what DDL says and what codegen reads. No order
+     is defined on it — inference happens in Hmx_lattice, and Hmx_of_sql maps
+     between the two. *)
 end
 
 module Constraint =

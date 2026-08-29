@@ -4,9 +4,15 @@
     constraints are stated as they are found — {!Hmx_solver} unifies eagerly,
     {!Hmx_null} collects — so there is no intermediate tree and no constraint
     language of our own to carry around. This is how Inferno's own client is
-    written: [Infer.hastype] resolves and constrains in a single pass. *)
+    written: [Infer.hastype] resolves and constrains in a single pass.
+
+    Metadata rides on the same walk. It flows along the shared variable of a
+    signature — the argument positions whose value can reach the result
+    unchanged — upward as what an expression {e says}, and downward as the
+    context a parameter ends up carrying. *)
 
 open Hmx_lattice
+module Meta = Sql.Meta
 
 type env = { nulls : Hmx_null.state; scope : Resolve.env }
 
@@ -14,52 +20,98 @@ let env scope = { nulls = Hmx_null.create (); scope }
 
 (** The parameter tree, in source order because parameters are bound
     positionally. It mirrors {!Sql.var}, but holds variables instead of types:
-    the shapes are known while walking, the types only after solving. *)
+    the shapes are known while walking, the types only after solving. The
+    metadata is a cell for the same reason: it comes down from the context
+    once the whole expression has been seen. *)
 type pvar =
   | PSingle of { id : Sql.param_id; ty : Hmx_solver.var; null : Hmx_null.t;
-                 meta : Sql.Meta.t; in_list : bool }
+                 meta : Meta.t ref; in_list : bool }
   | PChoice of Sql.param_id * (Sql.param_id * pvar list option) list
   | PChoiceIn of { id : Sql.param_id; kind : Sql.in_or_not_in; vars : pvar list }
   | POption of { id : Sql.param_id; vars : pvar list;
                  pos : Sql.pos * Sql.pos; kind : Sql.option_actions_kind }
   | PTuple of { id : Sql.param_id;
-                items : (Hmx_solver.var * Hmx_null.t * Sql.Meta.t) list;
+                items : (Hmx_solver.var * Hmx_null.t * Meta.t) list;
                 kind : Sql.in_or_not_in; pos : Sql.pos }
   | PReady of Sql.var   (** already built elsewhere: a subquery's own parameters *)
 
-type t = { ty : Hmx_solver.var; null : Hmx_null.t; vars : pvar list }
+(** An expression under inference.
+
+    [own] is the metadata it contributes upward — [None] when it says nothing,
+    which is different from saying "nothing is known". [push] takes the
+    metadata coming down from the context and settles it on the parameters
+    underneath; it runs once, after the walk. *)
+type t = {
+  ty : Hmx_solver.var;
+  null : Hmx_null.t;
+  vars : pvar list;
+  own : Meta.t option;
+  push : Meta.t -> unit;
+}
 
 let vars_of rs = List.concat_map (fun r -> r.vars) rs
 let bool = Refined.of_base Base.Bool
 let boolean () = Hmx_solver.at_least bool
 
-let split (t : Resolve.ty) =
-  (match t.base with Some r -> Hmx_solver.declared r | None -> Hmx_solver.fresh ()),
-  (match t.null with Some n -> Hmx_null.const n | None -> Hmx_null.fresh ())
+(** a declared type as variables: what is not written is a fresh variable *)
+let split (t : Sql.Type.t) =
+  let base, null = Hmx_of_sql.of_type t in
+  (match base with Some r -> Hmx_solver.declared r | None -> Hmx_solver.fresh ()),
+  (match null with Some n -> Hmx_null.const n | None -> Hmx_null.fresh ())
+
+(* ------------------------------------------------------------- metadata *)
+
+(** what a set of alternatives agrees on *)
+let agreed = function
+  | [] -> Some (Meta.empty ())
+  | l -> Meta.common_all (List.map (fun r -> r.own) l)
+
+let sealed l = Meta.of_option (agreed l)
+
+(** no context reaches these: their parameters only see their siblings *)
+let settle rs = List.iter (fun r -> r.push (Meta.empty ())) rs
+
+(** says nothing and passes nothing: a literal *)
+let silent ~ty ~null = { ty; null; vars = []; own = None; push = ignore }
+
+(** contributes nothing and lets nothing through *)
+let opaque ~ty ~null children =
+  { ty; null; vars = vars_of children; own = Some (Meta.empty ()); push = (fun _ -> settle children) }
+
+(** a node that passes its context down to the branches it shares a type with *)
+let node ~ty ~null ~vars same_domain push_children =
+  let own = agreed same_domain in
+  { ty; null; vars; own;
+    push = (fun ctx -> push_children (Meta.of_option (Meta.common (Meta.declared ctx) own))) }
+
+(* ---------------------------------------------------------------- walk *)
 
 let rec gen env (e : Sql.expr) : t =
   match e with
   (* a literal is a constant: nothing said about its nullability means it is
      not null, not that it is unknown *)
   | Value v ->
-    let t = Resolve.ty_of_sql v.collated in
-    let ty, _ = split t in
-    { ty; null = Hmx_null.const (match t.null with Some n -> n | None -> false); vars = [] }
+    let ty, _ = split v.collated in
+    silent ~ty ~null:(Hmx_null.const (Sql.Type.is_nullable v.collated))
   | Column col ->
-    let ty, null = split (Resolve.apply_json_meta (Resolve.lookup_column env.scope col.collated)) in
-    { ty; null; vars = [] }
+    let c = env.scope.column col.collated in
+    let ty, null = split (Resolve.apply_json_meta c) in
+    { (silent ~ty ~null) with own = Meta.declared c.meta }
   | Param (p, meta) -> param ~in_list:false p meta
   | Inparam (p, meta) -> param ~in_list:true p meta
-  | Of_values col -> let ty, null = split (env.scope.of_values col) in { ty; null; vars = [] }
+  | Of_values col -> let ty, null = split (env.scope.of_values col) in opaque ~ty ~null []
   | SelectExpr (select, usage) ->
-    let t, vars = env.scope.subquery select usage in
+    let t, vars, meta = env.scope.subquery select usage in
     let vars = List.map (fun v -> PReady v) vars in
-    (match usage with
-     | `AsValue -> let ty, null = split t in { ty; null; vars }
-     | `Exists -> { ty = boolean (); null = Hmx_null.const false; vars })
+    let ty, null =
+      match usage with
+      | `AsValue -> split t
+      | `Exists -> boolean (), Hmx_null.const false
+    in
+    { ty; null; vars; own = Some meta; push = ignore }
   | InChoice (id, kind, e) ->
     let r = gen env e in
-    { r with vars = [ PChoiceIn { id; kind; vars = r.vars } ] }
+    node ~ty:r.ty ~null:r.null ~vars:[ PChoiceIn { id; kind; vars = r.vars } ] [ r ] r.push
   | OptionActions { choice; pos; kind } ->
     let id =
       match Resolve.choice_id choice with
@@ -68,7 +120,7 @@ let rec gen env (e : Sql.expr) : t =
     in
     let r = gen env choice in
     Hmx_solver.below r.ty bool;
-    { ty = boolean (); null = r.null; vars = [ POption { id; vars = r.vars; pos; kind } ] }
+    node ~ty:(boolean ()) ~null:r.null ~vars:[ POption { id; vars = r.vars; pos; kind } ] [ r ] r.push
   | InTupleList { value = { exprs; param_id; kind_in_tuple_list }; pos } ->
     if List.exists (function
       | Sql.Choices _ | InChoice _ | InTupleList _ | OptionActions _ -> true
@@ -76,15 +128,15 @@ let rec gen env (e : Sql.expr) : t =
       exprs
     then conflict "unsupported expression kind for WHERE e IN @tuplelist";
     (* a column on the left carries its metadata into the tuple list *)
-    let items = List.map (fun e ->
-      let r = gen env e in
+    let rs = List.map (gen env) exprs in
+    let items = List.map2 (fun e r ->
       let meta = match e with
-        | Sql.Column col -> (Resolve.lookup_column env.scope col.collated).meta
-        | _ -> Sql.Meta.empty ()
+        | Sql.Column col -> (env.scope.column col.collated).meta
+        | _ -> Meta.empty ()
       in
-      r.ty, r.null, meta) exprs
+      r.ty, r.null, meta) exprs rs
     in
-    { ty = boolean (); null = Hmx_null.const false;
+    { (opaque ~ty:(boolean ()) ~null:(Hmx_null.const false) rs) with
       vars = [ PTuple { id = param_id; items; kind = kind_in_tuple_list; pos } ] }
   | Choices (id, l) ->
     (* alternatives, so the result is the least type above every branch *)
@@ -93,8 +145,9 @@ let rec gen env (e : Sql.expr) : t =
     let a = Hmx_solver.fresh () and n = Hmx_null.fresh () in
     List.iter (fun r -> Hmx_solver.same r.ty a) rs;
     Hmx_null.add env.nulls (Join (n, List.map (fun r -> r.null) rs));
-    { ty = a; null = n;
-      vars = [ PChoice (id, List.map (fun (n, r) -> n, Option.map (fun r -> r.vars) r) branches) ] }
+    node ~ty:a ~null:n
+      ~vars:[ PChoice (id, List.map (fun (n, r) -> n, Option.map (fun r -> r.vars) r) branches) ]
+      rs (fun ctx -> List.iter (fun r -> r.push ctx) rs)
   | Case { case; branches; else_ } -> gen_case env case branches else_
   | Fun { fn_name; kind; parameters; over } ->
     let arity = List.length parameters in
@@ -121,12 +174,18 @@ let rec gen env (e : Sql.expr) : t =
       then { env with scope = { env.scope with allow_aggregates = false } }
       else env
     in
-    gen_call inner ~name:fn_name ~sg ~args:parameters ~order
+    (* INSERT .. SELECT: the target column's metadata reaches the expression
+       through the cast that fits it to the column *)
+    let through = (match kind with Cast _ -> true | Named | Agg_order _ -> false)
+                  && String.equal fn_name "insert_select" in
+    gen_call inner ~name:fn_name ~sg ~through ~args:parameters ~order
       ~guaranteed_row:(env.scope.grouping || Sql.over_has_a_row over)
 
 and param ~in_list (p : Sql.Source_type.t Sql.param) meta =
-  let ty, null = split (Resolve.ty_of_source p.typ) in
-  { ty; null; vars = [ PSingle { id = p.id; ty; null; meta; in_list } ] }
+  let ty, null = split (Sql.Source_type.to_infer_type p.typ) in
+  let meta = ref meta in
+  { ty; null; vars = [ PSingle { id = p.id; ty; null; meta; in_list } ];
+    own = None; push = (fun ctx -> meta := Meta.merge_right ctx !meta) }
 
 and gen_case env scrutinee branches else_ =
   let head = Option.map (gen env) scrutinee in
@@ -150,9 +209,12 @@ and gen_case env scrutinee branches else_ =
     (match else_r with
      | None -> Eq (n, Hmx_null.const true)
      | Some _ -> Join (n, List.map (fun r -> r.null) results));
-  { ty = a; null = n; vars = vars_of (some head @ whens @ thens @ some else_r) }
+  (* the conditions are tested, not returned, so only the results share the
+     node's metadata *)
+  node ~ty:a ~null:n ~vars:(vars_of (some head @ whens @ thens @ some else_r)) results
+    (fun ctx -> settle (some head @ whens); List.iter (fun r -> r.push ctx) results)
 
-and gen_call env ~name ~sg ~args ~order ~guaranteed_row =
+and gen_call env ~name ~sg ~through ~args ~order ~guaranteed_row =
   let rs = List.map (gen env) args in
   let sch =
     match Hmx_sig.instantiate sg (List.length args) with
@@ -209,20 +271,34 @@ and gen_call env ~name ~sg ~args ~order ~guaranteed_row =
        | [] -> Hmx_null.fresh ())
   in
   (* the aggregate's own ORDER BY carries parameters, bound after the arguments *)
-  let order = List.concat_map (fun (e, dir) ->
-    (gen env e).vars @ (match dir with
+  let ordered = List.map (fun (e, dir) -> gen env e, dir) order in
+  let order_vars = List.concat_map (fun (r, dir) ->
+    r.vars @ (match dir with
       | Some (`Param p) ->
         [ PReady (Sql.Choice (p, [ Verbatim ("ASC", "ASC"); Verbatim ("DESC", "DESC") ])) ]
       | None | Some `Fixed -> []))
-    order
+    ordered
   in
-  { ty = result; null = ret_null; vars = vars_of rs @ order }
+  (* the arguments sharing the scheme variable are the ones whose value can
+     reach the result unchanged, so metadata travels between them and, when
+     the result is that variable, through to the context *)
+  let same_at = if through then List.map (fun _ -> true) rs else sch.same_at in
+  let returns_shared = through || sch.result = None in
+  let args = List.combine same_at rs in
+  let shared = List.filter_map (fun (same, r) -> if same then Some r else None) args in
+  node ~ty:result ~null:ret_null ~vars:(vars_of rs @ order_vars)
+    (if returns_shared then shared else [])
+    (fun ctx ->
+      settle (List.map fst ordered);
+      List.iter (fun (same, r) ->
+        r.push (if not same then Meta.empty () else if returns_shared then ctx else sealed shared))
+        args)
 
 (** Turn the parameter tree into {!Sql.var}s once the types are known. *)
 let rec to_var read = function
   | PSingle { id; ty; null; meta; in_list } ->
     let p = { Sql.id; typ = read ty null } in
-    if in_list then Sql.SingleIn (p, meta) else Sql.Single (p, meta)
+    if in_list then Sql.SingleIn (p, !meta) else Sql.Single (p, !meta)
   | PChoice (id, branches) ->
     Sql.Choice (id, List.map (fun (n, vars) ->
       Sql.Simple (n, Option.map (List.map (to_var read)) vars)) branches)
@@ -236,18 +312,21 @@ let rec to_var read = function
   | PReady v -> v
 
 (** Walk, solve, and read everything back as declared types: the shape the rest
-    of the compiler still speaks. *)
-let solve_expr ?fallback scope e =
+    of the compiler still speaks. [ctx] is the metadata the surrounding
+    context hands down — the column being assigned to, say. Returns the type,
+    the parameters, and the metadata the expression carries. *)
+let solve_expr ?(ctx = Meta.empty ()) ?fallback scope e =
   try
     let env = env scope in
     let r = gen env e in
+    r.push ctx;
     Hmx_null.solve env.nulls;
     let read ty null =
       Hmx_of_sql.to_type (Hmx_solver.resolve ?fallback ty) (Hmx_null.get null)
     in
-    Ok (read r.ty r.null, List.map (to_var read) r.vars)
+    Ok (read r.ty r.null, List.map (to_var read) r.vars, Meta.of_option r.own)
   with Conflict msg -> Error msg
 
 (** just the type, for tests and for anything that does not need parameters *)
 let infer ?fallback scope e =
-  match solve_expr ?fallback scope e with Ok (ty, _) -> Ok ty | Error e -> Error e
+  match solve_expr ?fallback scope e with Ok (ty, _, _) -> Ok ty | Error e -> Error e

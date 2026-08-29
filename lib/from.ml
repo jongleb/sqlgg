@@ -4,7 +4,6 @@
     types, no scope — those are {!Resolve}'s business. *)
 
 open ExtLib
-open Prelude
 open Sql
 
 type resolved_source = {

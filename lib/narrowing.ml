@@ -1,5 +1,4 @@
 open ExtLib
-open Prelude
 open Sql
 
 module Qualified_attr = struct

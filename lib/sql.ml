@@ -173,9 +173,6 @@ type col_name = {
   cname : string; (** column name *)
   tname : table_name option;
 } [@@deriving show]
-type logical_op = And | Or | Xor [@@deriving eq, show]
-type comparison_op = Comp_equal | Comp_num_cmp | Comp_text_cmp | Comp_num_eq | Not_distinct_op | Is_null | Is_not_null [@@deriving eq, show]
-type null_handling_fn_kind = Coalesce of Type.tyvar * Type.tyvar | Null_if | If_null [@@deriving show]
 type source_alias = { table_name : table_name; column_aliases : schema option } [@@deriving show]
 type select_row_locking_kind = For_update | For_share [@@deriving show]
 and limit = Source_type.t param list * bool
@@ -210,13 +207,6 @@ and order = (expr * direction option) list
 and agg_with_order_kind = 
     | Group_concat
     | Json_arrayagg
-and agg_fun = Self (* self means that it returns the same type what aggregated columns have. ie: max, min, sum *) 
-    | Count (* count it's count function which never returns null  *) 
-    | Avg (* avg it's avg function that returns float *)
-    | With_order of {
-        with_order_kind: agg_with_order_kind;
-        order: order; 
-      }
 (* Almost every function is looked up by name and arity in the signature
    table; only these two carry something the name cannot. *)
 and 't func =
@@ -257,8 +247,6 @@ and column_kind =
   | AllOf of table_name
   | Expr of expr located * string option
 
-type columns = column list [@@deriving show]
-
 let fn ?over fn_name kind parameters = Fun { fn_name; kind; parameters; over }
 
 let over_has_a_row = function None -> false | Some o -> not o.frame_may_be_empty
@@ -271,8 +259,6 @@ let over_of_frame : (frame_bound * frame_bound) option -> over = function
   | Some (`After, _) | Some (_, `Before) -> { frame_may_be_empty = true }
   | Some ((`Before | `Current), (`Current | `After)) -> { frame_may_be_empty = false }
 let column ?collation collated = Column (make_collated ?collation ~collated ())
-
-let expr_to_string = show_expr
 
 let map_kind_exprs f = function
   | Agg_order o -> Agg_order { o with order = List.map (fun (e, dir) -> f e, dir) o.order }
