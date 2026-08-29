@@ -69,6 +69,88 @@ let compound_type (a : Type.t) (b : Type.t) =
 
 let compound = Schema.compound ~merge:compound_type
 
+(** An expression whose metadata is not settled yet.
+
+    [own] is what it contributes upward — [None] when it says nothing, which is
+    different from saying "nothing is known". [fill] takes the metadata coming
+    down from the context and produces the finished expression. The pass is a
+    single traversal precisely because both directions are carried at once. *)
+type pending = {
+  own : Meta.t option;
+  fill : Meta.t -> Sql.expr;
+}
+
+let opaque expr = { own = Some (Meta.empty ()); fill = const expr }
+let says_nothing expr = { own = None; fill = const expr }
+
+(** what a set of alternatives agrees on *)
+let agreed = function
+  | [] -> Some (Meta.empty ())
+  | l -> Meta.common_all (List.map (fun p -> p.own) l)
+
+let sealed l = Meta.of_option (agreed l)
+
+(** a node that passes its context down to the branches it shares a type with *)
+let node same_domain fill =
+  let own = agreed same_domain in
+  { own; fill = (fun ctx -> fill (Meta.of_option (Meta.common (Meta.declared ctx) own))) }
+
+let propagate_meta ~meta_of =
+  let rec aux e =
+    match e with
+    | Sql.Param (p, m) -> { own = None; fill = (fun ctx -> Sql.Param (p, Meta.merge_right ctx m)) }
+    | Inparam (p, m) -> { own = None; fill = (fun ctx -> Sql.Inparam (p, Meta.merge_right ctx m)) }
+    | Value _ -> says_nothing e
+    | Column col -> { own = meta_of (`Column col.collated); fill = const e }
+    | SelectExpr (select, _) -> { own = meta_of (`Select select); fill = const e }
+    | Of_values _ -> opaque e
+    | InTupleList _ -> { (opaque e) with fill = (fun _ -> map_sub_exprs settled e) }
+    | InChoice (n, k, x) -> unary x (fun x -> Sql.InChoice (n, k, x))
+    | OptionActions ({ choice; _ } as o) ->
+      unary choice (fun choice -> Sql.OptionActions { o with choice })
+    | Choices (n, l) ->
+      let l = List.map (fun (name, e) -> name, Option.map aux e) l in
+      node (List.filter_map snd l) (fun ctx ->
+        Sql.Choices (n, List.map (fun (name, p) -> name, Option.map (fun p -> p.fill ctx) p) l))
+    | Case { case; branches; else_ } ->
+      let case = Option.map settled case in
+      let branches = List.map (fun (b : Sql.case_branch) -> settled b.when_, aux b.then_) branches in
+      let else_ = Option.map aux else_ in
+      node (List.map snd branches @ option_list else_) (fun ctx ->
+        Sql.Case {
+          case;
+          branches = List.map (fun (when_, p) -> { Sql.when_; then_ = p.fill ctx }) branches;
+          else_ = Option.map (fun p -> p.fill ctx) else_ })
+    | Fun ({ fn_name; kind; parameters; _ } as fn) ->
+      let kind = Sql.map_kind_exprs settled kind in
+      let unchanged () = opaque (Fun { fn with kind; parameters = List.map settled parameters }) in
+      match
+        Stdlib.Option.bind (Hmx_sig.find fn_name (List.length parameters))
+          (fun sg -> Result.to_option (Hmx_sig.instantiate sg (List.length parameters)))
+      with
+      | None -> unchanged ()
+      | Some sch ->
+        (* the arguments sharing the scheme variable are the ones whose value
+           can reach the result unchanged *)
+        let args = List.combine sch.same_at (List.map aux parameters) in
+        let shared = List.filter_map (fun (same, p) -> if same then Some p else None) args in
+        let returns_shared = sch.result = None in
+        let down ctx (same, p) =
+          p.fill (if not same then Meta.empty ()
+                  else if returns_shared then ctx
+                  else sealed shared)
+        in
+        node (if returns_shared then shared else []) (fun ctx ->
+          Fun { fn with kind; parameters = List.map (down ctx) args })
+  and unary x rebuild =
+    let p = aux x in
+    node [ p ] (fun ctx -> rebuild (p.fill ctx))
+  and settled e = (aux e).fill (Meta.empty ())
+  in
+  aux
+
+let push_meta ~meta_of ctx e = (propagate_meta ~meta_of e).fill ctx
+
 let empty_env = { query_has_grouping = false; 
   tables = []; schema = []; 
   ctes = [];
@@ -166,7 +248,6 @@ let dynamic_allowed env =
   | Top_level | From_passthrough -> true
   | Subquery -> false
 
-let dynamic_col_param_name = "col"
 
 let make_dynamic_select ~env columns =
   if not (dynamic_allowed env) then
@@ -201,7 +282,7 @@ let make_dynamic_select ~env columns =
         | Expr ({ value = e; pos = ep_start, ep_end }, alias) ->
           let base_name = Option.default begin match e with
             | Column { collated = { cname; _ }; _ } -> cname
-            | _ -> dynamic_col_param_name ^ string_of_int (idx + 1)
+            | _ -> Params.dynamic_col_param_name ^ string_of_int (idx + 1)
             end alias
           in
           let col_name = unique_name used base_name in
@@ -219,75 +300,11 @@ let make_dynamic_select ~env columns =
     | (_, (first_pos, _)) :: _ ->
       let outer_pos = (first_pos, last_col_end) in
       let choices = List.map fst all_choices in
-      [{ value = Expr ({ value = Choices ({ value = Some dynamic_col_param_name; pos = outer_pos }, choices); pos = outer_pos }, None); pos = outer_pos }]
+      [{ value = Expr ({ value = Choices ({ value = Some Params.dynamic_col_param_name; pos = outer_pos }, choices); pos = outer_pos }, None); pos = outer_pos }]
   
 
 
 
-let propagate_meta ~meta_of =
-  let push_to ctx (_, f) = f ctx in
-  let opaque = Some (Meta.empty ()) in
-  let class_meta = function [] -> opaque | l -> Meta.common_all (List.map fst l) in
-  let seal l = Meta.of_option (class_meta l) in
-  let node same_domain put =
-    let own = class_meta same_domain in
-    own, (fun ctx -> put (Meta.common (Meta.declared ctx) own |> Meta.of_option))
-  in
-  let rec aux e =
-    match e with
-    | Sql.Param (p, m) -> None, (fun ctx -> Sql.Param (p, Meta.merge_right ctx m))
-    | Inparam (p, m) -> None, (fun ctx -> Sql.Inparam (p, Meta.merge_right ctx m))
-    | Value _ -> None, const e
-    | Column col -> meta_of (`Column col.collated), const e
-    | SelectExpr (select, _) -> meta_of (`Select select), const e
-    | Of_values _ -> opaque, const e
-    | InTupleList _ -> opaque, (fun _ -> map_sub_exprs without_meta e)
-    | InChoice (n, k, x) -> unary x (fun x -> Sql.InChoice (n, k, x))
-    | OptionActions ({ choice; _ } as o) -> unary choice (fun choice -> Sql.OptionActions { o with choice })
-    | Choices (n, l) ->
-      let l = List.map (fun (name, e) -> name, Option.map aux e) l in
-      let same_domain = List.filter_map snd l in
-      node same_domain (fun ctx ->
-        Sql.Choices (n, List.map (fun (name, a) -> name, Option.map (push_to ctx) a) l))
-    | Case { case; branches; else_ } ->
-      let case = Option.map without_meta case in
-      let branches = List.map (fun (b : Sql.case_branch) -> without_meta b.when_, aux b.then_) branches in
-      let else_ = Option.map aux else_ in
-      let same_domain = List.map snd branches @ option_list else_ in
-      node same_domain (fun ctx ->
-        Sql.Case {
-          case;
-          branches = List.map (fun (when_, a) -> { Sql.when_; then_ = push_to ctx a }) branches;
-          else_ = Option.map (push_to ctx) else_ })
-    (* Metadata travels along the arguments that share the function's own type
-       variable: those are the positions whose value can come out unchanged. *)
-    | Fun ({ fn_name; kind; parameters; _ } as fn) ->
-      let kind = Sql.map_kind_exprs without_meta kind in
-      let opaque_fn () =
-        opaque, const (Fun { fn with kind; parameters = List.map without_meta parameters })
-      in
-      match Hmx_sig.find fn_name (List.length parameters) with
-      | None -> opaque_fn ()
-      | Some sg ->
-        match Hmx_sig.instantiate sg (List.length parameters) with
-        | Error _ -> opaque_fn ()
-        | Ok sch ->
-          let paired = List.combine sch.same_at (List.map aux parameters) in
-          let shared = List.filter_map (fun (same, x) -> if same then Some x else None) paired in
-          let returns_shared = sch.result = None in
-          let same_domain = if returns_shared then shared else [] in
-          let push_arg ctx (same, x) =
-            push_to (if same then (if returns_shared then ctx else seal shared) else Meta.empty ()) x
-          in
-          node same_domain (fun ctx -> Fun { fn with kind; parameters = List.map (push_arg ctx) paired })
-  and unary x rebuild =
-    let a = aux x in
-    node [ a ] (fun ctx -> rebuild (push_to ctx a))
-  and without_meta e = push_to (Meta.empty ()) (aux e)
-  in
-  aux
-
-let push_meta ~meta_of ctx e = snd (propagate_meta ~meta_of e) ctx
 
 (** resolve each name reference (Column, Inserted, etc) into ResValue or ResFun of corresponding type *)
 (* The scope stage 1 resolves names against. Nullability narrowing is applied
@@ -371,7 +388,7 @@ and meta_of ~env = function
     Some (carried_meta ~env value)
   | `Select _ -> Some (Meta.empty ())
 
-and carried_meta ~env e = Meta.of_option (fst (propagate_meta ~meta_of:(meta_of ~env) e))
+and carried_meta ~env e = Meta.of_option (propagate_meta ~meta_of:(meta_of ~env) e).own
 
 and resolve_column_assignments ~env l =
   let open Schema.Source in 
@@ -1036,151 +1053,6 @@ let rec eval (stmt:Sql.stmt) =
      Ddl.drop_type ~if_exists name;
      ([], [], DropType name)
 
-type var_shape =
-  | Shape_param
-  | Shape_in_param
-  | Shape_tuple of string option
-  | Shape_choice_in of { param : string option; kind : in_or_not_in; vars : var_shape list }
-  | Shape_opt_choice of string option * var_shape list
-  | Shape_shared_group of string * var_shape list
-  | Shape_choice of string option * ctor_shape list
-  | Shape_dyn_select of string option * ctor_shape list
-  | Shape_dyn_join of string option
-and ctor_shape =
-  | Shape_simple of string option * var_shape list
-  | Shape_verbatim of string
-
-let rec var_shape = function
-  | Single _ -> Shape_param
-  | SingleIn _ -> Shape_in_param
-  | TupleList (id, _) -> Shape_tuple id.value
-  | ChoiceIn { param; kind; vars } -> Shape_choice_in { param = param.value; kind; vars = List.map var_shape vars }
-  | OptionActionChoice (id, vars, _, _) -> Shape_opt_choice (id.value, List.map var_shape vars)
-  | SharedVarsGroup (vars, id) -> Shape_shared_group (id.value, List.map var_shape vars)
-  | Choice (id, cs) -> Shape_choice (id.value, List.map ctor_shape cs)
-  | DynamicSelect (id, cs) -> Shape_dyn_select (id.value, List.map ctor_shape cs)
-  | DynamicSelectJoin { pid; _ } -> Shape_dyn_join pid.value
-and ctor_shape = function
-  | Simple (p, args) -> Shape_simple (p.value, List.map var_shape (Option.default [] args))
-  | Verbatim (n, _) -> Shape_verbatim n
-
-module Var_unifier : sig
-  type t
-  val create : unit -> t
-  val note : t -> string -> Type.t -> unit
-  val alias : t -> string -> string -> unit
-  val typ : t -> string -> default:Type.t -> Type.t
-end = struct
-  type node = { name : string; mutable state : state }
-  and state = Root of Type.t option | Link of node
-
-  type t = (string, node) Hashtbl.t
-
-  let create () = Hashtbl.create 10
-
-  let node t name =
-    match Hashtbl.find_opt t name with
-    | Some n -> n
-    | None -> let n = { name; state = Root None } in Hashtbl.add t name n; n
-
-  (* one node per variable, so nodes are compared physically *)
-  let rec root n =
-    match n.state with
-    | Root typ -> n, typ
-    | Link p -> let (r, _) as res = root p in (* relink directly to root so next lookups are one step *) if r != p then n.state <- Link r; res
-
-  (* One parameter standing in several places must be acceptable in all of
-     them, so its type is the greatest lower bound — stated as an upper bound
-     per sighting and left to the solver. *)
-  let unify name t1 t2 =
-    let null =
-      match t1.Type.nullability, t2.Type.nullability with
-      | Nullable, _ | _, Nullable -> true
-      | Strict, _ | _, Strict -> false
-      | Depends, Depends -> false
-    in
-    match Hmx_of_sql.of_kind t1.Type.t, Hmx_of_sql.of_kind t2.Type.t with
-    | None, None -> t1
-    | b1, b2 ->
-      let v = Hmx_solver.fresh () in
-      match
-        Option.may (Hmx_solver.below v) b1;
-        Option.may (Hmx_solver.below v) b2;
-        Hmx_of_sql.to_type (Hmx_solver.resolve v) null
-      with
-      | t -> t
-      | exception Hmx_lattice.Conflict _ ->
-        fail "incompatible types for parameter %S : %s and %s" name (Type.show t1) (Type.show t2)
-
-  let note t name typ =
-    let (r, existing) = root (node t name) in
-    r.state <- Root (Some (Option.map_default (unify name typ) typ existing))
-
-  let alias t n1 n2 =
-    let (r1, _) = root (node t n1) in
-    let (r2, t2) = root (node t n2) in
-    if r1 != r2 then begin (* physically same root = already aliased *)
-      Option.may (note t r1.name) t2;
-      r2.state <- Link r1
-    end
-
-  let typ t name ~default =
-    Stdlib.Option.bind (Hashtbl.find_opt t name) (snd $ root)
-    |> Option.default default
-end
-
-(* FIXME unify each choice separately *)
-let unify_params l =
-  if !Config.debug then l |> List.iter (fun p -> eprintfn "var %s" (show_var p));
-  let unifier = Var_unifier.create () in
-  let choices = Hashtbl.create 10 in
-  let rec bound_names vars =
-    vars |> List.concat_map (function
-      | Single (p, _) | SingleIn (p, _) -> [p.id.value]
-      | v -> bound_names (sub_vars v))
-  in
-  let register p signature =
-    match p.value with
-    | None -> () (* anonymous ie non-shared *)
-    | Some n ->
-    match Hashtbl.find_opt choices n, signature with
-    | None, _ -> Hashtbl.add choices n signature
-    | Some (`Branches (s1, names1)), `Branches (s2, names2) when s1 = s2 ->
-      List.iter2 (fun n1 n2 -> match n1, n2 with Some n1, Some n2 -> Var_unifier.alias unifier n1 n2 | _ -> ()) names1 names2
-    | Some (`Branches _), `Branches _ -> failed ~at:p.pos "choice %s is used several times with different branches" n
-    | Some `Dynamic, `Dynamic -> failed ~at:p.pos "dynamic select %s occurs several times in one statement (not supported)" n
-    | Some `Dynamic, `Branches _ | Some (`Branches _), `Dynamic ->
-      if n = dynamic_col_param_name then
-        failed ~at:p.pos "dynamic_select reserves the name %s for the column picker, rename choice %s" n n
-      else
-        failed ~at:p.pos "parameter %s is ambiguous : used as both choice and dynamic select" n
-  in
-  let rec collect var =
-    begin match var with
-    | Single ({ id; typ; _ }, _) | SingleIn ({ id; typ; _ }, _) ->
-      Option.may (fun name -> Var_unifier.note unifier name typ) id.value
-    | Choice (p, ctors) ->
-      register p (`Branches (List.map ctor_shape ctors, bound_names (List.concat_map ctor_vars ctors)))
-    | DynamicSelect (p, _) -> register p `Dynamic
-    | TupleList _ | ChoiceIn _ | OptionActionChoice _ | SharedVarsGroup _ | DynamicSelectJoin _ -> ()
-    end;
-    List.iter collect (sub_vars var)
-  in
-  (* if no other clues - input parameters are strict *)
-  let final { id; typ; _ } =
-    let typ = Option.map_default (Var_unifier.typ unifier ~default:typ) typ id.value in
-    (* if nothing else said so, an input parameter is not null *)
-    let typ = match typ.Type.nullability with Depends -> Type.strict typ.t | _ -> typ in
-    make_param ~id ~typ
-  in
-  let rec rewrite = function
-    | Single (p, m) -> Single (final p, m)
-    | SingleIn (p, m) -> SingleIn (final p, m)
-    | v -> map_sub_vars (List.map rewrite) v
-  in
-  List.iter collect l;
-  List.map rewrite l
-
 let is_alpha = function
 | 'a'..'z' -> true
 | 'A'..'Z' -> true
@@ -1237,11 +1109,11 @@ let complete_sql kind sql =
 let eval_parsed sql ({ Parser.statement; dialect_features } : Parser.parse_result) =
   let (schema,p1,kind) = eval statement in
   let (sql,p2) = complete_sql kind sql in
-  (sql, schema, unify_params (p1 @ p2), kind, dialect_features)
+  (sql, schema, Params.unify_params (p1 @ p2), kind, dialect_features)
 
 let parse sql =
   eval_parsed sql (Parser.parse_stmt sql)
 
 let eval_select select_full =
   let (schema, p1, kind) = eval @@ Select select_full in
-  (schema, unify_params p1, kind)
+  (schema, Params.unify_params p1, kind)
