@@ -23,3 +23,8 @@ what the glob does not match is unknown:
   posts  table — 2 columns
   extra  table — 1 columns
   users  table — 2 columns
+
+Opening a schema file spelled differently than the glob spelled it does not load it twice:
+
+  $ ../ask.exe schema/./01_users.sql diags
+  ### diags

@@ -34,14 +34,9 @@ let protect_mode f =
   let mode = !Parser_state.mode in
   Fun.protect ~finally:(fun () -> Parser_state.mode := mode) f
 
-type settle_result =
-  | Needs_input of trace * Sql.stmt I.env
-  | Accept of trace * Sql.stmt
-  | Reject
-
 let run sql offset =
-  let recovery_states = 4 in
-  let recovery_skips = 3 in
+  let max_recovery_states = 4 in
+  let max_recovery_skips = 3 in
   let lexbuf = lexbuf_of sql in
   Parser_state.with_lexbuf lexbuf @@ fun () ->
   let rec settle (acc : trace) = function
@@ -64,9 +59,9 @@ let run sql offset =
         | None -> acc
       in
       settle acc checkpoint
-    | I.InputNeeded env -> Needs_input (acc, env)
-    | I.Accepted stmt -> Accept (acc, stmt)
-    | I.HandlingError _ | I.Rejected -> Reject
+    | I.InputNeeded env -> `Needs_input (acc, env)
+    | I.Accepted stmt -> `Accept (acc, stmt)
+    | I.HandlingError _ | I.Rejected -> `Reject
   in
   let finish (acc : trace) stop =
     { trace =
@@ -92,14 +87,14 @@ let run sql offset =
     match settle acc (I.offer (I.input_needed env) (lexeme.token, position start, position stop)) with
     | exception (Out_of_memory as exn) -> raise exn
     | exception _ -> finish acc Fail
-    | Reject -> recover acc env lexeme
-    | Accept (acc, stmt) -> finish acc (Complete stmt)
-    | Needs_input (acc, env) -> loop acc env
+    | `Reject -> recover acc env lexeme
+    | `Accept (acc, stmt) -> finish acc (Complete stmt)
+    | `Needs_input (acc, env) -> loop acc env
   and recover acc env lexeme =
     let acc = { acc with recovery = true } in
     let states =
       Seq.unfold (fun env -> Option.map (fun parent -> parent, parent) (I.pop env)) env
-      |> Seq.cons env |> Seq.take recovery_states |> List.of_seq
+      |> Seq.cons env |> Seq.take max_recovery_states |> List.of_seq
     in
     let accept lexeme =
       protect_mode (fun () ->
@@ -114,19 +109,19 @@ let run sql offset =
       else
         match accept lexeme with
         | Some env -> feed acc env lexeme
-        | None when n = 0 -> finish acc Fail
+        | None when Int.equal n 0 -> finish acc Fail
         | None ->
           match next_lexeme lexbuf with
           | None -> finish acc Fail
           | Some lexeme -> skip (n - 1) { acc with seen = lexeme :: acc.seen } lexeme
     in
-    skip recovery_skips acc lexeme
+    skip max_recovery_skips acc lexeme
   in
   let empty = { seen = []; recovery = false; tables = []; sources = [] } in
   match settle empty (Sql_parser_incremental.Incremental.input lexbuf.lex_curr_p) with
-  | Needs_input (acc, env) -> loop acc env
-  | Accept (acc, stmt) -> finish acc (Complete stmt)
-  | Reject -> finish empty Fail
+  | `Needs_input (acc, env) -> loop acc env
+  | `Accept (acc, stmt) -> finish acc (Complete stmt)
+  | `Reject -> finish empty Fail
 
 let tokens sql =
   let lexbuf = lexbuf_of sql in
@@ -185,12 +180,15 @@ let slot ?next run =
       Option.to_list next @ ([ EOF; COMMA; RPAREN; DOT; LPAREN ] : Sql_tokens.token list)
     in
     protect_mode @@ fun () ->
-    Name (List.sort_uniq compare_role
-      (List.concat_map
+    let accepted_roles =
+      List.concat_map
         (fun follow ->
           List.filter_map role
             (reductions_of_ident (I.input_needed env) (position start) follow))
-        follows))
+        follows
+      |> List.sort_uniq compare_role
+    in
+    Name accepted_roles
   in
   match run.stop with
   | Complete _ -> Name []

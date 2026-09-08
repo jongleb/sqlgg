@@ -65,6 +65,8 @@ let get_stored name = match find_stored name with
 
 let get name = to_table (get_stored name)
 
+let find name = Option.map to_table (find_stored name)
+
 let get_schema name = snd (get name)
 
 let get_columns name = (get_stored name).columns

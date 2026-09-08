@@ -199,17 +199,16 @@ let resolve_column ~env {cname;tname;cpos} =
   let open Schema.Source in
   let open Attr in
   let from_source =
-    match tname with
-    | None -> None
-    | Some { tn; _ } ->
+    Stdlib.Option.bind tname (fun { tn; _ } ->
       let matches a = String.equal a.attr.name cname && List.exists (fun i -> String.equal i.tn tn) a.sources in
-      List.fold_left (fun found a -> if matches a then Some a else found) None env.schema
+      List.fold_left (fun found a -> if matches a then Some a else found)
+        None env.schema)
   in
   match from_source with
   | Some a -> a
   | None ->
     let t = Stdlib.Option.fold ~none:env.schema ~some:(schema_of ~env) tname in
-    let error what = raise (At (cpos, Schema.Error (to_schema t, what ^ " : " ^ cname))) in
+    let error msg = raise (At (cpos, Schema.Error (to_schema t, msg ^ " : " ^ cname))) in
     let matches =
       List.to_seq t
       |> Seq.filter (fun a -> String.equal a.attr.name cname)
@@ -1112,7 +1111,8 @@ and get_params_of_columns env columns =
     let (ctors, annotations) =
       List.fold_right (fun ({ ctor = n; body; _ } as c) (ctors, annotations) ->
         match body with
-        | Some (Column { collated = { cname; tname; _ }; _ }) when n.pos = dummy_pos ->
+        | Some (Column { collated = { cname; tname; _ }; _ })
+            when Pos.equal n.pos dummy_pos ->
           let sql = tname |> Option.map_default (fun t -> Printf.sprintf "%s.%s" (show_table_name t) cname) cname in
           Verbatim (Stdlib.Option.value ~default:cname n.value, sql) :: ctors, annotations
         | None ->
@@ -1526,8 +1526,8 @@ and eval_cte { cte_items; is_recursive } =
         | CteInline stmt -> eval_select_complete env stmt
         | CteSharedQuery shared_query_name ->
           let (_, stmt) = Shared_queries.get shared_query_name.value in
-          let s1, p1, kind, annotations = eval_select_full env stmt in
-          s1, [SharedVarsGroup (p1, shared_query_name)], kind, annotations
+          let s1, p1, kind, _ = eval_select_full env stmt in
+          s1, [SharedVarsGroup (p1, shared_query_name)], kind, no_stmt_annotations
       )
     in
     let s1 = attrs_only "Recursive CTEs cannot have dynamic columns" s1 in

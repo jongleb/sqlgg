@@ -4,53 +4,33 @@ type token_type =
   | Parameter [@as "parameter"]
   | Enum [@as "enum"]
   | Enum_member [@as "enumMember"]
-[@@deriving enum, enumerate, to_string]
+[@@deriving enumerate, to_string]
 
 type kind =
-  | Var of Sql.param_id * Sql.var
-  | Branch of Sql.param_id * Sql.ctor
+  | Var of Sql.var
+  | Branch of Sql.ctor
+
+type placement = { cursor : Sql.Pos.t; token : Sql.Pos.t option }
 
 type node = {
-  base : int;
+  param : Sql.param_id;
   kind : kind;
+  placement : placement option;
   children : node list;
 }
 
-let name (id : Sql.param_id) = match id.value with Some name -> "@" ^ name | None -> "?"
+let name (id : Sql.param_id) =
+  match id.value with Some name -> "@" ^ name | None -> "?"
 
-let cursor_pos node =
-  let pos =
-    match node.kind with
-    | Var (_, DynamicSelect _) -> None
-    | Var (id, _) ->
-      Option.map (fun name -> fst id.pos, fst id.pos + 1 + String.length name) id.value
-    | Branch (_, Simple { ctor; ctor_pos; _ }) ->
-      let pos =
-        if Sql.Pos.is_empty ctor_pos then ctor.pos
-        else fst ctor_pos, snd ctor.pos
-      in
-      Some pos
-    | Branch (_, Verbatim _) -> None
-  in
-  Option.map (Sql.Pos.shift node.base) pos
-
-let token_pos node =
-  let pos =
-    match node.kind with
-    | Var (id, (Sql.Single _ | SingleIn _)) -> Some id.pos
-    | Var (_, DynamicSelect _) -> None
-    | Var (id, (Choice _ | ChoiceIn _ | DynamicSelectJoin _ | TupleList _ | OptionActionChoice _)) ->
-      Option.map (fun name -> fst id.pos, fst id.pos + 1 + String.length name) id.value
-    | Var (_, SharedVarsGroup _) -> None
-    | Branch (_, Simple { ctor_pos; _ }) ->
-      if Sql.Pos.is_empty ctor_pos then None else Some ctor_pos
-    | Branch (_, Verbatim _) -> None
-  in
-  Option.map (Sql.Pos.shift node.base) pos
+let token_type node =
+  match node.kind with
+  | Var (Sql.Single _ | SingleIn _ | ChoiceIn _ | TupleList _ | SharedVarsGroup _) -> Parameter
+  | Var (Choice _ | DynamicSelect _ | DynamicSelectJoin _ | OptionActionChoice _) -> Enum
+  | Branch _ -> Enum_member
 
 let label node =
   match node.kind with
-  | Var (id, var) ->
+  | Var var ->
     let suffix =
       match var with
       | ChoiceIn { kind = `In; _ } -> " — IN"
@@ -60,74 +40,108 @@ let label node =
       | TupleList _ -> " — tuple list"
       | Single _ | SingleIn _ | Choice _ | OptionActionChoice _ | SharedVarsGroup _ -> ""
     in
-    name id ^ suffix
-  | Branch (_, Simple { ctor; _ }) -> Option.value ~default:"_" ctor.value
-  | Branch (_, Verbatim (name, _)) -> name
+    name node.param ^ suffix
+  | Branch (Simple { ctor; _ }) -> Option.value ~default:"_" ctor.value
+  | Branch (Verbatim (name, _)) -> name
 
 let of_vars ~base vars =
-  let create ?(children = []) kind = { base; kind; children } in
-  let param_node ?children var id = create ?children (Var (id, var)) in
-  let rec of_var (var : Sql.var) =
+  let sigil_pos (id : Sql.param_id) =
+    Option.map
+      (fun name -> Sql.Pos.span id.pos (fst id.pos, fst id.pos + 1 + String.length name))
+      id.value
+  in
+  let placement param = function
+    | Var (Sql.DynamicSelect _) -> None
+    | Var (Sql.Single _ | SingleIn _) ->
+      Some { cursor = Option.value (sigil_pos param) ~default:param.pos;
+        token = Some param.pos }
+    | Var (Choice _ | ChoiceIn _ | DynamicSelectJoin _ | TupleList _
+          | OptionActionChoice _ | SharedVarsGroup _) ->
+      Some { cursor = Option.value (sigil_pos param) ~default:param.pos;
+        token = sigil_pos param }
+    | Branch (Sql.Simple { ctor; ctor_pos; _ }) ->
+      if Sql.Pos.is_empty ctor_pos
+      then Some { cursor = ctor.pos; token = None }
+      else Some { cursor = Sql.Pos.span ctor_pos ctor.pos; token = Some ctor_pos }
+    | Branch (Verbatim _) -> None
+  in
+  let create ?(children = []) ~visible param kind =
+    let shift_pos = Sql.Pos.shift base in
+    let placement =
+      if not visible then None
+      else
+        Option.map
+          (fun { cursor; token } ->
+            { cursor = shift_pos cursor; token = Option.map shift_pos token })
+          (placement param kind)
+    in
+    { param; kind; placement; children }
+  in
+  let rec of_var ~visible (var : Sql.var) =
+    let param_node ?children param = create ?children ~visible param (Var var) in
     match var with
-    | Sql.Single (p, _) | Sql.SingleIn (p, _) -> [ create (Var (p.id, var)) ]
+    | Sql.Single (p, _) | Sql.SingleIn (p, _) -> [ param_node p.id ]
     | Sql.ChoiceIn { param; vars; _ } ->
       let pos = match vars with [ Sql.SingleIn (p, _) ] -> p.id.pos | _ -> param.pos in
-      [ param_node ~children:(of_vars vars) var { param with pos } ]
+      [ param_node ~children:(of_list ~visible vars) { param with pos } ]
     | Sql.Choice (id, ctors) | Sql.DynamicSelect (id, ctors) ->
-      [ param_node ~children:(List.map (of_ctor id) ctors) var id ]
-    | Sql.DynamicSelectJoin { pid; _ } -> [ param_node var pid ]
-    | Sql.TupleList (id, _) -> [ param_node var id ]
-    | Sql.OptionActionChoice (id, vars, _, _) -> [ param_node ~children:(of_vars vars) var id ]
-    | Sql.SharedVarsGroup (vars, _) -> of_vars vars
-  and of_ctor choice (c : Sql.ctor) =
-    match c with
-    | Sql.Simple _ ->
-      create ~children:(of_vars (Sql.ctor_vars c)) (Branch (choice, c))
-    | Sql.Verbatim _ -> create (Branch (choice, c))
-  and of_vars vars = List.concat_map of_var vars in
-  of_vars vars
-
-type shape =
-  | Scalar of Sql.Type.t
-  | List of Sql.Type.t list
-  | Compound
+      [ param_node ~children:(List.map (of_ctor ~visible id) ctors) id ]
+    | Sql.DynamicSelectJoin { pid; _ } -> [ param_node pid ]
+    | Sql.TupleList (id, _) -> [ param_node id ]
+    | Sql.OptionActionChoice (id, vars, _, _) ->
+      [ param_node ~children:(of_list ~visible vars) id ]
+    | Sql.SharedVarsGroup (vars, _) -> of_list ~visible:false vars
+  and of_ctor ~visible choice (ctor : Sql.ctor) =
+    create ~visible ~children:(of_list ~visible (Sql.ctor_vars ctor)) choice (Branch ctor)
+  and of_list ~visible vars = List.concat_map (of_var ~visible) vars in
+  of_list ~visible:true vars
 
 let rec shape node =
   match node.kind with
-  | Var (_, (Sql.Single (p, _) | SingleIn (p, _))) -> Scalar p.typ
-  | Var (_, ChoiceIn _) ->
-    List (List.filter_map (fun child -> match shape child with Scalar t -> Some t | List _ | Compound -> None) node.children)
-  | Var (_, TupleList (_, Where_in { value = (types, _); _ })) -> List (List.map fst types)
-  | Var (_, TupleList (_, ValueRows { types; _ })) -> List types
-  | Var (_, TupleList (_, Insertion schema)) -> List (List.map (fun (attr : Sql.attr) -> attr.domain) schema)
-  | Var (_, (Choice _ | DynamicSelect _ | DynamicSelectJoin _ | OptionActionChoice _ | SharedVarsGroup _))
-  | Branch _ -> Compound
+  | Var (Sql.Single (p, _) | SingleIn (p, _)) -> `Scalar p.typ
+  | Var (ChoiceIn _) ->
+    let rec scalars acc = function
+      | [] -> `Row (List.rev acc)
+      | child :: rest ->
+        match shape child with
+        | `Scalar typ -> scalars (typ :: acc) rest
+        | `Row _ | `Compound -> `Compound
+    in
+    scalars [] node.children
+  | Var (TupleList (_, Where_in { value = (types, _); _ })) ->
+    `Row (List.map fst types)
+  | Var (TupleList (_, ValueRows { types; _ })) -> `Row types
+  | Var (TupleList (_, Insertion schema)) ->
+    `Row (List.map (fun (attr : Sql.attr) -> attr.domain) schema)
+  | Var (Choice _ | DynamicSelect _ | DynamicSelectJoin _ | OptionActionChoice _ | SharedVarsGroup _)
+  | Branch _ -> `Compound
 
 let outline nodes =
-  let module Occurrence = struct
-    type t = { branch : bool; pos : int * int; name : string option } [@@deriving ord]
-
-    let of_node node =
-      match node.kind with
-      | Var (id, _) -> { branch = false; pos = id.pos; name = id.value }
-      | Branch (_, Simple { ctor; _ }) -> { branch = true; pos = ctor.pos; name = ctor.value }
-      | Branch (choice, Verbatim (name, _)) ->
-        { branch = true; pos = choice.pos; name = Some name }
-  end in
-  let rec loop nodes =
-    Prelude.unique_by (module Occurrence) Occurrence.of_node nodes
-    |> List.map (fun node -> { node with children = loop node.children })
+  let key_of_node node =
+    match node.kind with
+    | Var _ -> `Var, node.param.pos, node.param.value
+    | Branch (Simple { ctor; _ }) -> `Branch, ctor.pos, ctor.value
+    | Branch (Verbatim (name, _)) -> `Branch, node.param.pos, Some name
   in
-  loop nodes
+  let equal_key (kind, pos, name) (kind', pos', name') =
+    let equal_kind =
+      match kind, kind' with
+      | `Var, `Var | `Branch, `Branch -> true
+      | (`Var | `Branch), _ -> false
+    in
+    equal_kind
+    && Sql.Pos.equal pos pos'
+    && Option.equal String.equal name name'
+  in
+  let rec loop seen = function
+    | [] -> []
+    | node :: rest ->
+      let key = key_of_node node in
+      if List.exists (equal_key key) seen then loop seen rest
+      else { node with children = loop [] node.children } :: loop (key :: seen) rest
+  in
+  loop [] nodes
 
 let all_nodes nodes =
   let rec preorder node = Seq.cons node (Seq.concat_map preorder (List.to_seq node.children)) in
   Seq.concat_map preorder (List.to_seq nodes)
-
-let find_node_opt nodes offset ~f =
-  all_nodes nodes
-  |> Seq.filter_map (fun node ->
-    match cursor_pos node, f node with
-    | Some pos, Some x -> Some (x, pos)
-    | _ -> None)
-  |> Sql.Pos.find_innermost_opt offset

@@ -5,10 +5,7 @@ type lexeme = { token : Sql_tokens.token; pos : Sql.Pos.t }
 val ident_name : Sql_tokens.token -> string option
 val qualifier_before : lexeme list -> string option
 
-type stop =
-  | Complete of Sql.stmt
-  | Fail
-  | Pause of Sql.stmt Sql_parser_incremental.MenhirInterpreter.env * lexeme
+type stop
 
 type trace = {
   seen : lexeme list;
@@ -17,7 +14,7 @@ type trace = {
   sources : Sql.source list;
 }
 
-type run = { trace : trace; stop : stop }
+type run = private { trace : trace; stop : stop }
 
 val run : string -> int -> run
 val tokens : string -> lexeme list

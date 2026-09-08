@@ -6,13 +6,13 @@ type outcome =
   | Verbatim
   | Not_reusable
 
-let statement ~(dynamic_select : Props.dynamic_select) (stmt : Statements.t) =
+let statement ~dynamic_select stmt =
   let dynamic_select_enabled =
-    match dynamic_select with Off -> false | Only | Both -> true
+    match dynamic_select with Props.Off -> false | Only | Both -> true
   in
   Syntax.Config.dynamic_select := dynamic_select_enabled;
   Parser_state.Stmt_metadata.reset ();
-  List.iter (fun (offset, meta) -> Parser_state.Stmt_metadata.add offset meta) stmt.metadata;
+  List.iter (fun (offset, meta) -> Parser_state.Stmt_metadata.add offset meta) stmt.Statements.metadata;
   match Props.include_ stmt.props with
   | Execute when Props.has Noparse stmt.props -> Verbatim
   | Execute ->

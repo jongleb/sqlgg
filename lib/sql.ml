@@ -11,7 +11,7 @@ module Pos = struct
   let covers (start, stop) offset = offset >= start && offset <= stop
   let shift offset (start, stop) = offset + start, offset + stop
   let is_empty (start, stop) = stop <= start
-  let clamp_offset text offset = Int.max 0 (Int.min (String.length text) offset)
+  let span (start, _) (_, stop) = start, stop
 
   let find_innermost_by_opt includes offset candidates =
     let width (_, (start, stop)) = stop - start in
@@ -24,9 +24,6 @@ module Pos = struct
 
   let find_innermost_opt offset candidates =
     find_innermost_by_opt contains offset candidates
-
-  let find_innermost_covering_opt offset candidates =
-    find_innermost_by_opt covers offset candidates
 end
 
 type 'a located  = { value : 'a; pos : Pos.t } [@@deriving show, make]
@@ -557,11 +554,6 @@ type table_alias = {
   alias : table_name located;
   target : table_name option;
 } [@@deriving show]
-
-let find_table_alias (aliases : table_alias list) name =
-  List.find_map (fun { alias; target } ->
-    if String.equal alias.value.tn name then target else None)
-    aliases
 
 type join_source = { table : table_name; alias : table_name option } [@@deriving show]
 let join_source_name { table; alias } = Option.default table alias

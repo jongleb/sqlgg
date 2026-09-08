@@ -109,12 +109,12 @@ let generate ~output ~name results =
     process_stmts l name (List.concat results)
 
 let migration_to_sql ~id ~name (m : Gen_migrations.migration) =
-  let single what = function
+  let single label = function
     | [s] -> String.trim s
     | _ ->
       fatal
         "-gen sql: %s of migration %s is multi-statement and cannot be emitted as \
-         a single SQL entry; write this step by hand in the extends file" what name
+         a single SQL entry; write this step by hand in the extends file" label name
   in
   let up = single "up" m.apply in
   match m.revert with

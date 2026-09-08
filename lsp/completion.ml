@@ -2,59 +2,48 @@ open Sqlgg
 open Printf
 open Linol_lsp.Types
 
-module Parameter_names = Set.Make (String)
+module Rank = struct
+  let exact = 0
+  let column = 1
+  let source = 2
+  let function_ = 3
+  let mismatched_table = 4
+  let keyword = 9
 
-module Priority = struct
-  type t =
-    | Parameter
-    | Cte
-    | Qualified_column
-    | Column
-    | Table of { fits : bool; in_query : bool }
-    | Source
-    | Function
-    | Keyword
-
-  let order = function
-    | Parameter | Cte | Qualified_column -> 0
-    | Column | Table { fits = true; in_query = false } -> 1
-    | Table { fits = false; in_query = false } | Source -> 2
-    | Table { fits = true; in_query = true } | Function -> 3
-    | Table { fits = false; in_query = true } -> 4
-    | Keyword -> 9
+  let table matches_columns in_query =
+    match matches_columns, in_query with
+    | true, false -> column
+    | false, false -> source
+    | true, true -> function_
+    | false, true -> mismatched_table
 end
 
 type item = {
   label : string;
   detail : string;
   kind : CompletionItemKind.t;
-  priority : Priority.t;
+  rank : int;
 }
 
-let at ?cache ~path text offset =
+let make (document : Document.t) offset =
   let hole = "sqlgg__completion_hole" in
-  let column_items ~priority (owner : Symbol.t) =
-    Symbol.columns owner |> List.map (fun (attr : Sql.attr) ->
-      { label = attr.name; detail = sprintf "%s — %s" (Sql.Type.show attr.domain) owner.name;
-        kind = Field; priority })
+  let column_items ~rank (source : Symbol.t) =
+    Symbol.columns source |> List.map (fun (attr : Sql.attr) ->
+      { label = attr.name; detail = sprintf "%s — %s" (Sql.Type.show attr.domain) source.name;
+        kind = Field; rank })
   in
-  let listing_items ~priority ~kind ~what =
+  let listing_items ~rank ~kind ~kind_name =
     List.map (fun (symbol : Symbol.t) ->
-      { label = symbol.name; kind; priority = priority symbol;
-        detail = sprintf "%s — %d columns" what (List.length symbol.columns) })
+      { label = symbol.name; kind; rank = rank symbol;
+        detail = sprintf "%s — %d columns" kind_name (List.length symbol.columns) })
   in
   let function_item name =
-    { label = name; detail = "function"; kind = Function; priority = Priority.Function }
+    { label = name; detail = "function"; kind = Function;
+      rank = Rank.function_ }
   in
-  let offset = Sql.Pos.clamp_offset text offset in
-  let document = Document.analyze ?cache ~path text in
-  let current_statement =
-    List.find_map (fun (statement : Document.checked_statement) ->
-      if Sql.Pos.covers statement.block.pos offset
-      then Some statement
-      else None)
-      document.Document.statements
-  in
+  let text = document.text in
+  let offset = Line_index.clamp_offset text offset in
+  let current_statement = Document.find_statement document offset in
   let stmt =
     Option.map (fun (statement : Document.checked_statement) -> statement.block)
       current_statement
@@ -87,7 +76,13 @@ let at ?cache ~path text offset =
   else
     let stmt : Statements.t =
       match stmt with
-      | None -> { text = hole; props = []; pos = (start, start + String.length hole); metadata = []; comments = []; errors = [] }
+      | None ->
+        { text = hole;
+          pos = (start, start + String.length hole);
+          props = [];
+          metadata = [];
+          comments = [];
+          errors = [] }
       | Some stmt ->
         let base = fst stmt.pos in
         let (start, stop) = start - base, stop - base in
@@ -102,14 +97,15 @@ let at ?cache ~path text offset =
               in
               adjusted_offset, meta) stmt.metadata }
     in
-    let current = Document.check_at document stmt in
+    let current = Document.recheck document stmt in
     let other_statement (statement : Document.checked_statement) =
       if Sql.Pos.covers statement.stmt.pos offset
       then None
       else Some statement.stmt
     in
     let statements =
-      current :: List.filter_map other_statement document.Document.statements
+      Seq.cons current
+        (Seq.filter_map other_statement (Array.to_seq document.Document.statements))
     in
     let base = fst stmt.pos in
     let hole_start = start - base in
@@ -127,6 +123,9 @@ let at ?cache ~path text offset =
       | Parameter sigil -> base + sigil, stop
       | Name _ | Column_of _ -> replace
     in
+    let find_symbol name =
+      Symbol.Index.find_opt name document.Document.index
+    in
     let tables =
       document.Document.index
       |> Symbol.Index.bindings
@@ -134,37 +133,30 @@ let at ?cache ~path text offset =
     in
     let source_scope =
       Option.bind current_statement (fun (statement : Document.checked_statement) ->
-        match Document.select_scope_at_opt statement.stmt offset with
+        match Document.select_scope_opt statement.stmt offset with
         | Some _ as scope -> scope
         | None ->
-          match statement.stmt.scope.symbols with
+          match Document.statement_scope statement.stmt with
           | [] -> None
-          | _ :: _ -> Some statement.stmt.scope)
+          | _ :: _ as scope -> Some scope)
     in
     let names =
       List.filter_map (fun (lexeme : Recover_parser.lexeme) ->
         Recover_parser.ident_name lexeme.token) full.trace.seen
     in
     let (recovery_sources, sources) =
-      let trace_tables =
-        List.filter_map (fun name ->
-          Symbol.Index.find_opt name document.Document.index)
-          full.trace.tables
+      let recovery_names =
+        if full.trace.recovery then full.trace.tables @ names
+        else full.trace.tables
       in
-      let recovery_tables =
-        if full.trace.recovery then
-          List.filter_map (fun name ->
-            Symbol.Index.find_opt name document.Document.index)
-            names
-        else
-          []
-      in
+      let recovery_tables = List.filter_map find_symbol recovery_names in
       let alias_sources =
         full.trace.sources |> List.filter_map (fun (src, (alias : Sql.source_alias option)) ->
           match src, alias with
           | `Table (table : Sql.table_name), Some alias ->
-            Option.map (Symbol.rename alias.table_name.value.tn)
-              (Symbol.Index.find_opt table.tn document.Document.index)
+            Option.map (fun (symbol : Symbol.t) ->
+              { symbol with name = alias.table_name.value.tn; kind = Symbol.Alias table })
+              (find_symbol table.tn)
           | `Table _, None | (`Select _ | `Nested _ | `ValueRows _), _ -> None)
       in
       let visible sources =
@@ -174,12 +166,10 @@ let at ?cache ~path text offset =
       in
       let recovery_sources =
         visible
-          (current.scope.symbols @ trace_tables @ recovery_tables @ alias_sources)
+          (Document.statement_scope current @ recovery_tables @ alias_sources)
       in
       let sources =
-        Option.fold ~none:recovery_sources
-          ~some:(fun (scope : Document.scope) -> visible scope.symbols)
-          source_scope
+        Option.fold ~none:recovery_sources ~some:visible source_scope
       in
       recovery_sources, sources
     in
@@ -195,43 +185,51 @@ let at ?cache ~path text offset =
               tables)
             names
         in
-        let priority (symbol : Symbol.t) =
-          Priority.Table {
-            fits = List.for_all (has_column symbol) matching_names;
-            in_query =
-              Option.is_some (Symbol.find_opt recovery_sources symbol.name);
-          }
+        let rank (symbol : Symbol.t) =
+          let matches_columns =
+            List.for_all (has_column symbol) matching_names
+          in
+          let in_query =
+            Option.is_some (Symbol.find_opt recovery_sources symbol.name)
+          in
+          Rank.table matches_columns in_query
         in
         let ctes =
           sources
-          |> List.filter (fun (symbol : Symbol.t) -> match symbol.kind with Cte -> true | Table | Local -> false)
+          |> List.filter (fun (symbol : Symbol.t) ->
+            match symbol.kind with Cte -> true | Table | Derived | Alias _ -> false)
           |> List.map (fun (symbol : Symbol.t) ->
-            { label = symbol.name; detail = "CTE in this statement"; kind = Interface; priority = Priority.Cte })
+            { label = symbol.name; detail = "CTE in this statement";
+              kind = Interface; rank = Rank.exact })
         in
-        ctes @ listing_items ~priority ~kind:Struct ~what:"table" tables
-      | Column_name -> List.concat_map (column_items ~priority:Priority.Column) sources
-      | Qualifier -> listing_items ~priority:(Fun.const Priority.Source) ~kind:Module ~what:"source" sources
+        ctes @ listing_items ~rank ~kind:Struct ~kind_name:"table" tables
+      | Column_name ->
+        List.concat_map (column_items ~rank:Rank.column) sources
+      | Qualifier ->
+        listing_items ~rank:(Fun.const Rank.source) ~kind:Module
+          ~kind_name:"source" sources
       | Function_name ->
         functions |> List.filter (fun name -> not (Sql_lexer.Keywords.mem name Sql_lexer.keywords)) |> List.map function_item
     in
     let completions =
       match slot with
       | Parameter _ ->
-        List.to_seq statements
+        statements
         |> Seq.concat_map (fun stmt -> Params.all_nodes (Document.params stmt))
         |> Seq.filter_map (fun (node : Params.node) ->
-          match node.kind with Var (id, _) -> id.value | Branch _ -> None)
+          match node.kind with Var _ -> node.param.value | Branch _ -> None)
         |> Seq.append (List.to_seq full.trace.seen
           |> Seq.filter_map (fun (lexeme : Recover_parser.lexeme) ->
           match lexeme.token with PARAM { value = Some name; _ } -> Some name | _ -> None))
         |> Seq.filter (Fun.negate (String.equal hole))
-        |> Parameter_names.of_seq
-        |> Parameter_names.elements
+        |> List.of_seq
+        |> List.sort_uniq String.compare
         |> List.map (fun name ->
-          { label = "@" ^ name; detail = "parameter"; kind = Variable; priority = Priority.Parameter })
+          { label = "@" ^ name; detail = "parameter"; kind = Variable;
+            rank = Rank.exact })
       | Column_of q ->
         Option.fold ~none:[]
-          ~some:(column_items ~priority:Priority.Qualified_column)
+          ~some:(column_items ~rank:Rank.exact)
           (Symbol.find_opt sources q)
       | Name roles ->
         let is_type = function Sql_tokens.TYPE _ -> true | _ -> false in
@@ -243,10 +241,10 @@ let at ?cache ~path text offset =
             if List.exists (String.equal keyword) functions then function_item keyword
             else
               { label = String.uppercase_ascii keyword; detail = "keyword";
-                kind = Keyword; priority = Priority.Keyword })
+                kind = Keyword; rank = Rank.keyword })
           |> List.of_seq
         in
         List.concat_map role roles @ keywords
-        |> Prelude.unique_by (module String) (fun completion -> completion.label)
+        |> Prelude.unique_by ~key:(fun completion -> completion.label)
     in
     replace, completions

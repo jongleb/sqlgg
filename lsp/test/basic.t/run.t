@@ -222,3 +222,47 @@ A list parameter is one row typed after its element, not a choice with the eleme
   ```sql
   id  Int
   ```
+
+The generated dynamic-select parameter has no source token and does not shadow
+the first projected column:
+
+  $ ../ask.exe dynamic.sql tokens 'hover:SELECT id^'
+  ### tokens
+  10:58-10:61 parameter
+  ### hover:SELECT id^
+  10:7-10:9
+  ```sql
+  products.id  Int
+  ```
+  
+  Declared in `dynamic.sql`
+
+Lexical errors are diagnostics on the offending span, not a dead file: an
+unterminated literal ends its statement so later statements are still analyzed,
+while an unterminated comment runs to the end of the file.
+
+  $ ../ask.exe lexical.sql diags hover:@x
+  ### diags
+  3:26-3:32 unterminated string literal
+  7:30-9:0 unterminated comment
+  ### hover:@x
+  7:26-7:28
+  ```sql
+  @x  Int
+  ```
+
+Malformed properties are reported where their lists stop making sense, without
+silencing SQL analysis around them:
+
+  $ ../ask.exe props.sql diags hover:'a FROM'
+  ### diags
+  2:0-3:0 malformed property list
+  4:0-5:0 unknown property dynamik_select
+  6:0-7:0 unknown include=sometimes (expected reuse, execute or reuse_and_execute)
+  ### hover:a FROM
+  3:7-3:8
+  ```sql
+  t.a  Int?
+  ```
+  
+  Declared in `props.sql`

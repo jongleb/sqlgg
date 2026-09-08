@@ -8,7 +8,9 @@
 (executable
  (name protocol)
  (modules protocol)
- (libraries re sqlgg unix yojson))
+ (libraries re sqlgg unix yojson)
+ (preprocess
+  (pps ppx_deriving_yojson)))
 
 (cram
  (deps

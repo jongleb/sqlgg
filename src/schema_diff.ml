@@ -115,7 +115,8 @@ let action_of : Sql.alter_action -> Name.action = function
   | `Add (col, _) -> action_on "add_col" col.name.value
   | `Drop name -> action_on "drop_col" name
   | `Change (old_name, new_col, _) ->
-    if old_name = new_col.name.value then action_on "change_col" new_col.name.value
+    if String.equal old_name new_col.name.value then
+      action_on "change_col" new_col.name.value
     else rename "col" old_name new_col.name.value
   | `RenameTable t -> action_on "rename_to" t.tn
   | `RenameColumn (o, n) -> rename "col" o n

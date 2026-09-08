@@ -4,20 +4,15 @@ open Printf
 let ( let* ) = Option.bind
 
 type t = {
-  text : string;
   document : Document.t;
-  stmt : Document.stmt option;
+  stmt : Document.stmt;
   offset : int;
 }
 
-let create ~text document offset =
-  { text; document; offset;
-    stmt =
-      List.find_map (fun (statement : Document.checked_statement) ->
-        if Sql.Pos.covers statement.stmt.pos offset
-        then Some statement.stmt
-        else None)
-        document.Document.statements }
+let create document ~offset =
+  Document.find_statement document offset
+  |> Option.map (fun (statement : Document.checked_statement) ->
+    { document; stmt = statement.stmt; offset })
 
 type ident = {
   name : string;
@@ -25,97 +20,121 @@ type ident = {
   qualifier : string option;
 }
 
-let find_ident_opt t =
-  let* (stmt : Document.stmt) = t.stmt in
-  let base = fst stmt.pos in
-  let rec loop acc = function
-    | [] -> None
-    | (lexeme : Recover_parser.lexeme) :: rest ->
-      match Recover_parser.ident_name lexeme.token with
-      | Some name when Sql.Pos.covers lexeme.pos (t.offset - base) ->
-        Some { name; pos = Sql.Pos.shift base lexeme.pos;
-          qualifier = Recover_parser.qualifier_before acc }
-      | Some _ | None -> loop (lexeme :: acc) rest
-  in
-  loop [] (Recover_parser.tokens (String.sub t.text base (snd stmt.pos - base)))
+type resolved_column = { source : Symbol.t; column : Symbol.column }
 
-let find_param_opt t =
-  Params.find_node_opt (Option.fold ~none:[] ~some:Document.params t.stmt)
-    t.offset
-    ~f:(fun (node : Params.node) ->
-      match node.kind with Var _ -> Some node | Branch _ -> None)
-
-let find_shared_query_opt t =
-  let* (stmt : Document.stmt) = t.stmt in
-  let base = fst stmt.pos in
-  List.find_map (fun (lexeme : Recover_parser.lexeme) ->
-    match lexeme.token with
-    | SHARED_QUERY_REF reference
-      when Sql.Pos.covers reference.pos (t.offset - base) ->
-      Some (reference.value, Sql.Pos.shift base reference.pos)
-    | _ -> None)
-    (Recover_parser.tokens (String.sub t.text base (snd stmt.pos - base)))
-
-let resolve_alias ~aliases symbols name =
-  let* table = Sql.find_table_alias aliases name in
-  Symbol.find_opt symbols table.tn
+type resolution =
+  | Source of { symbol : Symbol.t; declaration : Symbol.t option }
+  | Columns of resolved_column * resolved_column list
 
 type target =
-  | Source of Symbol.t
-  | Columns of (Symbol.t * Symbol.column) * (Symbol.t * Symbol.column) list
+  | Parameter of Params.node
+  | Name of resolution
+  | Expr of Sql.Type.t
+  | Statement of { stmt : Document.stmt; loc : Symbol.loc option }
 
-let stmt_scope t =
-  Option.fold ~none:([], []) ~some:(fun stmt ->
-    let scope = Document.scope_at stmt t.offset in
-    scope.symbols, scope.aliases)
-    t.stmt
-
-let resolve t id =
-  let (scope, aliases) = stmt_scope t in
-  let find_global_opt name =
-    match Symbol.Index.find_opt name t.document.Document.index with
-    | Some _ as found -> found
-    | None ->
-      Option.bind (Sql.find_table_alias aliases name) (fun table ->
-        Symbol.Index.find_opt table.tn t.document.Document.index)
+let make_target cursor =
+  let located pos target = Some { Sql.value = target; pos } in
+  let base = fst cursor.stmt.Document.pos in
+  let local = cursor.offset - base in
+  let tokens = Lazy.force cursor.stmt.tokens in
+  let cursor_node =
+    Params.all_nodes (Document.params cursor.stmt)
+    |> Seq.filter_map (fun (node : Params.node) ->
+      Option.map
+        (fun { Params.cursor = pos; _ } -> node, pos)
+        node.placement)
+    |> Sql.Pos.find_innermost_opt cursor.offset
   in
-  let find_scoped_opt name =
-    match Symbol.find_opt scope name with
-    | Some _ as found -> found
-    | None -> resolve_alias ~aliases scope name
+  let shared_query () =
+    let* (name, pos) =
+      List.find_map (fun (lexeme : Recover_parser.lexeme) ->
+        match lexeme.token with
+        | SHARED_QUERY_REF reference when Sql.Pos.covers reference.pos local ->
+          Some (reference.value, Sql.Pos.shift base reference.pos)
+        | _ -> None)
+        tokens
+    in
+    let* (stmt, loc) = Document.find_reusable_opt cursor.document name in
+    located pos (Statement { stmt; loc = Some loc })
   in
-  let column_scope =
-    scope
-    |> List.map (fun (symbol : Symbol.t) ->
-      Option.value ~default:symbol
-        (find_global_opt symbol.name))
-    |> Symbol.unique
+  let param () =
+    let* (node, pos) = cursor_node in
+    match node.kind with
+    | Params.Var _ -> Some { Sql.value = Parameter node; pos }
+    | Params.Branch _ -> None
   in
-  let find_columns_opt symbols name =
-    match List.filter_map (fun symbol ->
-      Option.map (fun col -> symbol, col) (Symbol.find_column_opt symbol name))
-      symbols
-    with
-    | [] -> None
-    | head :: tail -> Some (Columns (head, tail))
+  let name () =
+    let* id =
+      let rec loop acc = function
+        | [] -> None
+        | (lexeme : Recover_parser.lexeme) :: _ when fst lexeme.pos > local -> None
+        | (lexeme : Recover_parser.lexeme) :: rest ->
+          match Recover_parser.ident_name lexeme.token with
+          | Some name when Sql.Pos.covers lexeme.pos local ->
+            Some { name; pos = Sql.Pos.shift base lexeme.pos;
+              qualifier = Recover_parser.qualifier_before acc }
+          | Some _ | None -> loop (lexeme :: acc) rest
+      in
+      loop [] tokens
+    in
+    let symbols = Document.scope cursor.stmt cursor.offset in
+    let find_columns sources =
+      let resolved source =
+        Option.map (fun column -> { source; column })
+          (Symbol.find_column_opt source id.name)
+      in
+      match List.filter_map resolved sources with
+      | [] -> None
+      | first :: rest -> Some (Columns (first, rest))
+    in
+    let column_in_scope =
+      Document.sources cursor.stmt cursor.offset
+      |> List.map (Symbol.declared ~schema:cursor.document.Document.index)
+      |> Symbol.unique
+      |> find_columns
+    in
+    let in_schema name =
+      Symbol.Index.find_opt name cursor.document.Document.index
+    in
+    let* resolution =
+      match id.qualifier with
+      | Some qualifier ->
+        let owner =
+          match Symbol.find_opt symbols qualifier with
+          | Some symbol -> Some (Symbol.declared ~schema:cursor.document.Document.index symbol)
+          | None -> in_schema qualifier
+        in
+        Option.fold owner ~none:column_in_scope ~some:(fun owner -> find_columns [ owner ])
+      | None ->
+        let source_in_scope =
+          Symbol.find_opt symbols id.name
+          |> Option.map (fun symbol ->
+            let declaration = Symbol.declaration ~schema:cursor.document.Document.index symbol in
+            Source { symbol; declaration })
+        in
+        let source_in_schema =
+          in_schema id.name
+          |> Option.map (fun symbol -> Source { symbol; declaration = Some symbol })
+        in
+        List.find_map Fun.id [ source_in_scope; column_in_scope; source_in_schema ]
+    in
+    located id.pos (Name resolution)
   in
-  let resolve_exact find_source_opt =
-    match id.qualifier with
-    | None ->
-      Option.map (fun symbol -> Source symbol)
-        (find_source_opt id.name)
-    | Some q ->
-      let* symbol = find_source_opt q in
-      match Symbol.find_column_opt symbol id.name with
-      | Some col -> Some (Columns ((symbol, col), []))
-      | None -> Some (Source symbol)
+  let branch () =
+    let* (node, pos) = cursor_node in
+    match node.kind with
+    | Params.Branch _ -> Some { Sql.value = Parameter node; pos }
+    | Params.Var _ -> None
   in
-  match resolve_exact find_global_opt with
-  | Some _ as found -> found
-  | None ->
-    match resolve_exact find_scoped_opt with
-    | Some _ as found -> found
-    | None -> find_columns_opt column_scope id.name
+  let expr () =
+    Sql.Pos.find_innermost_opt cursor.offset (List.to_seq (Document.exprs cursor.stmt))
+    |> Option.map (fun (typ, pos) -> { Sql.value = Expr typ; pos })
+  in
+  List.find_map (fun candidate -> candidate ())
+    [ param; name; branch; expr; shared_query ]
+  |> Option.value ~default:
+      { Sql.value = Statement { stmt = cursor.stmt; loc = None };
+        pos = cursor.stmt.pos }
 
 module Markdown = struct
   let with_buffer f = let b = Buffer.create 256 in f b; Buffer.contents b
@@ -131,57 +150,65 @@ module Markdown = struct
 
   let column_rows = List.map (fun (attr : Sql.attr) -> attr.name, Sql.Type.show attr.domain)
 
-  let shape = function
-    | Params.Scalar typ -> Sql.Type.show typ
-    | List [ typ ] -> Sql.Type.show typ ^ " list"
-    | List types -> sprintf "(%s) list" (String.concat ", " (List.map Sql.Type.show types))
-    | Compound -> ""
-
   let param_row depth node =
-    String.make (depth * 2) ' ' ^ Params.label node, shape (Params.shape node)
+    let shape =
+      match Params.shape node with
+      | `Scalar typ -> Sql.Type.show typ
+      | `Row [ typ ] -> Sql.Type.show typ ^ " list"
+      | `Row types ->
+        sprintf "(%s) list" (String.concat ", " (List.map Sql.Type.show types))
+      | `Compound -> ""
+    in
+    String.make (depth * 2) ' ' ^ Params.label node, shape
 
   let param_rows nodes =
     let rec rows depth (node : Params.node) =
       let shape' = Params.shape node in
-      let children = match shape' with Compound -> node.children | Scalar _ | List _ -> [] in
+      let children =
+        match shape' with
+        | `Compound -> node.children
+        | `Scalar _ | `Row _ -> []
+      in
       Seq.cons
         (param_row depth node)
         (Seq.concat_map (rows (depth + 1)) (List.to_seq children))
     in
     Params.outline nodes |> List.to_seq |> Seq.concat_map (rows 0) |> List.of_seq
 
-  let origin b (owner : Symbol.t) =
-    match owner.kind, owner.loc with
+  let origin b (source : Symbol.t) =
+    match source.kind, source.loc with
     | Table, Some loc -> bprintf b "\nDeclared in `%s`\n" loc.file
     | Table, None -> ()
-    | (Cte | Local), _ -> bprintf b "\nAvailable in this statement\n"
+    | (Cte | Derived | Alias _), _ -> bprintf b "\nAvailable in this statement\n"
 
-  let target = function
-    | Source (symbol : Symbol.t) ->
+  let resolution = function
+    | Source { symbol; declaration } ->
       with_buffer @@ fun b ->
         begin match symbol.kind with
         | Table -> bprintf b "**table** `%s`\n\n" symbol.name
         | Cte -> bprintf b "**CTE** `%s`\n\n" symbol.name
-        | Local -> bprintf b "`%s`\n\n" symbol.name
+        | Derived -> bprintf b "**subquery** `%s`\n\n" symbol.name
+        | Alias target ->
+          bprintf b "**alias** `%s` of `%s`\n\n" symbol.name (Sql.show_table_name target)
         end;
         section b (column_rows (Symbol.columns symbol));
-        origin b symbol
-    | Columns (head, tail) ->
-      head :: tail |> List.map (fun ((owner : Symbol.t), (col : Symbol.column)) ->
+        origin b (Option.value ~default:symbol declaration)
+    | Columns (first, rest) ->
+      first :: rest |> List.map (fun { source; column } ->
         with_buffer @@ fun b ->
-          section b [ owner.name ^ "." ^ col.attr.name, Sql.Type.show col.attr.domain ];
-          origin b owner)
+          section b [ source.name ^ "." ^ column.attr.name, Sql.Type.show column.attr.domain ];
+          origin b source)
       |> String.concat "\n---\n"
 
   let param (node : Params.node) = with_buffer @@ fun b ->
     match Params.shape node with
-    | Scalar _ | List _ -> section b (param_rows [ node ])
-    | Compound ->
+    | `Scalar _ | `Row _ -> section b (param_rows [ node ])
+    | `Compound ->
       section b [ param_row 0 node ];
       section ~title:"Branches" b (param_rows node.children)
 
-  let branch (choice, (node : Params.node)) = with_buffer @@ fun b ->
-    bprintf b "branch `%s` of `%s`\n" (Params.label node) (Params.name choice);
+  let branch (node : Params.node) = with_buffer @@ fun b ->
+    bprintf b "branch `%s` of `%s`\n" (Params.label node) (Params.name node.param);
     match param_rows node.children with
     | [] -> bprintf b "\nTakes no parameters.\n"
     | rows -> section ~title:"Parameters in this branch" b rows
@@ -211,95 +238,52 @@ module Markdown = struct
 
   let stmt (stmt : Document.stmt) =
     match stmt.outcome, stmt.name with
-    | (Skip | Error _), None -> None
-    | (Skip | Error _), Some name -> Some (sprintf "`%s`\n" name)
-    | Ok c, name ->
+    | (Verbatim | Rejected _), None -> None
+    | (Verbatim | Rejected _), Some name -> Some (sprintf "`%s`\n" name)
+    | Checked checked, name ->
       Some (with_buffer @@ fun b ->
         Option.iter (bprintf b "`%s` — ") name;
-        bprintf b "%s\n" (kind c.kind);
-        section ~title:"Parameters" b (param_rows c.params);
-        section ~title:"Result" b (column_rows c.schema))
+        bprintf b "%s\n" (kind checked.kind);
+        section ~title:"Parameters" b (param_rows checked.params);
+        section ~title:"Result" b (column_rows checked.schema))
 end
 
-let hover t =
-  let param t =
-    let* (node, pos) = find_param_opt t in
-    Some (Markdown.param node, pos)
+let hover cursor =
+  let { Sql.value = target; pos } = make_target cursor in
+  let text =
+    match target with
+    | Parameter ({ kind = Params.Var _; _ } as node) ->
+      Some (Markdown.param node)
+    | Parameter ({ kind = Params.Branch _; _ } as node) ->
+      Some (Markdown.branch node)
+    | Name resolved -> Some (Markdown.resolution resolved)
+    | Expr typ -> Some (Markdown.expr typ)
+    | Statement { stmt; _ } -> Markdown.stmt stmt
   in
-  let ident t =
-    let* id = find_ident_opt t in
-    let* target = resolve t id in
-    Some (Markdown.target target, id.pos)
-  in
-  let branch t =
-    let* (branch, pos) =
-      Params.find_node_opt
-        (Option.fold ~none:[] ~some:Document.params t.stmt) t.offset
-        ~f:(fun (node : Params.node) ->
-          match node.kind with Branch (choice, _) -> Some (choice, node) | Var _ -> None)
-    in
-    Some (Markdown.branch branch, pos)
-  in
-  let expr t =
-    let* stmt = t.stmt in
-    let* (typ, pos) =
-      Sql.Pos.find_innermost_opt t.offset (List.to_seq stmt.exprs)
-    in
-    Some (Markdown.expr typ, pos)
-  in
-  let shared_query t =
-    let* (name, pos) = find_shared_query_opt t in
-    let* (stmt, _) = Document.find_reusable_opt t.document name in
-    let* text = Markdown.stmt stmt in
-    Some (text, pos)
-  in
-  let stmt t =
-    let* (stmt : Document.stmt) = t.stmt in
-    let* text = Markdown.stmt stmt in
-    Some (text, stmt.pos)
-  in
-  List.find_map (fun candidate -> candidate t)
-    [ param; ident; branch; expr; shared_query; stmt ]
+  Option.map (fun text -> text, pos) text
 
-let definition t =
-  let jump (owner : Symbol.t) (loc : Symbol.loc option) =
-    match owner.kind, loc with
+let definition cursor =
+  let locations (source : Symbol.t) (loc : Symbol.loc option) =
+    match source.kind, loc with
     | _, None -> []
     | Table, Some loc -> [ loc ]
-    | (Cte | Local), Some loc ->
-      if Sql.Pos.contains loc.pos t.offset then [] else [ loc ]
+    | (Cte | Derived | Alias _), Some loc ->
+      if Sql.Pos.contains loc.pos cursor.offset then [] else [ loc ]
   in
-  let jump_to (symbol : Symbol.t) = jump symbol symbol.loc in
-  match find_shared_query_opt t with
-  | Some (name, _) ->
-    Option.fold ~none:[] ~some:(fun (_, loc) -> [ loc ])
-      (Document.find_reusable_opt t.document name)
-  | None ->
-    begin match find_param_opt t, find_ident_opt t with
-    | Some _, _ | None, None -> []
-    | None, Some id ->
-      match resolve t id with
-      | None -> []
-      | Some (Source symbol) ->
-        begin match jump_to symbol with
-        | _ :: _ as locs -> locs
-        | [] ->
-          let (scope, aliases) = stmt_scope t in
-          let target =
-            Option.bind
-              (Sql.find_table_alias aliases symbol.name)
-              (fun table ->
-                match Symbol.Index.find_opt table.tn t.document.Document.index with
-                | Some _ as found -> found
-                | None -> Symbol.find_opt scope table.tn)
-          in
-          Option.fold ~none:[] ~some:jump_to target
-        end
-      | Some (Columns (head, tail)) ->
-        head :: tail |> List.concat_map (fun ((owner : Symbol.t), (col : Symbol.column)) ->
-          let loc = match col.loc with None -> owner.loc | Some _ -> col.loc in
-          jump owner loc)
+  let symbol_locations (symbol : Symbol.t) = locations symbol symbol.loc in
+  let { Sql.value = target; _ } = make_target cursor in
+  match target with
+  | Parameter _ | Expr _ -> []
+  | Statement { loc; _ } -> Option.to_list loc
+  | Name (Source { symbol; declaration }) ->
+    begin match symbol_locations symbol with
+    | _ :: _ as found -> found
+    | [] -> Option.fold ~none:[] ~some:symbol_locations declaration
     end
+  | Name (Columns (first, rest)) ->
+    first :: rest |> List.concat_map (fun { source; column } ->
+      let loc = match column.loc with None -> source.loc | Some _ -> column.loc in
+      locations source loc)
 
 type token = { pos : Sql.Pos.t; typ : Params.token_type }
 
@@ -311,20 +295,15 @@ let semantic_tokens ~lines document =
     | token :: rest when fst token.pos < stop -> disjoint acc stop rest
     | token :: rest -> disjoint (token :: acc) (snd token.pos) rest
   in
-  let token_type : Params.kind -> Params.token_type = function
-    | Var (_, (Sql.Single _ | SingleIn _ | ChoiceIn _ | TupleList _ | SharedVarsGroup _)) -> Parameter
-    | Var (_, (Choice _ | DynamicSelect _ | DynamicSelectJoin _ | OptionActionChoice _)) -> Enum
-    | Branch _ -> Enum_member
-  in
-  List.to_seq document.Document.statements
+  Array.to_seq document.Document.statements
   |> Seq.concat_map (fun (statement : Document.checked_statement) ->
     Params.all_nodes (Document.params statement.stmt))
   |> Seq.filter_map (fun (node : Params.node) ->
-    match Params.token_pos node with
-    | Some pos when not (Sql.Pos.is_empty pos) ->
-      Some { pos; typ = token_type node.kind }
-    | Some _ | None -> None)
+    let* { token; _ } = node.placement in
+    let* pos = token in
+    if Sql.Pos.is_empty pos then None
+    else Some { pos; typ = Params.token_type node })
+  |> Seq.filter single_line
   |> List.of_seq
-  |> List.sort (fun a b -> Int.compare (fst a.pos) (fst b.pos))
-  |> List.filter single_line
+  |> List.stable_sort (fun a b -> Int.compare (fst a.pos) (fst b.pos))
   |> disjoint [] 0

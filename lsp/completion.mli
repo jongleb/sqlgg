@@ -1,13 +1,8 @@
-module Priority : sig
-  type t
-  val order : t -> int
-end
-
-type item = {
+type item = private {
   label : string;
   detail : string;
   kind : Linol_lsp.Types.CompletionItemKind.t;
-  priority : Priority.t;
+  rank : int;
 }
 
-val at : ?cache:Document.Cache.t -> path:string -> string -> int -> Sql.Pos.t * item list
+val make : Document.t -> int -> Sql.Pos.t * item list

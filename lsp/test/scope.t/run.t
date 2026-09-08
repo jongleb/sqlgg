@@ -9,7 +9,7 @@ Aliases, CTEs and subqueries in a statement that type-checks; a CTE column leads
   24:7-24:9 duplicate attribute : id
   ### hover:u.name
   5:7-5:8
-  **table** `users`
+  **alias** `u` of `users`
   
   ```sql
   id    Int?
@@ -19,7 +19,7 @@ Aliases, CTEs and subqueries in a statement that type-checks; a CTE column leads
   Declared in `q.sql`
   ### hover:r.title
   5:15-5:16
-  `r`
+  **alias** `r` of `recent`
   
   ```sql
   id     Int
@@ -29,7 +29,7 @@ Aliases, CTEs and subqueries in a statement that type-checks; a CTE column leads
   Available in this statement
   ### hover:sub.n
   5:24-5:27
-  `sub`
+  **subquery** `sub`
   
   ```sql
   author  Int?
@@ -48,7 +48,7 @@ Aliases, CTEs and subqueries in a statement that type-checks; a CTE column leads
   
   Available in this statement
   ### def:u.name
-  q.sql 1:13-1:18
+  q.sql 6:14-6:15
   ### def:r.title
   q.sql 7:15-7:16
   ### def:title, sub
@@ -74,25 +74,23 @@ Aliases, CTEs and subqueries in a statement that type-checks; a CTE column leads
 
 The same in statements that do not type-check, thanks to the fallback on the sources alone:
 
-  $ ../ask.exe q.sql hover:'r.id FROM' def:'recent AS r' complete:nmae hover:'uu.id' complete:'nmae ='
+  $ ../ask.exe q.sql hover:'r.id FROM' complete:nmae hover:'uu.id' complete:'nmae ='
   ### hover:r.id FROM
   11:15-11:16
-  `r`
+  **alias** `r` of `recent`
   
   ```sql
   id  Int?
   ```
   
   Available in this statement
-  ### def:recent AS r
-  q.sql 4:5-4:11
   ### complete:nmae
   replace 11:9-11:13
   id  Int? — u
   name  Text? — u
   ### hover:uu.id
   13:40-13:42
-  **table** `users`
+  **alias** `uu` of `users`
   
   ```sql
   id    Int?
@@ -113,7 +111,7 @@ scope, not just the first one.
   $ ../ask.exe q.sql hover:'agg.n WHERE' def:'agg.n WHERE' complete:'n WHERE'
   ### hover:agg.n WHERE
   18:14-18:17
-  `agg`
+  **subquery** `agg`
   
   ```sql
   author  Int?
@@ -133,7 +131,7 @@ A subquery inside WHERE:
   $ ../ask.exe q.sql hover:'p.title' def:'p.title'
   ### hover:p.title
   15:70-15:71
-  **table** `posts`
+  **alias** `p` of `posts`
   
   ```sql
   id      Int?
@@ -143,110 +141,247 @@ A subquery inside WHERE:
   
   Declared in `q.sql`
   ### def:p.title
-  q.sql 2:13-2:18
+  q.sql 15:62-15:63
 
 Unqualified columns are limited to the current statement scope, including
 aliases, missing columns, and ambiguity:
 
-  $ ../ask.exe q.sql hover:'id FROM users;' hover:'id FROM users AS only_users' hover:'title FROM users;' hover:'id FROM users JOIN' | grep -E '^###|^[a-z_]+\.id|^nothing$'
+  $ ../ask.exe q.sql hover:'id FROM users;' hover:'id FROM users AS only_users' hover:'title FROM users;' hover:'id FROM users JOIN'
   ### hover:id FROM users;
+  20:7-20:9
+  ```sql
   users.id  Int?
+  ```
+  
+  Declared in `q.sql`
   ### hover:id FROM users AS only_users
+  22:7-22:9
+  ```sql
   users.id  Int?
+  ```
+  
+  Declared in `q.sql`
   ### hover:title FROM users;
   nothing
   ### hover:id FROM users JOIN
+  24:7-24:9
+  ```sql
   users.id  Int?
+  ```
+  
+  Declared in `q.sql`
+  
+  ---
+  ```sql
   posts.id  Int?
+  ```
+  
+  Declared in `q.sql`
 
 Nested SELECT scopes do not leak into each other:
 
-  $ ../ask.exe q.sql hover:'id FROM users WHERE' hover:'author FROM posts AS p' | grep -E '^###|^[a-z_]+\.[a-z_]+  '
+  $ ../ask.exe q.sql hover:'id FROM users WHERE' hover:'author FROM posts AS p'
   ### hover:id FROM users WHERE
+  15:7-15:9
+  ```sql
   users.id  Int?
+  ```
+  
+  Declared in `q.sql`
   ### hover:author FROM posts AS p
+  15:41-15:47
+  ```sql
   posts.author  Int?
+  ```
+  
+  Declared in `q.sql`
 
-  $ ../ask.exe q.sql complete:'id FROM users WHERE' complete:'author FROM posts AS p' | grep -E '^###|^(author|id|name|title)  '
-  ### complete:id FROM users WHERE
+  $ ../ask.exe q.sql complete-fields:'id FROM users WHERE' complete-fields:'author FROM posts AS p'
+  ### complete-fields:id FROM users WHERE
+  replace 15:7-15:9
   id  Int? — users
   name  Text? — users
-  ### complete:author FROM posts AS p
+  ### complete-fields:author FROM posts AS p
+  replace 15:41-15:47
   author  Int? — posts
   id  Int? — posts
   title  Text? — posts
 
 CTE bodies, FROM subqueries, and ORDER BY use their own SELECT scope:
 
-  $ ../ask.exe q.sql hover:'id, title FROM posts' hover:'author, count' hover:'ORDER BY id^' | grep -E '^###|^[a-z_]+\.[a-z_]+  '
+  $ ../ask.exe q.sql hover:'id, title FROM posts' hover:'author, count' hover:'ORDER BY id^'
   ### hover:id, title FROM posts
+  4:23-4:25
+  ```sql
   posts.id  Int?
+  ```
+  
+  Declared in `q.sql`
   ### hover:author, count
+  8:13-8:19
+  ```sql
   posts.author  Int?
+  ```
+  
+  Declared in `q.sql`
   ### hover:ORDER BY id^
+  15:93-15:95
+  ```sql
   users.id  Int?
+  ```
+  
+  Declared in `q.sql`
 
-  $ ../ask.exe q.sql complete:'id, title FROM posts' complete:'author, count' complete:'ORDER BY id^' | grep -E '^###|^(author|id|name|title)  '
-  ### complete:id, title FROM posts
+  $ ../ask.exe q.sql complete-fields:'id, title FROM posts' complete-fields:'author, count' complete-fields:'ORDER BY id^'
+  ### complete-fields:id, title FROM posts
+  replace 4:23-4:25
   author  Int? — posts
   id  Int? — posts
   title  Text? — posts
-  ### complete:author, count
+  ### complete-fields:author, count
+  replace 8:13-8:19
   author  Int? — posts
   id  Int? — posts
   title  Text? — posts
-  ### complete:ORDER BY id^
+  ### complete-fields:ORDER BY id^
+  replace 15:93-15:95
   id  Int? — users
   name  Text? — users
 
 Empty and compound SELECTs keep independent scopes:
 
-  $ ../ask.exe q.sql hover:'id FROM users UNION' hover:'id FROM posts;' | grep -E '^###|^[a-z_]+\.[a-z_]+  '
+  $ ../ask.exe q.sql hover:'id FROM users UNION' hover:'id FROM posts;'
   ### hover:id FROM users UNION
+  26:7-26:9
+  ```sql
   users.id  Int?
+  ```
+  
+  Declared in `q.sql`
   ### hover:id FROM posts;
+  26:34-26:36
+  ```sql
   posts.id  Int?
+  ```
+  
+  Declared in `q.sql`
 
-  $ ../ask.exe q.sql complete:'1 AS one' complete:'id FROM users UNION' complete:'id FROM posts;' | grep -E '^###|^(author|id|name|title)  '
-  ### complete:1 AS one
-  ### complete:id FROM users UNION
+  $ ../ask.exe q.sql complete-fields:'1 AS one' complete-fields:'id FROM users UNION' complete-fields:'id FROM posts;'
+  ### complete-fields:1 AS one
+  replace 25:7-25:7
+  ### complete-fields:id FROM users UNION
+  replace 26:7-26:9
   id  Int? — users
   name  Text? — users
-  ### complete:id FROM posts;
+  ### complete-fields:id FROM posts;
+  replace 26:34-26:36
   author  Int? — posts
   id  Int? — posts
   title  Text? — posts
 
 INSERT, UPDATE, and DELETE use their target table as scope:
 
-  $ ../ask.exe q.sql hover:'id, name) VALUES' hover:'name = @next_name' hover:'id = @delete_id' | grep -E '^###|^[a-z_]+\.[a-z_]+  '
+  $ ../ask.exe q.sql hover:'id, name) VALUES' hover:'name = @next_name' hover:'id = @delete_id'
   ### hover:id, name) VALUES
+  27:19-27:21
+  ```sql
   users.id  Int?
+  ```
+  
+  Declared in `q.sql`
   ### hover:name = @next_name
+  28:17-28:21
+  ```sql
   users.name  Text?
+  ```
+  
+  Declared in `q.sql`
   ### hover:id = @delete_id
+  29:24-29:26
+  ```sql
   users.id  Int?
+  ```
+  
+  Declared in `q.sql`
 
-  $ ../ask.exe q.sql complete:'id, name) VALUES' complete:'name = @next_name' complete:'id = @delete_id' | grep -E '^###|^(id|name)  '
-  ### complete:id, name) VALUES
+  $ ../ask.exe q.sql complete-fields:'id, name) VALUES' complete-fields:'name = @next_name' complete-fields:'id = @delete_id'
+  ### complete-fields:id, name) VALUES
+  replace 27:19-27:21
   id  Int? — users
   name  Text? — users
-  ### complete:name = @next_name
+  ### complete-fields:name = @next_name
+  replace 28:17-28:21
   id  Int? — users
   name  Text? — users
-  ### complete:id = @delete_id
+  ### complete-fields:id = @delete_id
+  replace 29:24-29:26
   id  Int? — users
   name  Text? — users
 
-Reusable query references link to their declaration; annotation comments stay
-outside statement hover:
+Annotation comments stay outside statement hover:
 
-  $ ../ask.exe q.sql hover:@shared_users 'hover:&shared_users' 'hover:name FROM users;' 'def:&shared_users' | grep -E '^###|^nothing$|^`shared_users`|^[a-z_]+\.[a-z_]+  |^q.sql'
+  $ ../ask.exe q.sql hover:@shared_users 'hover:name FROM users;'
   ### hover:@shared_users
   nothing
-  ### hover:&shared_users
-  `shared_users` — SELECT — any number of rows
   ### hover:name FROM users;
+  32:7-32:11
+  ```sql
   users.name  Text?
-  ### def:&shared_users
-  q.sql 32:0-32:22
+  ```
+  
+  Declared in `q.sql`
+
+Statement sources shadow schema tables with the same name.
+
+The alias `u` stands for `users`, even though a table named `u` exists:
+
+  $ ../ask.exe shadowing.sql hover:'SELECT u^' def:'SELECT u^' hover:'SELECT u.nam^' def:'SELECT u.nam^'
+  ### hover:SELECT u^
+  8:7-8:8
+  **alias** `u` of `users`
+  
+  ```sql
+  id    Int?
+  name  Text?
+  ```
+  
+  Declared in `shadowing.sql`
+  ### def:SELECT u^
+  shadowing.sql 8:25-8:26
+  ### hover:SELECT u.nam^
+  8:9-8:13
+  ```sql
+  users.name  Text?
+  ```
+  
+  Declared in `shadowing.sql`
+  ### def:SELECT u.nam^
+  shadowing.sql 1:28-1:32
+
+A subquery alias shadows the table with the same name:
+
+  $ ../ask.exe shadowing.sql hover:'SELECT shadow.i^' def:'SELECT shadow.i^'
+  ### hover:SELECT shadow.i^
+  11:14-11:16
+  ```sql
+  shadow.id  Int?
+  ```
+  
+  Available in this statement
+  ### def:SELECT shadow.i^
+  shadowing.sql 11:45-11:51
+
+A CTE shadows the table with the same name:
+
+  $ ../ask.exe shadowing.sql hover:'shadow.id FROM shadow^' def:'shadow.id FROM shadow^'
+  ### hover:shadow.id FROM shadow^
+  15:22-15:28
+  **CTE** `shadow`
+  
+  ```sql
+  id  Int?
+  ```
+  
+  Available in this statement
+  ### def:shadow.id FROM shadow^
+  shadowing.sql 14:5-14:11

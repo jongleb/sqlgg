@@ -18,7 +18,7 @@ let dynamic_select_mode props =
 
 let check_dialect sql dialect_features =
   let open Dialect in
-  let position_info ({ pos = (f, l); _ }: dialect_support) = String.slice ~first:f ~last:l sql in
+  let position_info ({ pos = (first, last); _ }: dialect_support) = String.slice ~first ~last sql in
   dialect_features |> List.iter (fun ds ->
     let skip = List.mem ds.feature !Sqlgg_config.no_check_features in
     match support ds !selected, skip with
@@ -48,6 +48,7 @@ let stmt_of_syntax props ({ sql; schema; vars; kind; dialect_features; _ } : Syn
   { Gen.schema; vars; kind; props = Props.Sql sql :: props }
 
 let compile ~dynamic_select (stmt : Statements.t) =
+  let error_tail_length = 32 in
   if Sqlgg_config.debug1 () then Printf.eprintf "------\n%s\n%!" stmt.text;
   try
     Some (Compile.statement ~dynamic_select stmt)
@@ -55,13 +56,16 @@ let compile ~dynamic_select (stmt : Statements.t) =
   | Parser_utils.Error (exn, { pos = (_, stop); token; tail }) ->
     let msg = Parser_utils.message_of_exn exn in
     Error.log "==> %s" stmt.text;
-    if stop = String.length stmt.text && token = "" then
+    if Int.equal stop (String.length stmt.text) && String.equal token "" then
       Error.log "Error: %s" msg
     else begin
-      let (line, col) =
+      let { Line_index.line; character } =
         Line_index.position (Line_index.make stmt.text) stop
       in
-      Error.log "Position %u:%u Tokens: %s%s\nError: %s" (line + 1) col token (String.sub tail 0 (Int.min 32 (String.length tail))) msg
+      Error.log "Position %u:%u Tokens: %s%s\nError: %s"
+        (line + 1) character token
+        (String.sub tail 0 (Int.min error_tail_length (String.length tail)))
+        msg
     end;
     None
   | exn ->
@@ -78,9 +82,11 @@ let compile ~dynamic_select (stmt : Statements.t) =
     raise @@ With_backtrace (exn, bt)
 
 let executable (stmt : Statements.t) =
-  match compile ~dynamic_select:(dynamic_select_mode stmt.props) stmt with
-  | Some (Compile.Executable syntax) -> Some (stmt_of_syntax stmt.props syntax)
-  | Some (Compile.Verbatim | Compile.Reusable _ | Compile.Not_reusable) | None -> None
+  Stdlib.Option.bind
+    (compile ~dynamic_select:(dynamic_select_mode stmt.props) stmt)
+    (function
+      | Compile.Executable syntax -> Some (stmt_of_syntax stmt.props syntax)
+      | Compile.Verbatim | Compile.Reusable _ | Compile.Not_reusable -> None)
 
 let parse_one (stmt : Statements.t) =
   let mode = dynamic_select_mode stmt.props in
@@ -103,7 +109,9 @@ let parse_one (stmt : Statements.t) =
       | Execute -> true
       | Reuse | Reuse_and_execute -> false
     in
-    if has_dynamic_select && only_executable && mode = Props.Both then
+    if has_dynamic_select && only_executable
+       && Props.equal_dynamic_select mode Props.Both
+    then
       let props = Props.Dynamic_select Off :: stmt.props in
       let props =
         match Props.name props with
