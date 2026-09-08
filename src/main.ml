@@ -58,10 +58,10 @@ let compile ~dynamic_select (stmt : Statements.t) =
     if stop = String.length stmt.text && token = "" then
       Error.log "Error: %s" msg
     else begin
-      let (line, col) =
+      let { Line_index.line; character } =
         Line_index.position (Line_index.make stmt.text) stop
       in
-      Error.log "Position %u:%u Tokens: %s%s\nError: %s" (line + 1) col token (String.sub tail 0 (Int.min 32 (String.length tail))) msg
+      Error.log "Position %u:%u Tokens: %s%s\nError: %s" (line + 1) character token (String.sub tail 0 (Int.min 32 (String.length tail))) msg
     end;
     None
   | exn ->

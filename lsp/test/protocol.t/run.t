@@ -11,3 +11,8 @@ Closing a document clears its diagnostics and removes its in-memory state:
 Diagnostics identify the document version they were computed from:
 
   $ ../protocol.exe ../../lsp_main.exe change-versions-diagnostics
+
+Hover over the wire, so everything in lsp_main is exercised: position encoding,
+the line index cache and the document cache:
+
+  $ ../protocol.exe ../../lsp_main.exe hover-throughput

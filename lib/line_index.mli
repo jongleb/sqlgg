@@ -1,7 +1,16 @@
+type position_encoding = [ `UTF8 | `UTF16 ]
+val equal_position_encoding : position_encoding -> position_encoding -> bool
+
+type position = { line : int; character : int }
+
 type t
 
-val make : ?encoding:[ `UTF16 | `UTF8 ] -> string -> t
-val of_file : ?encoding:[ `UTF16 | `UTF8 ] -> string -> t
+val clamp_offset : string -> int -> int
+
+val make : ?position_encoding:position_encoding -> string -> t
+val of_file : ?position_encoding:position_encoding -> string -> t
+
 val line : t -> int -> int
-val position : t -> int -> int * int
+
+val position : t -> int -> position
 val offset : t -> line:int -> character:int -> int

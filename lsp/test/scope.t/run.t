@@ -9,7 +9,7 @@ Aliases, CTEs and subqueries in a statement that type-checks; a CTE column leads
   24:7-24:9 duplicate attribute : id
   ### hover:u.name
   5:7-5:8
-  **table** `users`
+  **alias** `u` of `users`
   
   ```sql
   id    Int?
@@ -19,7 +19,7 @@ Aliases, CTEs and subqueries in a statement that type-checks; a CTE column leads
   Declared in `q.sql`
   ### hover:r.title
   5:15-5:16
-  `r`
+  **alias** `r` of `recent`
   
   ```sql
   id     Int
@@ -29,7 +29,7 @@ Aliases, CTEs and subqueries in a statement that type-checks; a CTE column leads
   Available in this statement
   ### hover:sub.n
   5:24-5:27
-  `sub`
+  **subquery** `sub`
   
   ```sql
   author  Int?
@@ -48,7 +48,7 @@ Aliases, CTEs and subqueries in a statement that type-checks; a CTE column leads
   
   Available in this statement
   ### def:u.name
-  q.sql 1:13-1:18
+  q.sql 6:14-6:15
   ### def:r.title
   q.sql 7:15-7:16
   ### def:title, sub
@@ -77,7 +77,7 @@ The same in statements that do not type-check, thanks to the fallback on the sou
   $ ../ask.exe q.sql hover:'r.id FROM' def:'recent AS r' complete:nmae hover:'uu.id' complete:'nmae ='
   ### hover:r.id FROM
   11:15-11:16
-  `r`
+  **alias** `r` of `recent`
   
   ```sql
   id  Int?
@@ -92,7 +92,7 @@ The same in statements that do not type-check, thanks to the fallback on the sou
   name  Text? — u
   ### hover:uu.id
   13:40-13:42
-  **table** `users`
+  **alias** `uu` of `users`
   
   ```sql
   id    Int?
@@ -113,7 +113,7 @@ scope, not just the first one.
   $ ../ask.exe q.sql hover:'agg.n WHERE' def:'agg.n WHERE' complete:'n WHERE'
   ### hover:agg.n WHERE
   18:14-18:17
-  `agg`
+  **subquery** `agg`
   
   ```sql
   author  Int?
@@ -133,7 +133,7 @@ A subquery inside WHERE:
   $ ../ask.exe q.sql hover:'p.title' def:'p.title'
   ### hover:p.title
   15:70-15:71
-  **table** `posts`
+  **alias** `p` of `posts`
   
   ```sql
   id      Int?
@@ -143,7 +143,7 @@ A subquery inside WHERE:
   
   Declared in `q.sql`
   ### def:p.title
-  q.sql 2:13-2:18
+  q.sql 15:62-15:63
 
 Unqualified columns are limited to the current statement scope, including
 aliases, missing columns, and ambiguity:

@@ -19,3 +19,15 @@ A malformed annotation is reported where the property list stops making sense.
   2:0-3:0 malformed property list
   4:0-5:0 unknown property dynamik_select
   6:0-7:0 unknown include=sometimes (expected reuse, execute or reuse_and_execute)
+
+A rejected property does not silence the statement: the SQL around it is still
+analyzed, so hover keeps working.
+
+  $ ../ask.exe props.sql hover:'a FROM'
+  ### hover:a FROM
+  3:7-3:8
+  ```sql
+  t.a  Int?
+  ```
+  
+  Declared in `props.sql`

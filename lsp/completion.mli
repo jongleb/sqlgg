@@ -10,4 +10,4 @@ type item = {
   priority : Priority.t;
 }
 
-val at : ?cache:Document.Cache.t -> path:string -> string -> int -> Sql.Pos.t * item list
+val make : ?cache:Document.Cache.t -> path:string -> string -> int -> Sql.Pos.t * item list

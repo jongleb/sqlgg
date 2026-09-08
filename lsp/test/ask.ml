@@ -1,4 +1,3 @@
-open Sqlgg
 open Sqlgg_lsp
 open Printf
 
@@ -14,7 +13,7 @@ let load path =
   { path; text; lines = Line_index.make text; document = Document.analyze ~path text }
 
 let position lines offset =
-  let (line, character) = Line_index.position lines offset in
+  let { Line_index.line; character } = Line_index.position lines offset in
   sprintf "%d:%d" (line + 1) character
 
 let range lines (start, stop) = position lines start ^ "-" ^ position lines stop
@@ -31,18 +30,30 @@ let offset doc cursor_marker =
     else cursor_marker, 0
   in
   let n = String.length cursor_marker in
-  match
-    Seq.init (Int.max 0 (String.length doc.text - n + 1)) Fun.id
-    |> Seq.find (fun i -> String.equal (String.sub doc.text i n) cursor_marker)
-  with
+  let len = String.length doc.text in
+  let matches i =
+    let rec loop k = k >= n || (Char.equal doc.text.[i + k] cursor_marker.[k] && loop (k + 1)) in
+    loop 1
+  in
+  let rec search i =
+    if i + n > len then None
+    else if matches i then Some i
+    else Option.bind (String.index_from_opt doc.text (i + 1) cursor_marker.[0]) search
+  in
+  let found =
+    if Int.equal n 0 then Some 0
+    else Option.bind (String.index_from_opt doc.text 0 cursor_marker.[0]) search
+  in
+  match found with
   | Some i -> i + skip
   | None -> failwith ("not in file: " ^ cursor_marker)
 
 let diagnostics doc =
   doc.document.Document.statements
-  |> List.concat_map (fun (statement : Document.checked_statement) ->
-    Document.errors statement.stmt)
-  |> List.iter (fun (e : Document.error) -> printf "%s %s\n" (range doc.lines e.pos) e.msg)
+  |> Array.to_seq
+  |> Seq.concat_map (fun (statement : Document.checked_statement) ->
+    List.to_seq (Document.errors statement.stmt))
+  |> Seq.iter (fun (e : Document.error) -> printf "%s %s\n" (range doc.lines e.pos) e.msg)
 
 let tokens doc =
   Ide.semantic_tokens ~lines:doc.lines doc.document
@@ -50,17 +61,17 @@ let tokens doc =
     printf "%s %s\n" (range doc.lines token.pos) (Params.token_type_to_string token.typ))
 
 let hover doc offset =
-  match Ide.hover (Ide.create ~text:doc.text doc.document offset) with
+  match Option.bind (Ide.create doc.document ~offset) Ide.hover with
   | None -> print_endline "nothing"
   | Some (value, pos) -> printf "%s\n%s" (range doc.lines pos) value
 
 let definition doc offset =
-  match Ide.definition (Ide.create ~text:doc.text doc.document offset) with
+  match Option.fold ~none:[] ~some:Ide.definition (Ide.create doc.document ~offset) with
   | [] -> print_endline "nothing"
   | locs -> List.iter (fun loc -> print_endline (location doc loc)) locs
 
 let complete doc offset =
-  let (replace, completions) = Completion.at ~path:doc.path doc.text offset in
+  let (replace, completions) = Completion.make ~path:doc.path doc.text offset in
   printf "replace %s\n" (range doc.lines replace);
   completions
   |> List.sort (fun (a : Completion.item) b ->

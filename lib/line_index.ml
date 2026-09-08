@@ -1,63 +1,76 @@
 open Stdlib
 
+type position_encoding = [ `UTF8 | `UTF16 ] [@@deriving eq]
+
+type position = { line : int; character : int }
+
 type t = {
   text : string;
-  encoding : [ `UTF8 | `UTF16 ];
+  position_encoding : position_encoding;
   line_starts : int array;
 }
 
-let make ?(encoding = `UTF8) text =
+let make ?(position_encoding = `UTF8) text =
   let next_line start =
     String.index_from_opt text start '\n'
-    |> Option.map (fun nl_pos ->
-         let next = nl_pos + 1 in
+    |> Option.map (fun newline ->
+         let next = newline + 1 in
          next, next)
   in
-  { text; encoding; line_starts = Array.of_seq (Seq.cons 0 (Seq.unfold next_line 0)) }
+  let starts = Seq.cons 0 (Seq.unfold next_line 0) in
+  { text; position_encoding; line_starts = Array.of_seq starts }
 
-let of_file ?encoding path = make ?encoding (In_channel.with_open_bin path In_channel.input_all)
+let of_file ?position_encoding path =
+  make ?position_encoding (In_channel.with_open_bin path In_channel.input_all)
+
+let clamp_offset text offset = Int.max 0 (Int.min (String.length text) offset)
 
 let step t i =
   let utf16_bytes_per_code_unit = 2 in
-  let u = String.get_utf_8_uchar t.text i in
-  let bytes = Uchar.utf_decode_length u in
-  match t.encoding with
-  | `UTF8 -> bytes, bytes
-  | `UTF16 -> bytes, Uchar.utf_16_byte_length (Uchar.utf_decode_uchar u) / utf16_bytes_per_code_unit
-
-let clamp_offset t offset = Int.max 0 (Int.min (String.length t.text) offset)
+  let decoded = String.get_utf_8_uchar t.text i in
+  let byte_length = Uchar.utf_decode_length decoded in
+  match t.position_encoding with
+  | `UTF8 -> byte_length, byte_length
+  | `UTF16 ->
+    let uchar = Uchar.utf_decode_uchar decoded in
+    byte_length, Uchar.utf_16_byte_length uchar / utf16_bytes_per_code_unit
 
 let line t offset =
-  let midpoint_divisor = 2 in
-  let offset = clamp_offset t offset in
+  let offset = clamp_offset t.text offset in
   let rec search l r =
-    if r - l = 1 then l
+    if r - l <= 1 then l
     else
-      let m = (l + r) / midpoint_divisor in
+      let m = (l + r) / 2 in
       if t.line_starts.(m) <= offset then search m r else search l m
   in
   search 0 (Array.length t.line_starts)
 
-let position t offset =
-  let offset = clamp_offset t offset in
-  let line = line t offset in
-  let rec loop i units =
-    if i >= offset then units
-    else let (bytes, n) = step t i in loop (i + bytes) (units + n)
+let line_end t line =
+  let stop =
+    if line + 1 < Array.length t.line_starts
+    then t.line_starts.(line + 1) - 1
+    else String.length t.text
   in
-  line, loop t.line_starts.(line) 0
+  if stop > t.line_starts.(line) && Char.equal t.text.[stop - 1] '\r' then stop - 1 else stop
+
+let position t offset =
+  let offset = clamp_offset t.text offset in
+  let line = line t offset in
+  let stop = Int.min offset (line_end t line) in
+  let rec loop i units =
+    if i >= stop then units
+    else let (byte_length, width) = step t i in loop (i + byte_length) (units + width)
+  in
+  { line; character = loop t.line_starts.(line) 0 }
 
 let offset t ~line ~character =
-  let len = Array.length t.line_starts in
+  let lines = Array.length t.line_starts in
   if line < 0 then 0
-  else if line >= len then String.length t.text
+  else if line >= lines then String.length t.text
   else
-    let eol =
-      if line + 1 < len then t.line_starts.(line + 1) - 1
-      else String.length t.text
-    in
+    let stop = line_end t line in
     let rec loop i units =
-      if units >= character || i >= eol then i
-      else let (bytes, n) = step t i in loop (i + bytes) (units + n)
+      if units >= character || i >= stop then i
+      else let (byte_length, width) = step t i in loop (i + byte_length) (units + width)
     in
     loop t.line_starts.(line) 0

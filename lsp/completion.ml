@@ -31,11 +31,11 @@ type item = {
   priority : Priority.t;
 }
 
-let at ?cache ~path text offset =
+let make ?cache ~path text offset =
   let hole = "sqlgg__completion_hole" in
-  let column_items ~priority (owner : Symbol.t) =
-    Symbol.columns owner |> List.map (fun (attr : Sql.attr) ->
-      { label = attr.name; detail = sprintf "%s — %s" (Sql.Type.show attr.domain) owner.name;
+  let column_items ~priority (source : Symbol.t) =
+    Symbol.columns source |> List.map (fun (attr : Sql.attr) ->
+      { label = attr.name; detail = sprintf "%s — %s" (Sql.Type.show attr.domain) source.name;
         kind = Field; priority })
   in
   let listing_items ~priority ~kind ~what =
@@ -46,15 +46,9 @@ let at ?cache ~path text offset =
   let function_item name =
     { label = name; detail = "function"; kind = Function; priority = Priority.Function }
   in
-  let offset = Sql.Pos.clamp_offset text offset in
+  let offset = Line_index.clamp_offset text offset in
   let document = Document.analyze ?cache ~path text in
-  let current_statement =
-    List.find_map (fun (statement : Document.checked_statement) ->
-      if Sql.Pos.covers statement.block.pos offset
-      then Some statement
-      else None)
-      document.Document.statements
-  in
+  let current_statement = Document.find_statement document offset in
   let stmt =
     Option.map (fun (statement : Document.checked_statement) -> statement.block)
       current_statement
@@ -87,7 +81,13 @@ let at ?cache ~path text offset =
   else
     let stmt : Statements.t =
       match stmt with
-      | None -> { text = hole; props = []; pos = (start, start + String.length hole); metadata = []; comments = []; errors = [] }
+      | None ->
+        { text = hole;
+          pos = (start, start + String.length hole);
+          props = [];
+          metadata = [];
+          comments = [];
+          errors = [] }
       | Some stmt ->
         let base = fst stmt.pos in
         let (start, stop) = start - base, stop - base in
@@ -102,14 +102,15 @@ let at ?cache ~path text offset =
               in
               adjusted_offset, meta) stmt.metadata }
     in
-    let current = Document.check_at document stmt in
+    let current = Document.recheck document stmt in
     let other_statement (statement : Document.checked_statement) =
       if Sql.Pos.covers statement.stmt.pos offset
       then None
       else Some statement.stmt
     in
     let statements =
-      current :: List.filter_map other_statement document.Document.statements
+      Seq.cons current
+        (Seq.filter_map other_statement (Array.to_seq document.Document.statements))
     in
     let base = fst stmt.pos in
     let hole_start = start - base in
@@ -134,12 +135,12 @@ let at ?cache ~path text offset =
     in
     let source_scope =
       Option.bind current_statement (fun (statement : Document.checked_statement) ->
-        match Document.select_scope_at_opt statement.stmt offset with
+        match Document.select_scope_opt statement.stmt offset with
         | Some _ as scope -> scope
         | None ->
-          match statement.stmt.scope.symbols with
+          match Document.statement_scope statement.stmt with
           | [] -> None
-          | _ :: _ -> Some statement.stmt.scope)
+          | _ :: _ as scope -> Some scope)
     in
     let names =
       List.filter_map (fun (lexeme : Recover_parser.lexeme) ->
@@ -163,7 +164,7 @@ let at ?cache ~path text offset =
         full.trace.sources |> List.filter_map (fun (src, (alias : Sql.source_alias option)) ->
           match src, alias with
           | `Table (table : Sql.table_name), Some alias ->
-            Option.map (Symbol.rename alias.table_name.value.tn)
+            Option.map (Symbol.as_alias ~name:alias.table_name.value.tn table)
               (Symbol.Index.find_opt table.tn document.Document.index)
           | `Table _, None | (`Select _ | `Nested _ | `ValueRows _), _ -> None)
       in
@@ -174,12 +175,10 @@ let at ?cache ~path text offset =
       in
       let recovery_sources =
         visible
-          (current.scope.symbols @ trace_tables @ recovery_tables @ alias_sources)
+          (Document.statement_scope current @ trace_tables @ recovery_tables @ alias_sources)
       in
       let sources =
-        Option.fold ~none:recovery_sources
-          ~some:(fun (scope : Document.scope) -> visible scope.symbols)
-          source_scope
+        Option.fold ~none:recovery_sources ~some:visible source_scope
       in
       recovery_sources, sources
     in
@@ -204,7 +203,8 @@ let at ?cache ~path text offset =
         in
         let ctes =
           sources
-          |> List.filter (fun (symbol : Symbol.t) -> match symbol.kind with Cte -> true | Table | Local -> false)
+          |> List.filter (fun (symbol : Symbol.t) ->
+            match symbol.kind with Cte -> true | Table | Derived | Alias _ -> false)
           |> List.map (fun (symbol : Symbol.t) ->
             { label = symbol.name; detail = "CTE in this statement"; kind = Interface; priority = Priority.Cte })
         in
@@ -217,7 +217,7 @@ let at ?cache ~path text offset =
     let completions =
       match slot with
       | Parameter _ ->
-        List.to_seq statements
+        statements
         |> Seq.concat_map (fun stmt -> Params.all_nodes (Document.params stmt))
         |> Seq.filter_map (fun (node : Params.node) ->
           match node.kind with Var (id, _) -> id.value | Branch _ -> None)
@@ -247,6 +247,6 @@ let at ?cache ~path text offset =
           |> List.of_seq
         in
         List.concat_map role roles @ keywords
-        |> Prelude.unique_by (module String) (fun completion -> completion.label)
+        |> Prelude.unique_by ~key:(fun completion -> completion.label)
     in
     replace, completions

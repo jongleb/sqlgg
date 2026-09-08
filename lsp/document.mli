@@ -2,7 +2,7 @@ open Sqlgg
 
 type error = private { pos : Sql.Pos.t; msg : string }
 
-type success = private {
+type checked = private {
   kind : Stmt.kind;
   schema : Sql.schema;
   params : Params.node list;
@@ -10,26 +10,30 @@ type success = private {
   new_table : Symbol.t option;
 }
 
-type outcome = private Skip | Error of error | Ok of success
+type analysis
 
-type scope = private {
-  symbols : Symbol.t list;
-  aliases : Sql.table_alias list;
-}
+type outcome = private
+  | Verbatim
+  | Rejected of error * analysis
+  | Checked of checked * analysis
 
 type stmt = private {
   pos : Sql.Pos.t;
   name : string option;
-  scope : scope;
-  select_scopes : (scope * Sql.Pos.t) list;
-  exprs : (Sql.Type.t * Sql.Pos.t) list;
+  props_errors : error list;
+  tokens : Recover_parser.lexeme list Lazy.t;
   outcome : outcome;
 }
 
+val tokens : stmt -> Recover_parser.lexeme list
+
 val errors : stmt -> error list
 val params : stmt -> Params.node list
-val select_scope_at_opt : stmt -> int -> scope option
-val scope_at : stmt -> int -> scope
+val statement_scope : stmt -> Symbol.t list
+val sources : stmt -> int -> Symbol.t list
+val exprs : stmt -> (Sql.Type.t * Sql.Pos.t) list
+val select_scope_opt : stmt -> int -> Symbol.t list option
+val scope : stmt -> int -> Symbol.t list
 
 type checked_statement = private {
   block : Statements.t;
@@ -38,11 +42,13 @@ type checked_statement = private {
 
 type t = private {
   path : string;
-  statements : checked_statement list;
+  text : string;
+  statements : checked_statement array;
   index : Symbol.t Symbol.Index.t;
   snapshot : Compile.state;
 }
 
+val find_statement : t -> int -> checked_statement option
 val find_reusable_opt : t -> string -> (stmt * Symbol.loc) option
 
 module Cache : sig
@@ -52,4 +58,4 @@ module Cache : sig
 end
 
 val analyze : ?cache:Cache.t -> path:string -> string -> t
-val check_at : t -> Statements.t -> stmt
+val recheck : t -> Statements.t -> stmt
