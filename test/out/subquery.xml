@@ -54,6 +54,9 @@
    <value name="master_id" type="Int" nullable="true"/>
    <value name="at" type="Datetime" nullable="true"/>
   </schema>
+  <foreign_keys>
+   <foreign_key columns="master_id" references="master" referenced_columns="id"/>
+  </foreign_keys>
  </table>
  <table name="master">
   <schema>

@@ -52,6 +52,10 @@
    <value name="col_3_4" type="Int" nullable="true"/>
    <value name="col_3_5" type="Float" nullable="true"/>
   </schema>
+  <foreign_keys>
+   <foreign_key columns="col_3_2" references="tbl_2" referenced_columns="col_2_1"/>
+   <foreign_key columns="col_3_3" references="tbl_1" referenced_columns="col_1_1"/>
+  </foreign_keys>
  </table>
  <table name="tbl_2">
   <schema>

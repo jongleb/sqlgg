@@ -25,6 +25,9 @@
    <value name="email" type="Text" nullable="true"/>
    <value name="account_type_id" type="Int" nullable="true"/>
   </schema>
+  <foreign_keys>
+   <foreign_key columns="account_type_id" references="account_types" referenced_columns="type_id"/>
+  </foreign_keys>
  </table>
  <table name="account_types">
   <schema>

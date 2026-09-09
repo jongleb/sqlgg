@@ -142,8 +142,27 @@ let generate_code (x,_) index stmt =
   let nodes = [ input; output] in
   x := Node ("stmt", ("name",name)::("sql",sql)::("category",show_category @@ category_of_stmt_kind stmt.kind)::attrs, nodes) :: !x
 
+let foreign_key_node { Sql.fk_cols; fk_ref_table; fk_ref_cols } =
+  let referenced_columns =
+    match fk_ref_cols with
+    | [] -> []
+    | cols -> [ "referenced_columns", String.concat "," cols ]
+  in
+  let attrs =
+    [ "columns", String.concat "," fk_cols;
+      "references", Sql.show_table_name fk_ref_table ]
+    @ referenced_columns
+  in
+  Node ("foreign_key", attrs, [])
+
+let foreign_keys_nodes name =
+  match Tables.get_foreign_keys name with
+  | [] -> []
+  | foreign_keys -> [ Node ("foreign_keys", [], List.map foreign_key_node foreign_keys) ]
+
 let generate_table (x,_) (name,schema) =
-  x := Node ("table", ["name",Sql.show_table_name name], [Node ("schema",[],schema_to_values schema)]) :: !x
+  let schema_node = Node ("schema", [], schema_to_values schema) in
+  x := Node ("table", ["name",Sql.show_table_name name], schema_node :: foreign_keys_nodes name) :: !x
 
 let start_output (x,pre) = pre := !x; x := []
 

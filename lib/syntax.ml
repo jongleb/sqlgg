@@ -1498,7 +1498,7 @@ let with_constraints attrs constraints : Schema.t =
   let constraints_table : (string, Constraints.t) Hashtbl.t = Hashtbl.create (List.length attrs) in
   let inherited : (string, Meta.t option) Hashtbl.t = Hashtbl.create (List.length attrs) in
   constraints |> List.iter begin function
-    | `Foreign (cols, table, refs) ->
+    | `Foreign { Sql.fk_cols = cols; fk_ref_table = table; fk_ref_cols = refs } ->
       let referenced = Tables.with_stored table [] (fun t -> t.columns) in
       let refs = match refs with [] -> Tables.get_primary_key_columns referenced | refs -> refs in
       if List.compare_lengths cols refs = 0 then
@@ -1574,8 +1574,7 @@ let rec eval (stmt:Sql.stmt) =
           default_sql = Alter_action_attr.default_sql col;
         }
       ) schema attrs in
-      Tables.add_columns (name, columns);
-      Tables.add_inline_indexes name ~indexes ~constraints;
+      Tables.create name ~columns ~indexes ~constraints;
       ([],[],Create name)
   | Create (name, Select { value=select; _ }) ->
       let (schema,params,_) = eval_select_full empty_env select in
