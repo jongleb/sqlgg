@@ -26,6 +26,7 @@ type stored_table = {
   tbl_charset : table_charset option;
   tbl_ttl : table_ttl option;
   tbl_indexes : stored_index SMap.t;
+  tbl_foreign_keys : Sql.foreign_key list;
 }
 
 let store : stored_table list ref = ref []
@@ -72,7 +73,11 @@ let check name = ignore (get_stored name)
 
 let add_columns (name, cols) =
   match find_stored name with
-  | None -> store := { name; columns = cols; tbl_charset = None; tbl_ttl = None; tbl_indexes = SMap.empty } :: !store
+  | None ->
+    store :=
+      { name; columns = cols; tbl_charset = None; tbl_ttl = None;
+        tbl_indexes = SMap.empty; tbl_foreign_keys = [] }
+      :: !store
   | Some _ -> table_exists name
 
 let add (name, schema) =
@@ -136,7 +141,11 @@ let index_add_auto name ~kind ~cols =
   alter name (fun t ->
     add_index_record t ~index_name:(synth_index_name t.tbl_indexes cols) ~kind ~cols)
 
-let add_inline_indexes name ~indexes ~constraints =
+let get_foreign_keys name =
+  with_stored name [] (fun table -> table.tbl_foreign_keys)
+
+let create name ~columns ~indexes ~constraints =
+  add_columns (name, columns);
   List.iter (fun (idx : Sql.table_inline_index Sql.located) ->
     let { Sql.idx_name; idx_kind; idx_cols = cols; idx_unique } = idx.value in
     let kind = match idx_kind with
@@ -153,7 +162,9 @@ let add_inline_indexes name ~indexes ~constraints =
       index_add name ~index_name ~kind:Sql.Unique_idx ~cols
     | `Unique (None, (_ :: _ as cols)) ->
       index_add_auto name ~kind:Sql.Unique_idx ~cols
-    | _ -> ()
+    | `Foreign foreign_key ->
+      alter name (fun t -> { t with tbl_foreign_keys = t.tbl_foreign_keys @ [ foreign_key ] })
+    | `Unique (_, []) | `Primary _ | `Ignore -> ()
   ) constraints
 
 let singleton_unique_col (i : stored_index) =

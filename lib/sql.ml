@@ -901,8 +901,14 @@ type insert_action =
   on_conflict_clause : conflict_clause located option;
 } [@@deriving show {with_path=false}]
 
+type foreign_key = {
+  fk_cols : string list;
+  fk_ref_table : table_name;
+  fk_ref_cols : string list;
+} [@@deriving show {with_path=false}]
+
 type table_constraints = [ `Ignore | `Primary of string list | `Unique of string option * string list
-  | `Foreign of string list * table_name * string list ] [@@deriving show {with_path=false}]
+  | `Foreign of foreign_key ] [@@deriving show {with_path=false}]
 
 type index_kind  = 
   | Regular_idx

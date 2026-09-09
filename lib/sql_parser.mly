@@ -446,7 +446,7 @@ table_constraint_1:
       | UNIQUE index_or_key? name=ident? l=sequence(key_part) { `Unique (name, l) }
       | FOREIGN KEY ident? cols=sequence(ident) REFERENCES t=table_name refs=sequence(ident)?
         reference_action_clause*
-          { `Foreign (cols, t, Option.default [] refs) }
+          { `Foreign { fk_cols = cols; fk_ref_table = t; fk_ref_cols = Option.default [] refs } }
       | CHECK LPAREN expr RPAREN { `Ignore }
 
 reference_action_clause:

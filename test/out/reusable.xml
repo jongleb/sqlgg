@@ -45,6 +45,9 @@
    <value name="price" type="Decimal"/>
    <value name="category_id" type="Int" nullable="true"/>
   </schema>
+  <foreign_keys>
+   <foreign_key columns="category_id" references="categories" referenced_columns="id"/>
+  </foreign_keys>
  </table>
  <table name="categories">
   <schema>
