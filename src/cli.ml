@@ -235,20 +235,20 @@ let read_blocks f = Main.with_channel f (Stdlib.Option.fold ~none:[] ~some:Main.
 
 let replay_sources sources =
   Compile.reset ();
-  List.iter (function
-    | From_file f -> List.iter Main.replay_statement (read_blocks f)
-    | From_block block -> Main.replay_statement block) sources
+  List.concat_map (function
+    | From_file f -> List.filter_map Main.replay_statement (read_blocks f)
+    | From_block block -> Stdlib.Option.to_list (Main.replay_statement block)) sources
 
 let schema_of_sources sources =
-  replay_sources sources;
+  let hints = replay_sources sources in
   abort_on_errors ();
-  Tables.snapshot ()
+  Tables.snapshot (), hints
 
 let load_schema files = schema_of_sources (to_file_sources files)
 
-let diff_schema ~naming ~ddl_as_migration ~from_ ~to_ =
+let diff_schema ~naming ~hints ~ddl_as_migration ~from_ ~to_ =
   let migs =
-    try Schema_diff.generate ~naming ~ddl_as_migration ~from_ ~to_
+    try Schema_diff.generate ~naming ~hints ~ddl_as_migration ~from_ ~to_
     with Gen_migrations.Migration_error msg ->
       fatal "cannot generate migration (write this step manually):\n%s" msg
   in
@@ -457,18 +457,18 @@ let run_migrate ({ delta = { name; target_files; now; max_id_length; ddl_as_migr
   let ext = Option.map_default read_blocks [] extends_file in
   let recorded_blocks () = merge_blocks (Option.map_default read_blocks [] migrations_file) ext in
   let before = recorded_blocks () in
-  let current =
+  let current, _ =
     schema_of_sources (initial @ List.map (fun block -> From_block block) before)
   in
-  let target = load_schema target_files in
+  let target, hints = load_schema target_files in
   let regenerate () =
-    replay_sources initial;
+    ignore (replay_sources initial);
     let full = parse_migrations (recorded_blocks ()) in
     process_migrations gen_lang name full
   in
   let base = next_base now before in
   let naming = Migration_id.naming ~max_length:max_id_length base in
-  match diff_schema ~naming ~ddl_as_migration ~from_:current ~to_:target with
+  match diff_schema ~naming ~hints ~ddl_as_migration ~from_:current ~to_:target with
   | [] ->
     regenerate ();
     (match before with
@@ -498,7 +498,7 @@ let run_materialize_schema ({ base_files } : materialize_args) =
   let state =
     match base_files with
     | [] -> Tables.snapshot ()
-    | files -> load_schema files
+    | files -> fst (load_schema files)
   in
   let ddl = Schema_diff.dump state in
   begin 
@@ -510,11 +510,11 @@ let run_materialize_schema ({ base_files } : materialize_args) =
 
 let run_diff ({ delta = { name; target_files; now; max_id_length; ddl_as_migration };
                 base_files; output } : diff_args) =
-  let from_ = load_schema base_files in
-  let to_   = load_schema target_files in
+  let from_, _ = load_schema base_files in
+  let to_, hints = load_schema target_files in
   let base = next_base now [] in
   let naming = Migration_id.naming ~max_length:max_id_length base in
-  let migs = diff_schema ~naming ~ddl_as_migration ~from_ ~to_ in
+  let migs = diff_schema ~naming ~hints ~ddl_as_migration ~from_ ~to_ in
   Tables.restore from_;
   match output with
   | None -> ()

@@ -236,8 +236,30 @@ let alter_clause_body ~default_sql_lookup = function
   | Ttl_options opts ->
     Some (action_to_sql_fragment ~default_sql_lookup (`TtlOptions (opts, (0, 0))))
 
-let alter_table_sql ~default_sql_lookup table clause =
-  Option.map (sprintf "ALTER TABLE %s %s" (quote_table_name table))
+let alter_algorithm_sql = function
+  | Sql.Algorithm_inplace -> "INPLACE"
+  | Sql.Algorithm_copy -> "COPY"
+  | Sql.Algorithm_instant -> "INSTANT"
+
+let alter_lock_sql = function
+  | Sql.Lock_none -> "NONE"
+  | Sql.Lock_exclusive -> "EXCLUSIVE"
+  | Sql.Lock_default -> "DEFAULT"
+  | Sql.Lock_shared -> "SHARED"
+
+let alter_option_sql ({ Sql.value; _ } : Sql.alter_option Sql.located) =
+  match value with
+  | Sql.Alter_algorithm algorithm -> "ALGORITHM=" ^ alter_algorithm_sql algorithm
+  | Sql.Alter_lock lock -> "LOCK=" ^ alter_lock_sql lock
+
+let alter_table_sql ~default_sql_lookup ?(options = []) table clause =
+  let suffix =
+    match options with
+    | [] -> ""
+    | _ -> ", " ^ String.concat ", " (List.map alter_option_sql options)
+  in
+  Option.map
+    (fun body -> sprintf "ALTER TABLE %s %s%s" (quote_table_name table) body suffix)
     (alter_clause_body ~default_sql_lookup clause)
 
 let drop_table_sql name =

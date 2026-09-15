@@ -81,12 +81,15 @@ let compile ~dynamic_select (stmt : Statements.t) =
     in
     raise @@ With_backtrace (exn, bt)
 
-let executable (stmt : Statements.t) =
+let executable_with_hint (stmt : Statements.t) =
   Stdlib.Option.bind
     (compile ~dynamic_select:(dynamic_select_mode stmt.props) stmt)
     (function
-      | Compile.Executable syntax -> Some (stmt_of_syntax stmt.props syntax)
+      | Compile.Executable ({ alter_hint; _ } as syntax) ->
+        Some (stmt_of_syntax stmt.props syntax, alter_hint)
       | Compile.Verbatim | Compile.Reusable _ | Compile.Not_reusable -> None)
+
+let executable stmt = Option.map fst (executable_with_hint stmt)
 
 let parse_one (stmt : Statements.t) =
   let mode = dynamic_select_mode stmt.props in
@@ -152,9 +155,11 @@ let get_statements ch =
         Printf.eprintf "Warning: this SQL statement will produce rowset with duplicate column names:\n%s\n" stmt.text;
       stmts)
 
-let replay_statement stmt = ignore (executable stmt)
+let replay_statement stmt =
+  Stdlib.Option.bind (executable_with_hint stmt) snd
 
-let replay_sql sql = List.iter replay_statement (prepare_statements sql)
+let replay_sql sql =
+  List.iter (fun stmt -> ignore (replay_statement stmt)) (prepare_statements sql)
 
 let raw_blocks ch = Statements.glue_downs (prepare_statements (In_channel.input_all ch))
 

@@ -1830,7 +1830,7 @@ let rec eval (stmt:Sql.stmt) =
       Tables.add (name, to_schema schema);
       [], params, Create name,
       { annotations with table_defs = (located_name, []) :: annotations.table_defs }
-  | Alter (name,actions) ->
+  | Alter { alter_table = name; alter_actions = actions; _ } ->
       List.iter (function
       | `Add (col,pos) ->
         let source_kind = Option.map (fun k -> k.value) col.Alter_action_attr.kind in
@@ -2270,6 +2270,7 @@ type result = {
   kind : Stmt.kind;
   dialect_features : Dialect.dialect_support list;
   annotations : stmt_annotations;
+  alter_hint : alter option;
 }
 
 let scope_of ?cte from =
@@ -2283,6 +2284,14 @@ let scope_of ?cte from =
 let eval_parsed sql { Parser.stmt; dialect_features } =
   let (schema, p1, kind, annotations) = eval stmt in
   let (sql, p2) = complete_sql kind sql in
-  { sql; schema; vars = unify_params (p1 @ p2); kind; dialect_features; annotations }
+  let alter_hint =
+    match stmt with
+    | Alter alter -> Some alter
+    | Create _ | Drop _ | Rename _ | CreateIndex _ | Insert _ | Delete _
+    | DeleteMulti _ | Set _ | Update _ | UpdateMulti _ | Select _
+    | CreateRoutine _ | CreateType _ | DropType _ -> None
+  in
+  { sql; schema; vars = unify_params (p1 @ p2); kind; dialect_features;
+    annotations; alter_hint }
 
 let parse sql = eval_parsed sql (Parser.parse_stmt sql)

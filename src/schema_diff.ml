@@ -2,9 +2,6 @@ open Printf
 open Sqlgg
 
 module SMap = Tables.SMap
-module Name = Migration_id.Name
-
-let mig_name naming head actions = Name.render naming (Name.make head actions)
 
 let index_by key xs =
   List.fold_left (fun m x -> SMap.add (key x) x m) SMap.empty xs
@@ -18,55 +15,6 @@ let attr_of_column (c : Tables.column) =
   Option.map_default
     (fun sk -> { base with kind = Some (Gen_migrations.loc sk) })
     base c.Tables.source_kind
-
-let col_fragment c =
-  Gen_migrations.alter_action_attr_to_sql
-    ~default_sql_lookup:(fun _ -> c.Tables.default_sql) (attr_of_column c)
-
-module Column_sig = struct
-  type t = {
-    name : string;
-    kind : Sql.Source_type.kind option;
-    collation : string option;
-    constraints : Sql.Constraint.t list;
-    has_default : bool;
-    default_sql : string option;
-  } [@@deriving eq]
-
-  let of_column (c : Tables.column) =
-    let open Sql.Alter_action_attr in
-    let a = attr_of_column c in
-    let kind = Option.map (fun (k : _ Sql.collated Sql.located) -> k.value.collated) a.kind in
-    let collation =
-      Option.map_default
-        (fun (k : _ Sql.collated Sql.located) ->
-          Option.map (fun (l : string Sql.located) -> l.value) k.value.collation)
-        None a.kind
-    in
-    let constraints, has_default =
-      List.fold_left
-        (fun (cs, dflt) (e : constraint_ Sql.located) ->
-          match e.value with
-          | Default _ -> cs, true
-          | Syntax_constraint cst when Gen_migrations.constraint_to_sql cst <> None -> cst :: cs, dflt
-          | Syntax_constraint _ -> cs, dflt)
-        ([], false) a.extra
-    in
-    { name = a.name.value;
-      kind;
-      collation;
-      constraints = List.sort Sql.Constraint.compare constraints;
-      has_default;
-      default_sql = c.Tables.default_sql }
-
-  let changed old new_ = not (equal (of_column old) (of_column new_))
-end
-
-let cols_by_name cols =
-  index_by (fun (c : Tables.column) -> c.attr.Sql.name) cols
-
-let table_by_name ts =
-  index_by (fun t -> t.Tables.name.tn) ts
 
 let unique_singleton_cols t =
   SMap.fold (fun _ idx acc ->
@@ -94,139 +42,163 @@ let materialize_inline_unique (t : Tables.stored_table) =
            ~kind:Sql.Unique_idx ~cols)
        t
 
+type action_group =
+  | Full_diff of Sql.alter_action list
+  | Explicit_alter of {
+      actions : Sql.alter_action list;
+      options : Sql.alter_option Sql.located list;
+    }
+
 type change =
   | Create_table of Tables.stored_table
   | Drop_table of Tables.stored_table
-  | Alter_table of { table : Sql.table_name; sql : string; actions : Sql.alter_action list }
-
-let index_kind_slug = function
-  | Sql.Plain_idx -> "index"
-  | Sql.Unique_idx -> "unique"
-  | Sql.Fulltext_idx -> "fulltext"
-  | Sql.Spatial_idx -> "spatial"
-
-let verb spelling = Name.words spelling
-let action v = Name.action (verb v) []
-let action_on v target = Name.action (verb v) (Name.words target)
-let rename kind old_ new_ =
-  Name.action (verb "rename" @ verb kind) (Name.words old_ @ Name.words new_)
-
-let action_of : Sql.alter_action -> Name.action = function
-  | `Add (col, _) -> action_on "add_col" col.name.value
-  | `Drop name -> action_on "drop_col" name
-  | `Change (old_name, new_col, _) ->
-    if String.equal old_name new_col.name.value then
-      action_on "change_col" new_col.name.value
-    else rename "col" old_name new_col.name.value
-  | `RenameTable t -> action_on "rename_to" t.tn
-  | `RenameColumn (o, n) -> rename "col" o n
-  | `RenameIndex (o, n) -> rename "index" o n
-  | `AddIndex { add_idx_name; add_idx_kind; _ } ->
-    let v = verb "add" @ verb (index_kind_slug add_idx_kind) in
-    Option.map_default (fun n -> Name.action v (Name.words n)) (Name.action v []) add_idx_name
-  | `DropIndex name -> action_on "drop_index" name
-  | `AddPrimaryKey _ -> action "add_pk"
-  | `DropPrimaryKey -> action "drop_pk"
-  | `AddConstraint _ -> action "add_constraint"
-  | `DropConstraint name -> action_on "drop_constraint" name
-  | `Default_or_convert_to _ -> action "set_charset"
-  | `TtlOptions _ -> action "set_ttl"
-  | `RemoveTtl _ -> action "remove_ttl"
-  | `Cache _ -> action "cache"
-  | `NoCache _ -> action "nocache"
-  | `AlterColumnPG (col, _) -> action_on "alter_col" col
-
-let diff_columns ~from_ ~to_ =
-  let from_cols = columns_without_index_unique from_ in
-  let to_cols = columns_without_index_unique to_ in
-  let a = cols_by_name from_cols in
-  let b = cols_by_name to_cols in
-  let adds =
-    to_cols |> List.filter (fun (c : Tables.column) -> not (SMap.mem c.attr.Sql.name a))
-    |> List.map (fun c -> `Add (attr_of_column c, `Default))
-  in
-  let drops =
-    from_cols |> List.filter (fun (c : Tables.column) -> not (SMap.mem c.attr.Sql.name b))
-    |> List.map (fun (c : Tables.column) -> `Drop c.attr.Sql.name)
-  in
-  let changes =
-    to_cols |> List.filter_map (fun (c : Tables.column) ->
-      match SMap.find_opt c.attr.Sql.name a with
-      | Some old when Column_sig.changed old c ->
-        Some (`Change (c.attr.Sql.name, attr_of_column c, `Default))
-      | _ -> None)
-  in
-  drops @ adds @ changes
+  | Alter_table of {
+      table : Sql.table_name;
+      sql : string;
+      group : action_group;
+    }
 
 let add_index name (idx : Tables.stored_index) =
   `AddIndex { Sql.add_idx_name = Some name; add_idx_kind = idx.kind; add_idx_cols = idx.cols }
-
-let diff_indexes ~from_ ~to_ =
-  let a = from_.Tables.tbl_indexes and b = to_.Tables.tbl_indexes in
-  let same (x : Tables.stored_index) (y : Tables.stored_index) =
-    Sql.equal_index_op_kind x.kind y.kind && x.cols = y.cols in
-  let drops = SMap.fold (fun name _ acc ->
-    if SMap.mem name b then acc else `DropIndex name :: acc) a [] in
-  let adds = SMap.fold (fun name idx acc ->
-    match SMap.find_opt name a with
-    | Some old when same old idx -> acc
-    | Some _ -> `DropIndex name :: add_index name idx :: acc
-    | None -> add_index name idx :: acc) b [] in
-  drops @ adds
-
-let diff_pk ~from_ ~to_ =
-  let pa = Tables.get_primary_key_columns from_.Tables.columns in
-  let pb = Tables.get_primary_key_columns to_.Tables.columns in
-  if pa = pb then []
-  else (if pa = [] then [] else [`DropPrimaryKey])
-       @ (if pb = [] then [] else [`AddPrimaryKey pb])
-
-let diff_property get render ~from_ ~to_ =
-  if get from_ = get to_ then [] else render (get to_)
-
-let diff_charset =
-  diff_property (fun t -> t.Tables.tbl_charset)
-    (Option.map_default
-      (fun ({ charset; collation } : Tables.table_charset) ->
-        [`Default_or_convert_to (charset, Option.map Gen_migrations.loc collation)])
-      [])
 
 let ttl_options_of (t : Tables.table_ttl) =
   [ `TtlSet (t.ttl_col, t.ttl_n, t.ttl_unit);
     `TtlEnable (if t.ttl_enabled then "ON" else "OFF") ]
 
-let diff_ttl =
-  diff_property (fun t -> t.Tables.tbl_ttl)
-    (Option.map_default (fun t -> [`TtlOptions (ttl_options_of t, (0, 0))])
-      [`RemoveTtl (0, 0)])
-
 let diff_table ~from_ ~to_ =
+  let diff_columns ~from_ ~to_ =
+    let module Column_sig = struct
+      type t = {
+        name : string;
+        kind : Sql.Source_type.kind option;
+        collation : string option;
+        constraints : Sql.Constraint.t list;
+        has_default : bool;
+        default_sql : string option;
+      } [@@deriving eq]
+
+      let of_column (c : Tables.column) =
+        let open Sql.Alter_action_attr in
+        let a = attr_of_column c in
+        let kind =
+          Option.map (fun (k : _ Sql.collated Sql.located) -> k.value.collated) a.kind
+        in
+        let collation =
+          Option.map_default
+            (fun (k : _ Sql.collated Sql.located) ->
+              Option.map (fun (l : string Sql.located) -> l.value) k.value.collation)
+            None a.kind
+        in
+        let constraints, has_default =
+          List.fold_left
+            (fun (cs, dflt) (e : constraint_ Sql.located) ->
+              match e.value with
+              | Default _ -> cs, true
+              | Syntax_constraint cst when Gen_migrations.constraint_to_sql cst <> None ->
+                cst :: cs, dflt
+              | Syntax_constraint _ -> cs, dflt)
+            ([], false) a.extra
+        in
+        { name = a.name.value;
+          kind;
+          collation;
+          constraints = List.sort Sql.Constraint.compare constraints;
+          has_default;
+          default_sql = c.Tables.default_sql }
+
+      let changed old new_ = not (equal (of_column old) (of_column new_))
+    end
+    in
+    let cols_by_name cols =
+      index_by (fun (c : Tables.column) -> c.attr.Sql.name) cols
+    in
+    let from_cols = columns_without_index_unique from_ in
+    let to_cols = columns_without_index_unique to_ in
+    let a = cols_by_name from_cols in
+    let b = cols_by_name to_cols in
+    let adds =
+      to_cols
+      |> List.filter (fun (c : Tables.column) -> not (SMap.mem c.attr.Sql.name a))
+      |> List.map (fun c -> `Add (attr_of_column c, `Default))
+    in
+    let drops =
+      from_cols
+      |> List.filter (fun (c : Tables.column) -> not (SMap.mem c.attr.Sql.name b))
+      |> List.map (fun (c : Tables.column) -> `Drop c.attr.Sql.name)
+    in
+    let changes =
+      to_cols
+      |> List.filter_map (fun (c : Tables.column) ->
+           match SMap.find_opt c.attr.Sql.name a with
+           | Some old when Column_sig.changed old c ->
+             Some (`Change (c.attr.Sql.name, attr_of_column c, `Default))
+           | _ -> None)
+    in
+    drops @ adds @ changes
+  in
+  let diff_indexes ~from_ ~to_ =
+    let a = from_.Tables.tbl_indexes and b = to_.Tables.tbl_indexes in
+    let same (x : Tables.stored_index) (y : Tables.stored_index) =
+      Sql.equal_index_op_kind x.kind y.kind && x.cols = y.cols
+    in
+    let drops =
+      SMap.fold (fun name _ acc ->
+        if SMap.mem name b then acc else `DropIndex name :: acc) a []
+    in
+    let adds =
+      SMap.fold (fun name idx acc ->
+        match SMap.find_opt name a with
+        | Some old when same old idx -> acc
+        | Some _ -> `DropIndex name :: add_index name idx :: acc
+        | None -> add_index name idx :: acc) b []
+    in
+    drops @ adds
+  in
+  let diff_pk ~from_ ~to_ =
+    let pa = Tables.get_primary_key_columns from_.Tables.columns in
+    let pb = Tables.get_primary_key_columns to_.Tables.columns in
+    match pa, pb with
+    | pa, pb when pa = pb -> []
+    | [], pb -> [`AddPrimaryKey pb]
+    | _, [] -> [`DropPrimaryKey]
+    | _, pb -> [`DropPrimaryKey; `AddPrimaryKey pb]
+  in
+  let diff_property get render ~from_ ~to_ =
+    if get from_ = get to_ then [] else render (get to_)
+  in
+  let diff_charset =
+    diff_property (fun t -> t.Tables.tbl_charset)
+      (Option.map_default
+        (fun ({ charset; collation } : Tables.table_charset) ->
+          [`Default_or_convert_to (charset, Option.map Gen_migrations.loc collation)])
+        [])
+  in
+  let diff_ttl =
+    diff_property (fun t -> t.Tables.tbl_ttl)
+      (Option.map_default (fun t -> [`TtlOptions (ttl_options_of t, (0, 0))])
+        [`RemoveTtl (0, 0)])
+  in
   diff_columns ~from_ ~to_ @ diff_pk ~from_ ~to_
   @ diff_indexes ~from_ ~to_ @ diff_charset ~from_ ~to_ @ diff_ttl ~from_ ~to_
 
-let alter_change name target actions =
-  let default_sql_lookup col_name =
-    Stdlib.Option.bind (Tables.find_column ~name:col_name target.Tables.columns)
-      (fun (c : Tables.column) -> c.default_sql)
-  in
-  Option.map
-    (fun sql -> Alter_table { table = name; sql; actions })
-    (Gen_migrations.alter_table_sql ~default_sql_lookup name (Gen_migrations.Columns actions))
+let column_default_sql target col_name =
+  Stdlib.Option.bind (Tables.find_column ~name:col_name target.Tables.columns)
+    (fun (c : Tables.column) -> c.default_sql)
 
-let diff ~ddl_as_migration ~from_ ~to_ ~by_from ~by_to =
-  let creates =
-    if not ddl_as_migration then []
-    else
-      to_ |> List.filter (fun (t : Tables.stored_table) -> not (SMap.mem t.name.tn by_from))
-          |> List.map (fun t -> Create_table t) in
-  let drops =
-    from_ |> List.filter (fun (t : Tables.stored_table) -> not (SMap.mem t.name.tn by_to))
-         |> List.map (fun t -> Drop_table t) in
-  let alters =
-    to_ |> List.filter_map (fun (t : Tables.stored_table) ->
-      Stdlib.Option.bind (SMap.find_opt t.name.tn by_from)
-        (fun old -> alter_change t.name t (diff_table ~from_:old ~to_:t))) in
-  drops @ creates @ alters
+let actions_of_group = function
+  | Full_diff actions | Explicit_alter { actions; _ } -> actions
+
+let alter_change name target group =
+  let actions = actions_of_group group in
+  let options =
+    match group with
+    | Full_diff _ -> []
+    | Explicit_alter { options; _ } -> options
+  in
+  let default_sql_lookup = column_default_sql target in
+  Gen_migrations.alter_table_sql ~default_sql_lookup ~options name
+    (Gen_migrations.Columns actions)
+  |> Option.map (fun sql -> Alter_table { table = name; sql; group })
 
 let create_table_of t =
   let ddl_column (c : Tables.column) =
@@ -243,63 +215,227 @@ let create_table_of t =
       { Gen_migrations.ch_name = charset; ch_collation = collation });
     ttl = Option.map ttl_options_of t.Tables.tbl_ttl }
 
-let render_apply c =
-  match c with
-  | Drop_table t -> [Gen_migrations.drop_table_sql t.Tables.name]
-  | Create_table t -> Gen_migrations.create_table_migration (create_table_of t)
-  | Alter_table { sql; _ } -> [sql]
-
-let change_table = function
-  | Create_table t -> t.Tables.name
-  | Drop_table t -> t.Tables.name
-  | Alter_table { table; _ } -> table
-
-let change_name ~naming = function
-  | Create_table t -> mig_name naming (Name.words "create" @ Name.words t.Tables.name.tn) []
-  | Drop_table t -> mig_name naming (Name.words "drop" @ Name.words t.Tables.name.tn) []
-  | Alter_table { table; actions; _ } ->
-    mig_name naming (Name.words "alter" @ Name.words table.tn) (List.map action_of actions)
-
-let kind_of_change = function
-  | Create_table t -> Stmt.Create t.Tables.name
-  | Drop_table t -> Stmt.Drop t.Tables.name
-  | Alter_table { table; _ } -> Stmt.Alter [table]
-
-let invert ~by_from ~by_to up =
-  let irreversible reason =
-    Gen_migrations.fail
-      "table %s: this change cannot be auto-reverted (%s); \
-       write this migration's down by hand"
-      (Gen_migrations.quote_table_name (change_table up)) reason
+let generate ~naming ~hints ~ddl_as_migration ~from_ ~to_ =
+  let module Name = Migration_id.Name in
+  let table_by_name ts =
+    index_by (fun t -> t.Tables.name.tn) ts
   in
-  match up with
-  | Create_table t -> Drop_table t
-  | Drop_table t -> Create_table t
-  | Alter_table { table = name; _ } ->
-    match SMap.find_opt name.Sql.tn by_from, SMap.find_opt name.Sql.tn by_to with
-    | None, _ | _, None ->
-      irreversible "table is missing from the baseline or target snapshot"
-    | Some f, Some t ->
-      if f.Tables.tbl_charset = None && t.Tables.tbl_charset <> None then
-        irreversible "a DEFAULT CHARSET / COLLATE was added while the baseline has \
-                      no explicit charset to restore"
+  let diff ~from_ ~to_ ~by_from ~by_to =
+    let group_actions target hints actions =
+      let action_identity action =
+        try
+          Some
+            (Gen_migrations.action_to_sql_fragment
+               ~default_sql_lookup:(column_default_sql target) action)
+        with Gen_migrations.Migration_error _ -> None
+      in
+      let take_unique_match source_action actions =
+      Stdlib.Option.bind (action_identity source_action) (fun identity ->
+          let matches action = action_identity action = Some identity in
+          match List.partition matches actions with
+          | [action], remaining -> Some (action, remaining)
+        | [], _ | _ :: _ :: _, _ -> None)
+      in
+      let match_actions actions source_actions =
+        let rec loop matched remaining = function
+          | [] -> Some (List.rev matched, remaining)
+          | source_action :: rest ->
+          Stdlib.Option.bind
+            (take_unique_match source_action remaining)
+            (fun (action, remaining) -> loop (action :: matched) remaining rest)
+        in
+        loop [] actions source_actions
+      in
+      let hinted, remaining =
+        List.fold_left
+          (fun (groups, remaining) (hint : Sql.alter) ->
+            match match_actions remaining hint.alter_actions with
+            | Some ([], _) | None -> groups, remaining
+            | Some (matched, remaining) ->
+              (Explicit_alter { actions = matched; options = hint.alter_options } :: groups,
+               remaining))
+          ([], actions) hints
+      in
+      let hinted = List.rev hinted in
+      match hinted, remaining with
+      | [], _ -> [Full_diff actions]
+      | _, [] -> hinted
+      | _, actions -> Explicit_alter { actions; options = [] } :: hinted
+    in
+    let creates =
+      if not ddl_as_migration then []
       else
-        match alter_change name f (diff_table ~from_:t ~to_:f) with
-        | Some down -> down
-        | None -> irreversible "reverse diff renders to nothing"
-
-let generate ~naming ~ddl_as_migration ~from_ ~to_ =
+        to_
+        |> List.filter (fun (t : Tables.stored_table) ->
+             not (SMap.mem t.name.tn by_from))
+        |> List.map (fun t -> Create_table t)
+    in
+    let drops =
+      from_
+      |> List.filter (fun (t : Tables.stored_table) ->
+           not (SMap.mem t.name.tn by_to))
+      |> List.map (fun t -> Drop_table t)
+    in
+    let alters =
+      to_
+      |> List.concat_map (fun (t : Tables.stored_table) ->
+           match SMap.find_opt t.name.tn by_from with
+           | None -> []
+           | Some old ->
+             let table_hints =
+               List.filter
+                 (fun (hint : Sql.alter) -> hint.alter_table = t.Tables.name)
+                 hints
+             in
+             diff_table ~from_:old ~to_:t
+             |> group_actions t table_hints
+             |> List.filter_map (alter_change t.name t))
+    in
+    drops @ creates @ alters
+  in
+  let render_apply = function
+    | Drop_table t -> [Gen_migrations.drop_table_sql t.Tables.name]
+    | Create_table t -> Gen_migrations.create_table_migration (create_table_of t)
+    | Alter_table { sql; _ } -> [sql]
+  in
+  let change_table = function
+    | Create_table t -> t.Tables.name
+    | Drop_table t -> t.Tables.name
+    | Alter_table { table; _ } -> table
+  in
+  let mig_name head actions =
+    Name.render naming (Name.make head actions)
+  in
+  let index_kind_slug = function
+    | Sql.Plain_idx -> "index"
+    | Sql.Unique_idx -> "unique"
+    | Sql.Fulltext_idx -> "fulltext"
+    | Sql.Spatial_idx -> "spatial"
+  in
+  let verb spelling = Name.words spelling in
+  let action v = Name.action (verb v) [] in
+  let action_on v target = Name.action (verb v) (Name.words target) in
+  let rename kind old_ new_ =
+    Name.action (verb "rename" @ verb kind) (Name.words old_ @ Name.words new_)
+  in
+  let action_of : Sql.alter_action -> Name.action = function
+    | `Add (col, _) -> action_on "add_col" col.name.value
+    | `Drop name -> action_on "drop_col" name
+    | `Change (old_name, new_col, _) ->
+      if String.equal old_name new_col.name.value then
+        action_on "change_col" new_col.name.value
+      else rename "col" old_name new_col.name.value
+    | `RenameTable t -> action_on "rename_to" t.tn
+    | `RenameColumn (o, n) -> rename "col" o n
+    | `RenameIndex (o, n) -> rename "index" o n
+    | `AddIndex { add_idx_name; add_idx_kind; _ } ->
+      let v = verb "add" @ verb (index_kind_slug add_idx_kind) in
+      Option.map_default
+        (fun n -> Name.action v (Name.words n))
+        (Name.action v []) add_idx_name
+    | `DropIndex name -> action_on "drop_index" name
+    | `AddPrimaryKey _ -> action "add_pk"
+    | `DropPrimaryKey -> action "drop_pk"
+    | `AddConstraint _ -> action "add_constraint"
+    | `DropConstraint name -> action_on "drop_constraint" name
+    | `Default_or_convert_to _ -> action "set_charset"
+    | `TtlOptions _ -> action "set_ttl"
+    | `RemoveTtl _ -> action "remove_ttl"
+    | `Cache _ -> action "cache"
+    | `NoCache _ -> action "nocache"
+    | `AlterColumnPG (col, _) -> action_on "alter_col" col
+  in
+  let change_name = function
+    | Create_table t ->
+      mig_name (Name.words "create" @ Name.words t.Tables.name.tn) []
+    | Drop_table t ->
+      mig_name (Name.words "drop" @ Name.words t.Tables.name.tn) []
+    | Alter_table { table; group; _ } ->
+      mig_name (Name.words "alter" @ Name.words table.tn)
+        (List.map action_of (actions_of_group group))
+  in
+  let kind_of_change = function
+    | Create_table t -> Stmt.Create t.Tables.name
+    | Drop_table t -> Stmt.Drop t.Tables.name
+    | Alter_table { table; _ } -> Stmt.Alter [table]
+  in
+  let invert ~by_from ~by_to up =
+    let invert_action ~from_ = function
+      | `Add ((col : Sql.Alter_action_attr.t), _) -> Some (`Drop col.name.value)
+      | `Drop name ->
+        Option.map (fun c -> `Add (attr_of_column c, `Default))
+          (Tables.find_column ~name from_.Tables.columns)
+      | `Change (_, (new_col : Sql.Alter_action_attr.t), pos) ->
+        Option.map (fun c -> `Change (new_col.name.value, attr_of_column c, pos))
+          (Tables.find_column ~name:new_col.name.value from_.Tables.columns)
+      | `AddIndex { Sql.add_idx_name = Some name; _ } -> Some (`DropIndex name)
+      | `AddIndex { Sql.add_idx_name = None; _ } -> None
+      | `DropIndex name ->
+        Option.map (add_index name) (SMap.find_opt name from_.Tables.tbl_indexes)
+      | `AddPrimaryKey _ -> Some `DropPrimaryKey
+      | `DropPrimaryKey ->
+        let cols = Tables.get_primary_key_columns from_.Tables.columns in
+        if cols = [] then None else Some (`AddPrimaryKey cols)
+      | `Default_or_convert_to (_, _) ->
+        Option.map
+          (fun ({ charset; collation } : Tables.table_charset) ->
+            `Default_or_convert_to (charset, Option.map Gen_migrations.loc collation))
+          from_.Tables.tbl_charset
+      | `TtlOptions _ ->
+        Some (Option.map_default
+          (fun ttl -> `TtlOptions (ttl_options_of ttl, (0, 0)))
+          (`RemoveTtl (0, 0)) from_.Tables.tbl_ttl)
+      | `RemoveTtl _ ->
+        Option.map (fun ttl -> `TtlOptions (ttl_options_of ttl, (0, 0)))
+          from_.Tables.tbl_ttl
+      | `RenameTable _ | `RenameColumn _ | `RenameIndex _ | `AddConstraint _
+      | `DropConstraint _ | `Cache _ | `NoCache _ | `AlterColumnPG _ ->
+        None
+    in
+    let irreversible reason =
+      Gen_migrations.fail
+        "table %s: this change cannot be auto-reverted (%s); \
+         write this migration's down by hand"
+        (Gen_migrations.quote_table_name (change_table up)) reason
+    in
+    match up with
+    | Create_table t -> Drop_table t
+    | Drop_table t -> Create_table t
+    | Alter_table { table = name; group; _ } ->
+      match SMap.find_opt name.Sql.tn by_from, SMap.find_opt name.Sql.tn by_to with
+      | None, _ | _, None ->
+        irreversible "table is missing from the baseline or target snapshot"
+      | Some f, Some t ->
+        if f.Tables.tbl_charset = None && t.Tables.tbl_charset <> None then
+          irreversible "a DEFAULT CHARSET / COLLATE was added while the baseline has \
+                        no explicit charset to restore"
+        else
+          let down_actions =
+            match group with
+            | Full_diff _ -> diff_table ~from_:t ~to_:f
+            | Explicit_alter { actions; _ } ->
+              List.filter_map (invert_action ~from_:f) (List.rev actions)
+          in
+          match alter_change name f (Full_diff down_actions) with
+          | Some down -> down
+          | None -> irreversible "reverse diff renders to nothing"
+  in
   let from_ = List.map materialize_inline_unique from_ in
   let to_ = List.map materialize_inline_unique to_ in
   let by_from = table_by_name from_ in
   let by_to = table_by_name to_ in
-  diff ~ddl_as_migration ~from_ ~to_ ~by_from ~by_to |> List.map (fun up ->
-    { Gen_migrations.props = [ Props.Name (change_name ~naming up) ];
-      kind = kind_of_change up;
-      apply = render_apply up;
-      revert = render_apply (invert ~by_from ~by_to up) })
+  diff ~from_ ~to_ ~by_from ~by_to
+  |> List.map (fun up ->
+       { Gen_migrations.props = [ Props.Name (change_name up) ];
+         kind = kind_of_change up;
+         apply = render_apply up;
+         revert = render_apply (invert ~by_from ~by_to up) })
 
 let canonical ts =
+  let col_fragment c =
+    Gen_migrations.alter_action_attr_to_sql
+      ~default_sql_lookup:(fun _ -> c.Tables.default_sql) (attr_of_column c)
+  in
   let index_sig (name, (i : Tables.stored_index)) =
     sprintf "%s:%s:%s" name (Sql.show_index_op_kind i.kind) (String.concat "," i.cols)
   in
@@ -361,10 +497,10 @@ let replay_migrations ~replay ~from_ ~to_ migs =
       { reason = "reverting the migrations did not restore the original schema";
         got = reverted; expected = baseline })
 
-let table_ddl t =
-  Gen_migrations.create_table_schema (create_table_of t)
-
 let dump state =
+  let table_ddl t =
+    Gen_migrations.create_table_schema (create_table_of t)
+  in
   state
   |> List.rev
   |> List.concat_map table_ddl
