@@ -1,0 +1,2 @@
+CREATE TABLE users (id INT, email VARCHAR(255));
+ALTER TABLE users ADD INDEX email_idx (email), ALGORITHM=INPLACE, LOCK=NONE;

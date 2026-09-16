@@ -1,1 +1,2 @@
 CREATE TABLE users (id INT NOT NULL, email VARCHAR(255));
+ALTER TABLE users ADD UNIQUE INDEX email_idx (email);

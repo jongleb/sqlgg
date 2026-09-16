@@ -30,6 +30,7 @@ type result = {
   kind : Stmt.kind;
   dialect_features : Dialect.dialect_support list;
   annotations : stmt_annotations;
+  alter_hint : alter option;
 }
 
 val scope_of : ?cte:cte -> nested option -> stmt_annotations

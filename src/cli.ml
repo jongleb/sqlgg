@@ -235,22 +235,20 @@ let read_blocks f = Main.with_channel f (Stdlib.Option.fold ~none:[] ~some:Main.
 
 let replay_sources sources =
   Compile.reset ();
-  List.iter (function
-    | From_file f -> List.iter Main.replay_statement (read_blocks f)
-    | From_block block -> Main.replay_statement block) sources
+  List.concat_map (function
+    | From_file f -> List.filter_map Main.replay_statement (read_blocks f)
+    | From_block block -> Stdlib.Option.to_list (Main.replay_statement block)) sources
 
 let schema_of_sources sources =
-  replay_sources sources;
+  let hints = replay_sources sources in
   abort_on_errors ();
-  Tables.snapshot ()
+  Tables.snapshot (), hints
 
 let load_schema files = schema_of_sources (to_file_sources files)
 
-let diff_schema ~naming ~online_ddl ~ddl_as_migration ~from_ ~to_ =
+let diff_schema ~naming ~hints ~ddl_as_migration ~from_ ~to_ =
   let migs =
-    try
-      Schema_diff.generate ~naming ~online_ddl ~ddl_as_migration ~from_ ~to_
-        ~dialect:!Dialect.selected
+    try Schema_diff.generate ~naming ~hints ~ddl_as_migration ~from_ ~to_
     with Gen_migrations.Migration_error msg ->
       fatal "cannot generate migration (write this step manually):\n%s" msg
   in
@@ -274,7 +272,6 @@ type delta_args = {
   now : int option;
   max_id_length : int option;
   ddl_as_migration : bool;
-  online_ddl : bool;
 }
 
 type diff_args = {
@@ -313,7 +310,6 @@ let parse_args () =
   let now = ref None in
   let max_id_length = ref None in
   let ddl_as_migration = ref false in
-  let online_ddl = ref false in
   let files : (string, [ `Open of Gen.stmt list | `Positional ]) Hashtbl.t = Hashtbl.create 4 in
   let canonical = function
     | "-" -> "-"
@@ -360,8 +356,6 @@ let parse_args () =
       "-max-migration-id-length", Arg.Int (fun n -> max_id_length := Some n),
         "<N> Limit generated migration ids to N characters (default: no limit)";
       "-ddl-as-migration", Arg.Set ddl_as_migration, " Write new tables as CREATE TABLE migrations instead of plain schema DDL";
-      "-online-ddl", Arg.Set online_ddl,
-        " Append ALGORITHM/LOCK clauses to generated ALTER TABLE migrations (MySQL and TiDB only; default: off)";
     ] };
 
     { title = "Dialect and checks"; opts =
@@ -415,8 +409,7 @@ let parse_args () =
       target_files = List.rev !target_files;
       now = !now;
       max_id_length = !max_id_length;
-      ddl_as_migration = !ddl_as_migration;
-      online_ddl = !online_ddl }
+      ddl_as_migration = !ddl_as_migration }
   in
   (* these modes reset the schema and rebuild it from -base/-target/-initial,
      silently discarding whatever -open loaded *)
@@ -458,7 +451,7 @@ let parse_migrations blocks =
   abort_on_errors ();
   migs
 
-let run_migrate ({ delta = { name; target_files; now; max_id_length; ddl_as_migration; online_ddl };
+let run_migrate ({ delta = { name; target_files; now; max_id_length; ddl_as_migration };
                    gen_lang; initial_files; migrations_file; extends_file } : migrate_args) =
   let initial = to_file_sources initial_files in
   let ext = Option.map_default read_blocks [] extends_file in
@@ -466,16 +459,17 @@ let run_migrate ({ delta = { name; target_files; now; max_id_length; ddl_as_migr
   let before = recorded_blocks () in
   let current =
     schema_of_sources (initial @ List.map (fun block -> From_block block) before)
+    |> fst
   in
-  let target = load_schema target_files in
+  let target, hints = load_schema target_files in
   let regenerate () =
-    replay_sources initial;
+    ignore (replay_sources initial);
     let full = parse_migrations (recorded_blocks ()) in
     process_migrations gen_lang name full
   in
   let base = next_base now before in
   let naming = Migration_id.naming ~max_length:max_id_length base in
-  match diff_schema ~naming ~online_ddl ~ddl_as_migration ~from_:current ~to_:target with
+  match diff_schema ~naming ~hints ~ddl_as_migration ~from_:current ~to_:target with
   | [] ->
     regenerate ();
     (match before with
@@ -505,7 +499,7 @@ let run_materialize_schema ({ base_files } : materialize_args) =
   let state =
     match base_files with
     | [] -> Tables.snapshot ()
-    | files -> load_schema files
+    | files -> fst (load_schema files)
   in
   let ddl = Schema_diff.dump state in
   begin 
@@ -515,13 +509,13 @@ let run_materialize_schema ({ base_files } : materialize_args) =
   end;
   print_endline ddl
 
-let run_diff ({ delta = { name; target_files; now; max_id_length; ddl_as_migration; online_ddl };
+let run_diff ({ delta = { name; target_files; now; max_id_length; ddl_as_migration };
                 base_files; output } : diff_args) =
-  let from_ = load_schema base_files in
-  let to_   = load_schema target_files in
+  let from_, _ = load_schema base_files in
+  let to_, hints = load_schema target_files in
   let base = next_base now [] in
   let naming = Migration_id.naming ~max_length:max_id_length base in
-  let migs = diff_schema ~naming ~online_ddl ~ddl_as_migration ~from_ ~to_ in
+  let migs = diff_schema ~naming ~hints ~ddl_as_migration ~from_ ~to_ in
   Tables.restore from_;
   match output with
   | None -> ()
