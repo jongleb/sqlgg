@@ -122,7 +122,7 @@ let merge_params l =
 let attrs_only msg =
   List.map (function
     | AttrWithSources attr -> attr
-    | DynamicWithSources _ -> failwith msg)
+    | DynamicWithSources _ -> fail "%s" msg)
 
 let empty_env = { query_has_grouping = false; 
   tables = []; schema = []; 
@@ -139,7 +139,7 @@ let schema_of ~env name =
   let result = Tables_with_derived.get_from ~env name in 
   Schema.Source.of_schema ~sources:[fst result] (snd result)
 
-let get_or_failwith = function `Error s -> failwith s | `Ok t -> t
+let get_or_failwith = function `Error s -> fail "%s" s | `Ok t -> t
 
 let values_or_all table names =
   let schema = Tables.get_schema table in
@@ -230,7 +230,12 @@ let resolve_column ~env {cname;tname;cpos} =
 let resolve_column_opt ~env col =
   match resolve_column ~env col with
   | attr -> Some attr
-  | exception (Schema.Error _ | Failure _ | At (_, (Schema.Error _ | Failure _))) -> None
+  | exception
+      (Schema.Error _
+      | Failure _
+      | Sql_error _
+      | At (_, (Schema.Error _ | Failure _ | Sql_error _))) ->
+    None
 
 let as_column ~env = function
   | Sql.Column col -> resolve_column_opt ~env col.collated
@@ -839,7 +844,7 @@ and assign_types env expr =
       let whens_t =
         let types = List.map get_or_failwith @@ whens_t in
         match Type.common_supertype @@ Option.map_default get_or_failwith (Type.depends Bool) case_t :: types with
-        | None -> failwith "no common supertype for all case when branches"
+        | None -> fail "no common supertype for all case when branches"
         | Some t -> t
       in
       let thens_t =
@@ -853,7 +858,7 @@ and assign_types env expr =
           | Decimal _ | Any | One_or_all | Json | StringLiteral _ | Json_path | Bool -> false in
         let exhaust_checked = if is_exhausted then types else List.map Type.make_nullable types in  
         match Type.common_supertype @@ Option.map_default (fun else_t -> types @ [get_or_failwith else_t]) exhaust_checked else_t with
-        | None -> failwith "no common supertype for all case then branches"
+        | None -> fail "no common supertype for all case then branches"
         | Some t -> t
       in
       let thens_e = List.map (assign_params thens_t) thens_e in
@@ -1328,12 +1333,12 @@ and ensure_res_expr = function
   | InTupleList { value = { param_id; _ }; _ } -> failed ~at:param_id.pos "ensure_res_expr InTupleList TBD"
   | Choices (p,_) -> failed ~at:p.pos "ensure_res_expr Choices TBD"
   | InChoice (p,_,_) -> failed ~at:p.pos "ensure_res_expr InChoice TBD"
-  | Column _ | Of_values _ -> failwith "Not a simple expression"
-  | Fun { kind; _ } when Sql.is_grouping kind -> failwith "Grouping function not allowed in simple expression"
+  | Column _ | Of_values _ -> fail "Not a simple expression"
+  | Fun { kind; _ } when Sql.is_grouping kind -> fail "Grouping function not allowed in simple expression"
   | Fun { kind; parameters; over; fn_pos; _ } ->
      ResFun { kind = source_fun_kind_to_infer kind; parameters = List.map ensure_res_expr parameters; over; fn_pos; ret = None } (* FIXME *)
   | SelectExpr _ -> failwith "not implemented : ensure_res_expr for SELECT"
-  | OptionActions _ -> failwith  "BoolChoice is used in WHERE expr only"
+  | OptionActions _ -> fail "BoolChoice is used in WHERE expr only"
 
 and eval_nested env nested =
   (* nested selects generate new fresh schema in scope, cannot refer to outer schema,
@@ -1513,7 +1518,7 @@ and eval_source env (x, alias) =
   | `Nested from ->
     let (env, p, from_, annotations) = eval_nested env (Some from) in
     let s, _ = infer_schema env [dummy_loc All] in
-    if alias <> None then failwith "No alias allowed on nested tables";
+    if alias <> None then fail "No alias allowed on nested tables";
     let s = attrs_only "Nested source cannot have dynamic columns" s in
     { rsrc_schema = s; rsrc_params = p; rsrc_tables = env.tables; rsrc_aliases = [];
       rsrc_dynamic = From.dynamic_columns from_; rsrc_physical_table = None;
@@ -1546,7 +1551,7 @@ and eval_source env (x, alias) =
         where = None; group = []; having = None }
     in
     let (s, p, annotations) = match row_constructor_list with
-      | RowExprList [] -> failwith "Each row of a VALUES clause must have at least one column"
+      | RowExprList [] -> fail "Each row of a VALUES clause must have at least one column"
       | RowExprList (exprs :: xs) ->
         let unions = List.map (fun exprs -> `Union, dummy_select exprs ) xs in
         let select = dummy_select exprs in
@@ -1605,7 +1610,7 @@ and eval_cte { cte_items; is_recursive } =
             { env with ctes = (table_name, to_schema s2) :: env.ctes }
           in
           eval_select_complete ~compound_env:self_cte env stmt
-        | CteSharedQuery _ -> failwith "Recursive CTEs with shared query currently are not supported"
+        | CteSharedQuery _ -> fail "Recursive CTEs with shared query currently are not supported"
       end    
       else (
         match cte.stmt with
@@ -1692,12 +1697,12 @@ let annotate_select select attrs =
     let rec loop acc cols attrs =
       match cols, attrs with
       | [], [] -> List.rev acc
-      | ({ value = (All | AllOf _); _ }) :: _, _ -> failwith "Asterisk not supported"
+      | ({ value = (All | AllOf _); _ }) :: _, _ -> fail "Asterisk not supported"
       | { value = Expr (loc, name); pos = col_pos } :: cols, a :: attrs ->
         let e = push_meta ~meta_of:(const None) a.meta loc.value in
         let t = a.domain in
         loop ({ value = Expr ({ loc with value = Fun { fn_name = "insert_select"; kind = (F (Typ t, [Typ t])); parameters = [e]; over = None; fn_pos = loc.pos } }, name); pos = col_pos } :: acc) cols attrs
-      | _, [] | [], _ -> failwith "Select cardinality doesn't match Insert"
+      | _, [] | [], _ -> fail "Select cardinality doesn't match Insert"
     in
     loop [] cols attrs
   in

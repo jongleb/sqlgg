@@ -1,0 +1,11 @@
+(test
+ (name test_analysis)
+ (libraries oUnit sqlgg))
+
+(test
+ (name test_ir)
+ (libraries oUnit sqlgg sqlgg.ir)
+ (deps ../../ir/sqlgg-ir-v1.schema.json)
+ (action
+  (setenv SQLGG_IR_SCHEMA %{dep:../../ir/sqlgg-ir-v1.schema.json}
+   (run %{test}))))

@@ -1,0 +1,587 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sqlgg.org/schema/sqlgg-ir-v1.schema.json",
+  "title": "sqlgg IR v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["irVersion", "statements"],
+  "properties": {
+    "irVersion": { "const": 1 },
+    "statements": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/statement" }
+    }
+  },
+  "$defs": {
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "stop"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "stop": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "identifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "span"],
+      "properties": {
+        "name": { "type": ["string", "null"] },
+        "span": { "$ref": "#/$defs/span" }
+      }
+    },
+    "tableName": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["database", "name"],
+      "properties": {
+        "database": { "type": ["string", "null"] },
+        "name": { "type": "string" }
+      }
+    },
+    "metadata": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "value"],
+        "properties": {
+          "key": { "type": "string" },
+          "value": { "type": "string" }
+        }
+      }
+    },
+    "sqlType": {
+      "unevaluatedProperties": false,
+      "oneOf": [
+        { "$ref": "#/$defs/simpleIntType" },
+        { "$ref": "#/$defs/simpleUInt64Type" },
+        { "$ref": "#/$defs/simpleTextType" },
+        { "$ref": "#/$defs/simpleBlobType" },
+        { "$ref": "#/$defs/simpleFloatType" },
+        { "$ref": "#/$defs/simpleBoolType" },
+        { "$ref": "#/$defs/simpleDatetimeType" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "precision", "scale", "nullability"],
+          "properties": {
+            "kind": { "const": "decimal" },
+            "precision": { "type": ["integer", "null"] },
+            "scale": { "type": ["integer", "null"] },
+            "nullability": { "$ref": "#/$defs/nullability" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "values", "closed", "nullability"],
+          "properties": {
+            "kind": { "const": "union" },
+            "values": { "type": "array", "items": { "type": "string" } },
+            "closed": { "type": "boolean" },
+            "nullability": { "$ref": "#/$defs/nullability" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value", "nullability"],
+          "properties": {
+            "kind": { "const": "stringLiteral" },
+            "value": { "type": "string" },
+            "nullability": { "$ref": "#/$defs/nullability" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value", "nullability"],
+          "properties": {
+            "kind": { "const": "floatingLiteral" },
+            "value": { "type": "number" },
+            "nullability": { "$ref": "#/$defs/nullability" }
+          }
+        },
+        { "$ref": "#/$defs/simpleJsonPathType" },
+        { "$ref": "#/$defs/simpleOneOrAllType" },
+        { "$ref": "#/$defs/simpleJsonType" },
+        { "$ref": "#/$defs/simpleAnyType" }
+      ]
+    },
+    "nullability": {
+      "enum": ["nullable", "strict", "unknown"]
+    },
+    "simpleIntType": {
+      "$ref": "#/$defs/simpleType",
+      "properties": {
+        "kind": { "const": "int" },
+        "nullability": { "$ref": "#/$defs/nullability" }
+      }
+    },
+    "simpleUInt64Type": {
+      "$ref": "#/$defs/simpleType",
+      "properties": {
+        "kind": { "const": "uint64" },
+        "nullability": { "$ref": "#/$defs/nullability" }
+      }
+    },
+    "simpleTextType": {
+      "$ref": "#/$defs/simpleType",
+      "properties": {
+        "kind": { "const": "text" },
+        "nullability": { "$ref": "#/$defs/nullability" }
+      }
+    },
+    "simpleBlobType": {
+      "$ref": "#/$defs/simpleType",
+      "properties": {
+        "kind": { "const": "blob" },
+        "nullability": { "$ref": "#/$defs/nullability" }
+      }
+    },
+    "simpleFloatType": {
+      "$ref": "#/$defs/simpleType",
+      "properties": {
+        "kind": { "const": "float" },
+        "nullability": { "$ref": "#/$defs/nullability" }
+      }
+    },
+    "simpleBoolType": {
+      "$ref": "#/$defs/simpleType",
+      "properties": {
+        "kind": { "const": "bool" },
+        "nullability": { "$ref": "#/$defs/nullability" }
+      }
+    },
+    "simpleDatetimeType": {
+      "$ref": "#/$defs/simpleType",
+      "properties": {
+        "kind": { "const": "datetime" },
+        "nullability": { "$ref": "#/$defs/nullability" }
+      }
+    },
+    "simpleJsonPathType": {
+      "$ref": "#/$defs/simpleType",
+      "properties": {
+        "kind": { "const": "jsonPath" },
+        "nullability": { "$ref": "#/$defs/nullability" }
+      }
+    },
+    "simpleOneOrAllType": {
+      "$ref": "#/$defs/simpleType",
+      "properties": {
+        "kind": { "const": "oneOrAll" },
+        "nullability": { "$ref": "#/$defs/nullability" }
+      }
+    },
+    "simpleJsonType": {
+      "$ref": "#/$defs/simpleType",
+      "properties": {
+        "kind": { "const": "json" },
+        "nullability": { "$ref": "#/$defs/nullability" }
+      }
+    },
+    "simpleAnyType": {
+      "$ref": "#/$defs/simpleType",
+      "properties": {
+        "kind": { "const": "any" },
+        "nullability": { "$ref": "#/$defs/nullability" }
+      }
+    },
+    "simpleType": {
+      "type": "object",
+      "required": ["kind", "nullability"]
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "metadata"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "$ref": "#/$defs/sqlType" },
+        "metadata": { "$ref": "#/$defs/metadata" }
+      }
+    },
+    "alternative": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name", "nameSpan", "bodySpan", "parameters"],
+          "properties": {
+            "kind": { "const": "simple" },
+            "name": { "type": ["string", "null"] },
+            "nameSpan": { "$ref": "#/$defs/span" },
+            "bodySpan": { "$ref": "#/$defs/span" },
+            "parameters": {
+              "oneOf": [
+                { "type": "null" },
+                { "type": "array", "items": { "$ref": "#/$defs/parameter" } }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name", "sql"],
+          "properties": {
+            "kind": { "const": "verbatim" },
+            "name": { "type": "string" },
+            "sql": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "tupleKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": { "const": "insertion" },
+            "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "elements", "membership", "span"],
+          "properties": {
+            "kind": { "const": "whereIn" },
+            "elements": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "metadata"],
+                "properties": {
+                  "type": { "$ref": "#/$defs/sqlType" },
+                  "metadata": { "$ref": "#/$defs/metadata" }
+                }
+              }
+            },
+            "membership": { "enum": ["in", "notIn"] },
+            "span": { "$ref": "#/$defs/span" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "types", "valuesStart"],
+          "properties": {
+            "kind": { "const": "valueRows" },
+            "types": { "type": "array", "items": { "$ref": "#/$defs/sqlType" } },
+            "valuesStart": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    "parameter": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "identifier", "type", "metadata"],
+          "properties": {
+            "kind": { "const": "scalar" },
+            "identifier": { "$ref": "#/$defs/identifier" },
+            "type": { "$ref": "#/$defs/sqlType" },
+            "metadata": { "$ref": "#/$defs/metadata" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "identifier", "type", "metadata"],
+          "properties": {
+            "kind": { "const": "list" },
+            "identifier": { "$ref": "#/$defs/identifier" },
+            "type": { "$ref": "#/$defs/sqlType" },
+            "metadata": { "$ref": "#/$defs/metadata" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "identifier", "membership", "parameters"],
+          "properties": {
+            "kind": { "const": "choiceList" },
+            "identifier": { "$ref": "#/$defs/identifier" },
+            "membership": { "enum": ["in", "notIn"] },
+            "parameters": { "type": "array", "items": { "$ref": "#/$defs/parameter" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "identifier", "alternatives"],
+          "properties": {
+            "kind": { "const": "choice" },
+            "identifier": { "$ref": "#/$defs/identifier" },
+            "alternatives": { "type": "array", "items": { "$ref": "#/$defs/alternative" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "identifier", "alternatives"],
+          "properties": {
+            "kind": { "const": "dynamicSelect" },
+            "identifier": { "$ref": "#/$defs/identifier" },
+            "alternatives": { "type": "array", "items": { "$ref": "#/$defs/alternative" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "identifier", "span", "table", "alias"],
+          "properties": {
+            "kind": { "const": "dynamicSelectJoin" },
+            "identifier": { "$ref": "#/$defs/identifier" },
+            "span": { "$ref": "#/$defs/span" },
+            "table": { "$ref": "#/$defs/tableName" },
+            "alias": {
+              "oneOf": [
+                { "type": "null" },
+                { "$ref": "#/$defs/tableName" }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "identifier", "tuple"],
+          "properties": {
+            "kind": { "const": "tuple" },
+            "identifier": { "$ref": "#/$defs/identifier" },
+            "tuple": { "$ref": "#/$defs/tupleKind" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "identifier", "parameters", "whenSpan", "elseSpan", "action"],
+          "properties": {
+            "kind": { "const": "optionalAction" },
+            "identifier": { "$ref": "#/$defs/identifier" },
+            "parameters": { "type": "array", "items": { "$ref": "#/$defs/parameter" } },
+            "whenSpan": { "$ref": "#/$defs/span" },
+            "elseSpan": { "$ref": "#/$defs/span" },
+            "action": { "enum": ["boolChoices", "setDefault"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "reference", "span", "parameters"],
+          "properties": {
+            "kind": { "const": "shared" },
+            "reference": { "type": "string" },
+            "span": { "$ref": "#/$defs/span" },
+            "parameters": { "type": "array", "items": { "$ref": "#/$defs/parameter" } }
+          }
+        }
+      ]
+    },
+    "resultColumn": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name", "type", "metadata"],
+          "properties": {
+            "kind": { "const": "column" },
+            "name": { "type": "string" },
+            "type": { "$ref": "#/$defs/sqlType" },
+            "metadata": { "$ref": "#/$defs/metadata" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "identifier", "fields"],
+          "properties": {
+            "kind": { "const": "dynamicColumn" },
+            "identifier": { "$ref": "#/$defs/identifier" },
+            "fields": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["identifier", "field", "joinDependencies"],
+                "properties": {
+                  "identifier": { "$ref": "#/$defs/identifier" },
+                  "field": { "$ref": "#/$defs/field" },
+                  "joinDependencies": { "type": "array", "items": { "type": "integer" } }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "feature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "span"],
+      "properties": {
+        "name": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message", "span"],
+      "properties": {
+        "message": { "type": "string" },
+        "span": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/span" }
+          ]
+        }
+      }
+    },
+    "operation": {
+      "unevaluatedProperties": false,
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "cardinality"],
+          "properties": {
+            "kind": { "const": "select" },
+            "cardinality": { "enum": ["unknown", "zeroOrOne", "one", "many"] }
+          }
+        },
+        { "$ref": "#/$defs/tableOperation", "properties": { "kind": { "const": "insert" } } },
+        { "$ref": "#/$defs/tableOperation", "properties": { "kind": { "const": "createTable" } } },
+        {
+          "type": "object",
+          "required": ["kind", "name"],
+          "properties": { "kind": { "const": "createIndex" }, "name": { "type": "string" } }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "table"],
+          "properties": {
+            "kind": { "const": "update" },
+            "table": {
+              "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/tableName" }]
+            }
+          }
+        },
+        { "$ref": "#/$defs/tablesOperation", "properties": { "kind": { "const": "delete" } } },
+        { "$ref": "#/$defs/tablesOperation", "properties": { "kind": { "const": "alter" } } },
+        { "$ref": "#/$defs/tableOperation", "properties": { "kind": { "const": "dropTable" } } },
+        {
+          "type": "object",
+          "required": ["kind", "renames"],
+          "properties": {
+            "kind": { "const": "renameTables" },
+            "renames": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["source", "target"],
+                "properties": {
+                  "source": { "$ref": "#/$defs/tableName" },
+                  "target": { "$ref": "#/$defs/tableName" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "nested"],
+          "properties": {
+            "kind": { "const": "set" },
+            "nested": {
+              "oneOf": [
+                { "type": "null" },
+                { "$ref": "#/$defs/operation" }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "name"],
+          "properties": { "kind": { "const": "createRoutine" }, "name": { "$ref": "#/$defs/tableName" } }
+        },
+        { "$ref": "#/$defs/namedOperation", "properties": { "kind": { "const": "createType" } } },
+        { "$ref": "#/$defs/namedOperation", "properties": { "kind": { "const": "dropType" } } },
+        { "$ref": "#/$defs/namedOperation", "properties": { "kind": { "const": "createExtension" } } },
+        {
+          "type": "object",
+          "required": ["kind", "names"],
+          "properties": {
+            "kind": { "const": "dropExtension" },
+            "names": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "other" } } }
+      ]
+    },
+    "tableOperation": {
+      "type": "object",
+      "required": ["kind", "table"],
+      "properties": { "table": { "$ref": "#/$defs/tableName" } }
+    },
+    "tablesOperation": {
+      "type": "object",
+      "required": ["kind", "tables"],
+      "properties": { "tables": { "type": "array", "items": { "$ref": "#/$defs/tableName" } } }
+    },
+    "namedOperation": {
+      "type": "object",
+      "required": ["kind", "name"],
+      "properties": { "name": { "type": "string" } }
+    },
+    "statement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "sql", "operation", "features"],
+          "properties": {
+            "kind": { "const": "parsed" },
+            "sql": { "type": "string" },
+            "operation": { "$ref": "#/$defs/operation" },
+            "features": { "type": "array", "items": { "$ref": "#/$defs/feature" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "sql", "operation", "parameters", "columns", "features"],
+          "properties": {
+            "kind": { "const": "checked" },
+            "sql": { "type": "string" },
+            "operation": { "$ref": "#/$defs/operation" },
+            "parameters": { "type": "array", "items": { "$ref": "#/$defs/parameter" } },
+            "columns": { "type": "array", "items": { "$ref": "#/$defs/resultColumn" } },
+            "features": { "type": "array", "items": { "$ref": "#/$defs/feature" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "sql", "diagnostics"],
+          "properties": {
+            "kind": { "const": "invalid" },
+            "sql": { "type": "string" },
+            "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }
+          }
+        }
+      ]
+    }
+  }
+}

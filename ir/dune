@@ -1,0 +1,10 @@
+(library
+ (name sqlgg_ir)
+ (public_name sqlgg.ir)
+ (modules Sqlgg_ir V1 Lower Json)
+ (libraries sqlgg yojson))
+
+(install
+ (package sqlgg)
+ (section share)
+ (files sqlgg-ir-v1.schema.json))

@@ -46,8 +46,8 @@ let columns_to_schema cols = List.map (fun c -> c.attr) cols
 
 let column_of_attr attr = { attr; source_kind = None; default_sql = None }
 
-let no_such_table name = failwith (sprintf "no such table %s" (Sql.show_table_name name))
-let table_exists name = failwith (sprintf "table %s already exists" (Sql.show_table_name name))
+let no_such_table name = fail "no such table %s" (Sql.show_table_name name)
+let table_exists name = fail "table %s already exists" (Sql.show_table_name name)
 
 let to_table t = (t.name, columns_to_schema t.columns)
 
