@@ -5,8 +5,10 @@ open ExtLib
 open Prelude
 open Sql
 open Narrowing
+open Jsonkit.Primitives
+open Ppx_deriving_jsonschema_runtime.Primitives.Jsonkit
 
-module Config = struct 
+module Config = struct
   let debug = ref false
   (* If strict mode is not enabled, some dbs allow this. *)
   let allow_write_notnull_null = ref false
@@ -22,7 +24,7 @@ type query_scope =
 type env = {
   tables : Tables.table list;
   schema : table_name Schema.Source.t;
-  (* 
+  (*
     1. CTEs = tables for the current statement (not keeping during whole .sql)
     2. It merges with global tables during source resolving
     3. The Tables field mostly stores aliases and forms a scheme
@@ -51,14 +53,14 @@ module Tables_with_derived = struct
   let get_from ~env name = get_from  (env.ctes @ env.tables) name
 end
 
-type enum_ctor_value_data = { ctor_name: string; pos: Pos.t; } [@@deriving show]
+type enum_ctor_value_data = { ctor_name: string; pos: Pos.t; } [@@deriving show, eq]
 
 type select_scope = {
   pos : Pos.t;
   src_tbls : Sql.table list;
   cte_tables : Sql.table list;
   table_aliases : table_alias list;
-} [@@deriving show]
+} [@@deriving show, eq, json, jsonschema]
 
 type stmt_annotations = {
   src_tbls : Sql.table list;
@@ -68,7 +70,7 @@ type stmt_annotations = {
   expr_types : Type.t located list;
   result_aliases : Sql.attr located list;
   select_scopes : select_scope list;
-} [@@deriving show]
+} [@@deriving show, eq, json, jsonschema]
 
 let no_stmt_annotations =
   { src_tbls = []; cte_defs = []; table_aliases = []; table_defs = [];
@@ -96,22 +98,22 @@ type res_expr =
   | ResFun of res_fun (** function kind (return type and flavor), arguments *)
   | ResOptionActions of { choice_id: param_id; res_choice: res_expr; pos: (Pos.t * Pos.t); kind: Sql.option_actions_kind }
   | ResCase of res_case located
-  [@@deriving show] 
+  [@@deriving show, eq]
 
 and res_case = {
   case: res_expr option;
   branches: case_branch list;
   else_: res_expr option;
   result_type: Type.t option;
-} [@@deriving show]
+} [@@deriving show, eq]
 
-and case_branch = { when_: res_expr; then_: res_expr; } [@@deriving show]
+and case_branch = { when_: res_expr; then_: res_expr; } [@@deriving show, eq]
 
 and res_fun = { kind: Type.t func [@printer pp_func] ; parameters: res_expr list; over: Sql.over option; fn_pos: Pos.t;
-  ret: Type.t option } [@@deriving show]
+  ret: Type.t option } [@@deriving show, eq]
 
 and res_in_tuple_list =
-  ResTyped of (Type.t * Meta.t) list | Res of (res_expr * Meta.t) list [@@deriving show]
+  ResTyped of (Type.t * Meta.t) list | Res of (res_expr * Meta.t) list [@@deriving show, eq]
 
 let merge_params l =
   List.fold_right
@@ -124,9 +126,9 @@ let attrs_only msg =
     | AttrWithSources attr -> attr
     | DynamicWithSources _ -> fail "%s" msg)
 
-let empty_env = { query_has_grouping = false; 
-  tables = []; schema = []; 
-  set_tyvar_strict = false; 
+let empty_env = { query_has_grouping = false;
+  tables = []; schema = [];
+  set_tyvar_strict = false;
   ctes = [];
   is_order_by = false;
   is_update = false;
@@ -136,7 +138,7 @@ let empty_env = { query_has_grouping = false;
 }
 
 let schema_of ~env name =
-  let result = Tables_with_derived.get_from ~env name in 
+  let result = Tables_with_derived.get_from ~env name in
   Schema.Source.of_schema ~sources:[fst result] (snd result)
 
 let get_or_failwith = function `Error s -> fail "%s" s | `Ok t -> t
@@ -144,7 +146,7 @@ let get_or_failwith = function `Error s -> fail "%s" s | `Ok t -> t
 let values_or_all table names =
   let schema = Tables.get_schema table in
   match names with
-  | Some names -> 
+  | Some names ->
     let req_missing =
       List.filter_map
         (fun { extra; name; _ } ->
@@ -155,10 +157,10 @@ let values_or_all table names =
         )
         schema
     in
-    begin match req_missing with 
+    begin match req_missing with
     | [] -> ()
-    | fields -> 
-        fail "Fields: (%s) don't have a default value" (String.concat "," fields) end;    
+    | fields ->
+        fail "Fields: (%s) don't have a default value" (String.concat "," fields) end;
     Schema.project names schema
   | None -> schema
 
@@ -192,7 +194,7 @@ let exists_windowing columns =
   List.exists (function
     | { value = Expr ({ value; _ }, _); _ } -> is_windowing value
     | { value = (All | AllOf _); _ } -> false
-  ) columns  
+  ) columns
 
 (* all columns from tables, without duplicates *)
 (* FIXME check type of duplicates *)
@@ -247,7 +249,7 @@ let _print_env env =
   Tables.print stderr env.tables
 
 let update_schema_with_aliases all_schema final_schema =
-  let applied = all_schema |> List.filter (fun s1 -> List.for_all Schema.Source.Attr.(fun s2 -> s2.attr.name <> s1.attr.name) final_schema) in  
+  let applied = all_schema |> List.filter (fun s1 -> List.for_all Schema.Source.Attr.(fun s2 -> s2.attr.name <> s1.attr.name) final_schema) in
   applied @ final_schema
 
 let rec bool_choice_id = function
@@ -664,7 +666,7 @@ let rec resolve_columns env expr =
       let text_as_json = Meta.find_opt attr.meta "text_as_json" in
       let domain = match json_null_kind, text_as_json, attr.domain with
         | v, _, ({ t = Json; nullability } as d)
-        | v, Some "true", ({ t = Text; nullability } as d) -> 
+        | v, Some "true", ({ t = Text; nullability } as d) ->
           (*
             Determines whether JSON null is allowed as a valid value in the column.
 
@@ -689,31 +691,31 @@ let rec resolve_columns env expr =
 
             This impacts how JSON expressions are parsed, validated, and how DDL is generated.
           *)
-          let nullability = match v, nullability with 
+          let nullability = match v, nullability with
           | Some "false", Type.Strict -> Type.Strict
           | _ -> Type.Nullable
           in
           { Type.t = d.t; nullability; }
-        | _, Some _, _ -> 
-          fail "Column %s has text_as_json meta, but its type is not Text" col.collated.cname  
-        | Some _, _, _ -> 
+        | _, Some _, _ ->
+          fail "Column %s has text_as_json meta, but its type is not Text" col.collated.cname
+        | Some _, _, _ ->
           fail "Column %s has json_null_kind meta, but its type is not Json or Text" col.collated.cname
-        | None, _, _ -> 
+        | None, _, _ ->
           attr.domain
       in
       ResValue domain
     | OptionActions { choice; pos; kind } ->
       let choice_id = match bool_choice_id choice with
       | Some choice_id -> choice_id
-      | None -> 
+      | None ->
         fail "BoolChoices expected a parameter, but isn't presented. Use regular Choices for this kind of logic"
       in
       ResOptionActions { res_choice = each choice; choice_id; pos; kind }
     | Param (x, m) -> ResParam (make_param ~id:x.id ~typ:(Source_type.to_infer_type x.typ), m)
-    | InTupleList ({ value = { exprs; param_id; kind_in_tuple_list; }; pos } ) -> 
+    | InTupleList ({ value = { exprs; param_id; kind_in_tuple_list; }; pos } ) ->
       let res_exprs = List.map (fun expr ->
         let res_expr = each expr in
-        match res_expr with 
+        match res_expr with
         | ResCase _
         | ResValue _
         | ResParam _
@@ -727,7 +729,7 @@ let rec resolve_columns env expr =
       ) exprs in
       let res_exprs = List.map2 (fun e re ->
         match e with
-        | Column col -> re, (resolve_column ~env col.collated).attr.meta 
+        | Column col -> re, (resolve_column ~env col.collated).attr.meta
         | _ -> re, Meta.empty ()
       ) exprs res_exprs in
       ResInTupleList {param_id; res_in_tuple_list = Res res_exprs; kind = kind_in_tuple_list; pos }
@@ -743,7 +745,7 @@ let rec resolve_columns env expr =
       ResCase { value = { case; branches; else_; result_type = None }; pos }
     | Of_values col -> begin match Hashtbl.find_opt env.insert_resolved_types col with
       | Some t -> ResValue t
-      | None -> fail "VALUES(col) as an expression is only acceptable in ON DUPLICATE KEY UPDATE context" 
+      | None -> fail "VALUES(col) as an expression is only acceptable in ON DUPLICATE KEY UPDATE context"
       end
     (* nested select *)
     | SelectExpr (select, usage) ->
@@ -752,9 +754,9 @@ let rec resolve_columns env expr =
       let schema' = Schema.Source.to_schema schema in
       (* represet nested selects as functions with sql parameters as function arguments, some hack *)
       match schema, usage with
-      | [ { attr = {domain; _}; _ } ], `AsValue -> 
+      | [ { attr = {domain; _}; _ } ], `AsValue ->
         (* This function should be raised? *)
-        let rec with_count = function 
+        let rec with_count = function
             | Case { value = { case = _; branches; else_ }; _ } ->
               let then_exprs = List.map (fun b -> b.Sql.then_) branches in
               let all_results_exprs = then_exprs @ (option_list else_) in
@@ -767,15 +769,15 @@ let rec resolve_columns env expr =
                 | None -> None
                 | Some _ -> Stdlib.Option.bind c.body with_count
               ) (Some domain) chs
-            | OptionActions { choice; _ } -> with_count choice  
+            | OptionActions { choice; _ } -> with_count choice
             | Fun { over = Some _; _ }
             | Value _| Param _| Inparam _ | InChoice _
             | Column _| InTupleList _ | Of_values _ -> None
         in
         let default_null = Type.make_nullable domain in
-        (* The only way to have a result in a subquery is to use the COUNT function wihout the HAVING expression. 
+        (* The only way to have a result in a subquery is to use the COUNT function wihout the HAVING expression.
            Any other expression could possibly return no rows. *)
-        let typ = match select.select_complete.select with 
+        let typ = match select.select_complete.select with
         | ({ having = Some _; _ }, _) -> Type.nullable domain.t
         | ({ columns = [{ value = Expr ({ value = c; _ }, _); _ }]; _ }, _) -> c |> with_count |> Option.default default_null
         | ({ columns = [_]; _ }, _) -> default_null
@@ -811,15 +813,15 @@ and assign_types env expr =
         | Some t -> `Ok t
       in
       ResOptionActions { choice with res_choice }, t
-    | ResInTupleList { param_id; res_in_tuple_list; kind; pos } -> 
-      (match res_in_tuple_list with 
-      | Res res_exprs -> ResInTupleList { param_id; 
+    | ResInTupleList { param_id; res_in_tuple_list; kind; pos } ->
+      (match res_in_tuple_list with
+      | Res res_exprs -> ResInTupleList { param_id;
         res_in_tuple_list = ResTyped (List.map (fun (expr, meta) ->
-          let typ = expr |> typeof |> snd |> get_or_failwith in 
-          if Type.is_any typ then 
+          let typ = expr |> typeof |> snd |> get_or_failwith in
+          if Type.is_any typ then
               fail "If you need to have a field as parameter in the left part you should specify a type"
           else typ, meta
-        ) res_exprs); kind; pos }, `Ok (Type.strict Bool) 
+        ) res_exprs); kind; pos }, `Ok (Type.strict Bool)
       | ResTyped _ -> assert false
       )
     | ResInChoice (n, k, e) -> let e, t = typeof e in ResInChoice (n, k, e), t
@@ -850,13 +852,13 @@ and assign_types env expr =
       let thens_t =
         let types = List.map get_or_failwith @@ thens_t in
         let is_exhausted = match whens_t.t with
-          | Union { ctors; _ } -> 
+          | Union { ctors; _ } ->
             (* Since we have string literals, we can check if the enums are already exhausted or if a default case is required *)
             let values = Type.Enum_kind.Ctors.of_list @@ List.filter_map (function ResValue { t = StringLiteral v; _ } -> Some v | _ -> None) whens_e in
             Type.Enum_kind.Ctors.compare values ctors = 0
           | Int | UInt64 | Text | Blob | Float | Datetime | FloatingLiteral _
           | Decimal _ | Any | One_or_all | Json | StringLiteral _ | Json_path | Bool -> false in
-        let exhaust_checked = if is_exhausted then types else List.map Type.make_nullable types in  
+        let exhaust_checked = if is_exhausted then types else List.map Type.make_nullable types in
         match Type.common_supertype @@ Option.map_default (fun else_t -> types @ [get_or_failwith else_t]) exhaust_checked else_t with
         | None -> fail "no common supertype for all case then branches"
         | Some t -> t
@@ -880,7 +882,7 @@ and assign_types env expr =
             (String.concat ", " @@ List.map show types)
         in
         if !Config.debug then eprintfn "func %s" (show_func ());
-        let convert_args ret args = 
+        let convert_args ret args =
           let typevar = Hashtbl.create 10 in
           let resolved_typs = Hashtbl.create 10 in
 
@@ -923,10 +925,10 @@ and assign_types env expr =
           env.query_has_grouping || Option.map_default (fun o -> o.frame_has_a_row) false over in
         let consider_agg_nullability typ = if aggregates_a_row && is_strict typ then typ else make_nullable typ in
 
-        let first_strict ret args = 
+        let first_strict ret args =
           let has_one_strict = List.exists (fun arg -> equal_nullability arg.nullability Strict) types in
           let ret = if has_one_strict then make_strict ret
-            else args |> common_nullability |> undepend ret in 
+            else args |> common_nullability |> undepend ret in
           ret , args
         in
 
@@ -951,11 +953,11 @@ and assign_types env expr =
         | Agg Count, ([] (* asterisk *) | [_]) -> strict Int, types
         | Agg Avg, [_] -> consider_agg_nullability @@ nullable Float, types
         | Agg Self, [_] -> let args, ret = convert Sql.agg_same_type in consider_agg_nullability ret, args
-        | Agg (With_order { with_order_kind = Group_concat; _ }), ((_ :: _) as params) -> 
+        | Agg (With_order { with_order_kind = Group_concat; _ }), ((_ :: _) as params) ->
           let ret = depends Text in
           let nullability = common_nullability (ret :: params) in
           consider_agg_nullability @@ (undepend ret nullability), types
-        | Agg (With_order { with_order_kind = Json_arrayagg; _ }), [t1] -> 
+        | Agg (With_order { with_order_kind = Json_arrayagg; _ }), [t1] ->
           let ret = depends Json in
           let nullability = common_nullability [ret; t1] in
           consider_agg_nullability @@ (undepend ret nullability), types
@@ -999,7 +1001,7 @@ and assign_types env expr =
           | Comp_equal | Comp_num_cmp | Comp_text_cmp | Comp_num_eq ->
             undepend ret (common_nullability args), args
           end
-        | Negation, [_] -> 
+        | Negation, [_] ->
           infer_fn (fixed Bool [Bool]) types
         | Negation, _ -> fail "negation requires a single argument"
         | Logical _, [_ ; _] ->
@@ -1008,14 +1010,14 @@ and assign_types env expr =
         | Col_assign { ret_t; col_t; arg_t }, [a; b] ->
           let args, ret = convert (ret_t, [col_t; arg_t]) in
           let t =
-            if !Config.allow_write_notnull_null && Dialect.Semantic.is_non_strict_mode_is_exists() then 
+            if !Config.allow_write_notnull_null && Dialect.Semantic.is_non_strict_mode_is_exists() then
             undepend ret (common_nullability args)
-            else 
+            else
             let nullability = match order_nullability a.nullability b.nullability with
               | `Equal n -> n
               | `Nullable_Strict -> b.nullability
               | `Strict_Nullable -> fail "Cannot assign nullable value to a non-nullable column %s" (show_func ())
-            in 
+            in
             { ret with nullability }
           in
           t, args
@@ -1055,7 +1057,7 @@ and meta_of ~env = function
 and carried_meta ~env e = Meta.of_option (fst (propagate_meta ~meta_of:(meta_of ~env) e))
 
 and resolve_column_assignments ~env l =
-  let open Schema.Source in 
+  let open Schema.Source in
   let open Attr in
   let all = all_columns (List.map (fun (a, b) -> Schema.Source.of_schema ~sources:[a] b) env.tables) in
   let env = { env with schema = all } in
@@ -1319,7 +1321,7 @@ and ensure_res_expr = function
   | Inparam (x, m) -> ResInparam (make_param ~id:x.id ~typ:(Source_type.to_infer_type x.typ), m)
   | Case { value = { case; branches; else_ }; pos } ->
     let res_case = Option.map ensure_res_expr case in
-    let res_branches = List.map (fun { Sql.when_; then_ } -> 
+    let res_branches = List.map (fun { Sql.when_; then_ } ->
       { when_ = ensure_res_expr when_; then_ = ensure_res_expr then_ }
     ) branches in
     let res_else = Option.map ensure_res_expr else_ in
@@ -1488,14 +1490,14 @@ and resolve_source env ((kind, alias) as source) =
     } }
 
 and eval_source env (x, alias) =
-  let resolve_schema_with_alias schema = begin match alias with 
-    | Some { table_name = { value = table_name; _ }; column_aliases = Some col_schema } -> 
+  let resolve_schema_with_alias schema = begin match alias with
+    | Some { table_name = { value = table_name; _ }; column_aliases = Some col_schema } ->
       let schema = Schema.compound (Schema.Source.of_schema col_schema) schema in
       schema, [table_name, Schema.Source.to_schema schema]
-    | Some { table_name = { value = table_name; _ }; column_aliases = None } -> 
+    | Some { table_name = { value = table_name; _ }; column_aliases = None } ->
       let schema = List.map (fun i -> { i with Schema.Source.Attr.sources = table_name :: i.Schema.Source.Attr.sources }) schema in
       schema, [table_name, Schema.Source.to_schema schema]
-    | None -> schema, [] 
+    | None -> schema, []
   end in
   match x with
   | `Select select ->
@@ -1535,8 +1537,8 @@ and eval_source env (x, alias) =
       rsrc_physical_table = if is_cte then None else Some { Sql.table = name; alias = alias_tn };
       rsrc_annotations = no_stmt_annotations }
   | `ValueRows { row_constructor_list; row_order; row_limit; } ->
-    (* 
-      The columns of the table output from VALUES have the implicitly 
+    (*
+      The columns of the table output from VALUES have the implicitly
       named columns column_0, column_1, column_2, and so on
       https://dev.mysql.com/doc/refman/8.4/en/values.html
     *)
@@ -1560,7 +1562,7 @@ and eval_source env (x, alias) =
         let s = attrs_only "VALUES cannot have dynamic columns" s in
         s, p, annotations
       | RowParam { id; types; values_start_pos } ->
-        Schema.Source.of_schema (List.map (fun t -> make_attribute' "" (Source_type.to_infer_type t)) types), 
+        Schema.Source.of_schema (List.map (fun t -> make_attribute' "" (Source_type.to_infer_type t)) types),
           [ TupleList (id, ValueRows { types = List.map Source_type.to_infer_type types; values_start_pos }) ],
           no_stmt_annotations
     in
@@ -1585,14 +1587,14 @@ and eval_select_complete ?(order = []) ?(compound_env = fun env _ -> env) env st
     eval_compound ~env:(compound_env env s1) (p1, s1, cardinality, stmt) in
   s, p, kind, merge_stmt_annotations annotations other_annotations
 
-and eval_cte { cte_items; is_recursive } = 
+and eval_cte { cte_items; is_recursive } =
   let open Schema.Source in
   List.fold_left begin fun (acc_ctes, acc_vars, acc_annotations) cte ->
     let env = { empty_env with ctes = acc_ctes; scope = Subquery } in
     let table_name = make_table_name cte.cte_name.value in
     let a1 = Schema.Source.of_schema in
     let s1, p1, _kind, annotations =
-      if is_recursive then 
+      if is_recursive then
       begin
         match cte.stmt with
         | CteInline ({ select = select, other; _ } as stmt) ->
@@ -1611,7 +1613,7 @@ and eval_cte { cte_items; is_recursive } =
           in
           eval_select_complete ~compound_env:self_cte env stmt
         | CteSharedQuery _ -> fail "Recursive CTEs with shared query currently are not supported"
-      end    
+      end
       else (
         match cte.stmt with
         | CteInline stmt -> eval_select_complete env stmt
@@ -1653,7 +1655,7 @@ and eval_compound ~env result =
   in
   let cardinality = if other = [] then cardinality else `Nat in
   (* ignoring tables in compound statements - they cannot be used in ORDER BY *)
-  let final_schema = 
+  let final_schema =
     if other = [] then s1
     else (
       (* TODO: next step is to support it for UNIONS (but if it's possible to control it) *)
@@ -1662,12 +1664,12 @@ and eval_compound ~env result =
     )
   in
   let (p3, order_annotations) =
-    let schema = List.concat_map (function 
+    let schema = List.concat_map (function
       | AttrWithSources attr -> [attr]
       | DynamicWithSources (_, a) -> List.map (fun f -> f.Sql.field_attr) a
     ) final_schema in
     params_of_order order schema env in
-  let (p4,limit1) = match limit with Some (p,x) -> List.map (fun p -> 
+  let (p4,limit1) = match limit with Some (p,x) -> List.map (fun p ->
     Single (make_param ~id:p.id ~typ:(Source_type.to_infer_type p.typ), Meta.empty())) p, x | None -> [],false in
   (* Schema.check_unique schema; *)
   let cardinality =
@@ -1711,11 +1713,11 @@ let annotate_select select attrs =
   { select with select = (select1', compound') }
 
 let resolve_on_conflict_clause ~env tn' = Option.map_default (function
-  | {value = On_conflict { action; attrs; }; _ } -> 
+  | {value = On_conflict { action; attrs; }; _ } ->
     let names = List.map (fun attr -> attr.cname) attrs in
     let composite_primary_key = Constraint.make_composite_primary names in
     let composite_unique = Constraint.make_composite_unique names in
-    List.iter (fun col -> 
+    List.iter (fun col ->
       let resolved = resolve_column ~env col in
       if (Constraints.disjoint (Constraints.of_list [
         Unique; PrimaryKey;
@@ -1728,15 +1730,15 @@ let resolve_on_conflict_clause ~env tn' = Option.map_default (function
     ) attrs;
     begin match action with
     | Do_nothing -> []
-    | Do_update values -> 
+    | Do_update values ->
         let ss = List.map (function
           (*
-            The SET and WHERE clauses in ON CONFLICT DO UPDATE have access 
+            The SET and WHERE clauses in ON CONFLICT DO UPDATE have access
             to the existing row using the table's name (or an alias),
             and to rows proposed for insertion using the special excluded table.
             From our perspective, it is the same as accessing the table into which we write.
           *)
-         | col, RegularExpr (Column { collated = { cname ; tname = Some { tn = "excluded"; db }; cpos }; collation }) -> 
+         | col, RegularExpr (Column { collated = { cname ; tname = Some { tn = "excluded"; db }; cpos }; collation }) ->
           col, RegularExpr(Column { collated = { cname; tname = Some { tn = tn'; db }; cpos }; collation })
          | e -> e
         ) values in
@@ -1915,7 +1917,7 @@ let rec eval (stmt:Sql.stmt) =
     let schema = Schema.Source.of_schema ~sources:[table] t in
     let env = { empty_env with tables = [Tables.get table]; schema; } in
     begin match values with
-    | None -> 
+    | None ->
       [], [], Insert (Some (Values, expect), table), no_stmt_annotations
     | Some values ->
       let vl = List.map List.length values in
@@ -1924,14 +1926,14 @@ let rec eval (stmt:Sql.stmt) =
         fail "Expecting %u expressions in every VALUES tuple" cl;
       (* pair up columns with inserted values *)
       let assigns = values |> List.map (fun tuple ->
-        List.combine 
+        List.combine
         (List.map (fun a -> {cname=a.name; tname=None; cpos = dummy_pos}) expect)
         tuple
       ) in
-      let resolved = List.concat_map (fun l -> 
-        let resolved = resolve_column_assignments ~env l in 
-        List.map2 (fun e (c, _) -> 
-          let (res, t) = resolve_types env e in 
+      let resolved = List.concat_map (fun l ->
+        let resolved = resolve_column_assignments ~env l in
+        List.map2 (fun e (c, _) ->
+          let (res, t) = resolve_types env e in
           let (params, annotations) = get_params_of_res_expr env res in
           c, params, get_or_failwith t, annotations
         ) resolved l
@@ -1940,13 +1942,13 @@ let rec eval (stmt:Sql.stmt) =
         DDL:
         -- [sqlgg] non_nullifiable=true
         col INT NULL
-      
+
         INSERT with multiple VALUES:
-        INSERT INTO t (col) VALUES 
+        INSERT INTO t (col) VALUES
           (42),     -- col: Int (strict)
-          (NULL),   -- col: Int? (nullable) 
+          (NULL),   -- col: Int? (nullable)
           (@param); -- col: Int? (inferred as nullable)
-      
+
         Flow:
         DDL column type: Int?          (nullable from schema)
           ↓
@@ -1962,10 +1964,10 @@ let rec eval (stmt:Sql.stmt) =
       *)
       List.iter (fun (c, _, t, _) ->
         match Hashtbl.find_opt env.insert_resolved_types c.cname with
-        | None -> 
+        | None ->
           Hashtbl.add env.insert_resolved_types c.cname t
-        | Some t0 -> 
-          Hashtbl.replace env.insert_resolved_types c.cname 
+        | Some t0 ->
+          Hashtbl.replace env.insert_resolved_types c.cname
           { t with Type.nullability = Type.common_nullability [t; t0] }
       ) resolved;
       let p1 = List.concat_map (fun (_, params, _, _) -> params) resolved in
@@ -1993,8 +1995,8 @@ let rec eval (stmt:Sql.stmt) =
     [], params @ params2, Insert (None, table), annotations
   | Insert { target=table; action=`Select (names, select); on_conflict_clause; _ } ->
     let expect = values_or_all table names in
-    let env = { empty_env with tables = [Tables.get table]; 
-      schema = Schema.Source.of_schema ~sources:[table] (Tables.get_schema table); 
+    let env = { empty_env with tables = [Tables.get table];
+      schema = Schema.Source.of_schema ~sources:[table] (Tables.get_schema table);
     } in
     let select_complete = annotate_select select.select_complete expect in
     let select = { select with select_complete } in
@@ -2010,7 +2012,7 @@ let rec eval (stmt:Sql.stmt) =
     [], params @ params2, Insert (None,table),
     merge_stmt_annotations annotations conflict_annotations
   | Insert { target=table; action=`Set ss; on_conflict_clause; _ } ->
-    let env = { empty_env with tables = [Tables.get table]; 
+    let env = { empty_env with tables = [Tables.get table];
       schema = Schema.Source.of_schema ~sources:[table] (Tables.get_schema table);
     } in
     let (params, annotations, inferred) = match ss with
@@ -2027,8 +2029,8 @@ let rec eval (stmt:Sql.stmt) =
   | Delete (table, where) ->
     let t = Tables.get table in
     let (p, annotations) = get_params_opt { empty_env with tables=[t];
-      schema = Schema.Source.of_schema ~sources:[fst t] (snd t); 
-      set_tyvar_strict = true 
+      schema = Schema.Source.of_schema ~sources:[fst t] (snd t);
+      set_tyvar_strict = true
     } where in
     [], p, Delete [table], annotations
   | DeleteMulti (targets, tables, where) ->
@@ -2081,7 +2083,7 @@ let rec eval (stmt:Sql.stmt) =
     let lim = List.map (fun p -> make_param ~id:p.id ~typ:(Source_type.to_infer_type p.typ)) lim in
     [], params @ p3 @ List.map (fun p -> Single (p, Meta.empty())) lim, Update None,
     merge_stmt_annotations annotations order_annotations
-  | Select select -> 
+  | Select select ->
     let (schema, params, kind, annotations) = eval_select_full empty_env select in
     List.map drop_sources schema, params, kind, annotations
   | CreateRoutine (name,_,_) ->
@@ -2285,6 +2287,7 @@ type result = {
   dialect_features : Dialect.dialect_support list;
   annotations : stmt_annotations;
 }
+[@@deriving show, eq, json, jsonschema]
 
 let scope_of ?cte from =
   let (ctes, _, cte_annotations) =

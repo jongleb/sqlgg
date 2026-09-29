@@ -12,6 +12,7 @@ type select_scope = {
   cte_tables : table list;
   table_aliases : table_alias list;
 }
+[@@deriving show, eq, json, jsonschema]
 
 type stmt_annotations = {
   src_tbls : table list;
@@ -22,6 +23,7 @@ type stmt_annotations = {
   result_aliases : attr located list;
   select_scopes : select_scope list;
 }
+[@@deriving show, eq, json, jsonschema]
 
 type result = {
   sql : string;
@@ -31,6 +33,7 @@ type result = {
   dialect_features : Dialect.dialect_support list;
   annotations : stmt_annotations;
 }
+[@@deriving show, eq, json, jsonschema]
 
 val scope_of : ?cte:cte -> nested option -> stmt_annotations
 

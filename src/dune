@@ -1,7 +1,7 @@
 (executable
   (public_name sqlgg)
   (package sqlgg)
-  (modules :standard)
+  (modules :standard \ sqlgg_ir)
   (name cli)
   (promote (until-clean))
   (libraries
@@ -11,6 +11,14 @@
     unix
   )
   (preprocess (pps ppx_deriving.std))
+)
+
+(executable
+  (public_name sqlgg-ir)
+  (package sqlgg)
+  (modules sqlgg_ir)
+  (name sqlgg_ir)
+  (libraries sqlgg yojson)
 )
 
 (rule
@@ -25,3 +33,11 @@
  (mode (promote (into ../doc)))
  (action
    (with-stdout-to %{targets} (run ./cli.exe -options-md))))
+
+(rule
+ (alias runtest)
+ (targets sqlgg-ir.schema.json)
+ (deps ./sqlgg_ir.exe)
+ (mode (promote (into ../schema)))
+ (action
+   (with-stdout-to %{targets} (run ./sqlgg_ir.exe --json-schema))))

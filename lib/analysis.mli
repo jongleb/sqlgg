@@ -2,12 +2,14 @@ type diagnostic = {
   message : string;
   pos : Sql.Pos.t option;
 }
+[@@deriving show, eq, json, jsonschema]
 
 type parsed = {
   sql : string;
   ast : Sql.stmt;
   dialect_features : Dialect.dialect_support list;
 }
+[@@deriving show, eq, json, jsonschema]
 
 type 'a outcome = ('a, diagnostic list) result
 
@@ -18,5 +20,5 @@ module Schema : sig
   val current : unit -> t
 end
 
-val parse : string -> parsed outcome
-val analyze : schema:Schema.t -> string -> Syntax.result outcome
+val parse : ?allow_extensions:bool -> string -> parsed outcome
+val analyze : ?allow_extensions:bool -> schema:Schema.t -> string -> Syntax.result outcome

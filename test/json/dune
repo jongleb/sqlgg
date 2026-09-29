@@ -1,0 +1,11 @@
+(test
+ (name test_json)
+ (libraries oUnit yojson jsonkit extlib sqlgg))
+
+(test
+ (name test_json_schema)
+ (libraries oUnit yojson extlib sqlgg))
+
+(test
+ (name test_ir_validate)
+ (libraries sqlgg yojson jsonschema unix))

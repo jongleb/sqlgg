@@ -1,14 +1,16 @@
 (** Statement *)
 
 open ExtLib
+open Jsonkit.Primitives
+open Ppx_deriving_jsonschema_runtime.Primitives.Jsonkit
 
-type insert_kind = Values | Assign [@@deriving show {with_path=false}]
+type insert_kind = Values | Assign [@@deriving show {with_path=false}, eq, json, jsonschema]
 
 (** inferred inserted values to complete sql statement *)
-type inferred = (insert_kind * Sql.schema) option [@@deriving show]
+type inferred = (insert_kind * Sql.schema) option [@@deriving show, eq, json, jsonschema]
 
 (** possible number of rows in query result *)
-type cardinality = [`Zero_one | `One | `Nat] [@@deriving show]
+type cardinality = [`Zero_one | `One | `Nat] [@@deriving show, eq, json, jsonschema]
 
 let cardinality_to_string = show_cardinality
 
@@ -24,9 +26,9 @@ type kind = | Select of cardinality
             | CreateType of string
             | DropType of string
             | Other
-            [@@deriving show {with_path=false}]
+            [@@deriving show {with_path=false}, eq, json, jsonschema]
 
-type category = DDL | DQL | DML | DCL | TCL | OTHER [@@deriving show {with_path=false}, enum]
+type category = DDL | DQL | DML | DCL | TCL | OTHER [@@deriving show {with_path=false}, eq, enum, json, jsonschema]
 
 let all_categories = List.init (max_category - min_category) (fun i -> Option.get @@ category_of_enum @@ min_category + i)
 
