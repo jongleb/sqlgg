@@ -39,20 +39,26 @@ let split_diagnostics (statement : Statements.t) =
       { Analysis.message; pos = Some (start - offset, stop - offset) })
     statement.errors
 
+let analyse ~allow_extensions ~schema ~sql =
+  match Analysis.parse ~allow_extensions sql, schema with
+  | Error diagnostics, _ -> invalid ~sql diagnostics
+  | Ok parsed_statement, None -> parsed parsed_statement
+  | Ok { ast; _ }, Some schema ->
+    match Analysis.analyze ~allow_extensions ~schema sql with
+    | Ok analysis -> Checked { sql; ast; analysis }
+    | Error diagnostics -> invalid ~sql diagnostics
+
 let statement ?(allow_extensions = true) ~schema (statement : Statements.t) =
   let sql = statement.text in
   match split_diagnostics statement with
   | _ :: _ as diagnostics -> invalid ~sql diagnostics
   | [] ->
-    begin match Analysis.parse ~allow_extensions sql, schema with
-    | Error diagnostics, _ -> invalid ~sql diagnostics
-    | Ok parsed_statement, None -> parsed parsed_statement
-    | Ok { ast; _ }, Some schema ->
-      begin match Analysis.analyze ~allow_extensions ~schema sql with
-      | Ok analysis -> Checked { sql; ast; analysis }
-      | Error diagnostics -> invalid ~sql diagnostics
-      end
-    end
+    (* A statement sqlgg cannot handle must not take the whole document with
+       it: report it and keep going. *)
+    try analyse ~allow_extensions ~schema ~sql with
+    | Stack_overflow -> invalid ~sql [ { message = "stack overflow"; pos = None } ]
+    | Failure message | Invalid_argument message ->
+      invalid ~sql [ { message; pos = None } ]
 
 let statements_of_sql ?(allow_extensions = true) ~schema sql =
   List.map (statement ~allow_extensions ~schema) (Statements.split sql)

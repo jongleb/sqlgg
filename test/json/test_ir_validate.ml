@@ -69,8 +69,17 @@ let () =
           Ir_document.document_of_sql ~schema:None sql;
           Ir_document.document_of_sql ~schema:(Some users) sql;
         ])
-      (full_select :: "SELECT FROM" :: corpus)
+      (full_select :: "SELECT FROM" :: "SET x = (SELECT 1)" :: corpus)
   in
+  List.iter
+    (fun document ->
+      List.iter
+        (function
+          | Ir_document.Invalid { diagnostics = []; _ } ->
+            fail "Invalid statement must carry a diagnostic"
+          | _ -> ())
+        document.Ir_document.statements)
+    documents;
   List.iteri
     (fun i document ->
       match

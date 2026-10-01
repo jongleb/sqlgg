@@ -231,6 +231,18 @@ let test_allow_extensions_option_actions _ =
   | Error diags -> assert_bool "option actions rejected" (has_extension_diag diags)
   | Ok _ -> assert_failure "expected OptionActions rejection"
 
+let test_allow_extensions_shared_query_ref _ =
+  match Analysis.parse ~allow_extensions:false
+          "WITH t AS &some_query SELECT * FROM t" with
+  | Error diags ->
+    assert_bool "shared query ref rejected" (has_extension_diag diags);
+    begin match diags with
+    | { pos = Some (start, stop); _ } :: _ ->
+      assert_bool "span non-empty" (Int.compare stop start > 0)
+    | _ -> assert_failure "expected diagnostic with byte span"
+    end
+  | Ok _ -> assert_failure "expected &some_query to be rejected"
+
 let test_allow_extensions_create_table_default _ =
   match Analysis.parse ~allow_extensions:false
           "CREATE TABLE t (x INT DEFAULT (@p))" with
@@ -272,6 +284,7 @@ let suite =
     "allow_extensions_option_actions" >:: test_allow_extensions_option_actions;
     "allow_extensions_in_tuple_list" >:: test_allow_extensions_in_tuple_list;
     "allow_extensions_create_table_default" >:: test_allow_extensions_create_table_default;
+    "allow_extensions_shared_query_ref" >:: test_allow_extensions_shared_query_ref;
     "allow_extensions_analyze" >:: test_allow_extensions_analyze;
   ]
 

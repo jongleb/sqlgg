@@ -193,7 +193,9 @@ module Extensions = struct
           (fun acc item ->
             match item.stmt with
             | CteInline sc -> collect_select_complete acc sc
-            | CteSharedQuery _ -> acc)
+            | CteSharedQuery reference ->
+              extension_diagnostic ~pos:reference.pos
+                "shared query reference (&name)" :: acc)
           acc cte_items
     in
     collect_select_complete acc select_complete
@@ -309,9 +311,15 @@ let check_extensions ~allow_extensions ast =
     | [] -> Ok ()
     | diags -> Error diags
 
+(* Statement properties are not carried here, so drop whatever a previous
+   Compile.statement left behind: the grammar reads them back by offset. *)
+let parse_stmt sql =
+  Parser_state.Stmt_metadata.reset ();
+  Parser.parse_stmt sql
+
 let parse ?(allow_extensions = true) sql =
   Prelude.with_sql_errors @@ fun () ->
-  match Parser.parse_stmt sql with
+  match parse_stmt sql with
   | { stmt = ast; dialect_features } ->
     begin match check_extensions ~allow_extensions ast with
     | Ok () -> Ok { sql; ast; dialect_features }
@@ -362,7 +370,7 @@ let analyze ?(allow_extensions = true) ~schema sql =
   Prelude.with_sql_errors @@ fun () ->
   protect_state @@ fun () ->
   Compile.restore schema;
-  match Parser.parse_stmt sql with
+  match parse_stmt sql with
   | parsed ->
     begin match check_extensions ~allow_extensions parsed.stmt with
     | Error diags -> Error diags

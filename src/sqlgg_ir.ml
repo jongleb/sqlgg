@@ -64,6 +64,8 @@ let load_schema path =
     die "schema %s: %s" path
       (String.concat "; "
          (List.map (fun d -> d.Analysis.message) diagnostics))
+  | exception (Failure message | Invalid_argument message) ->
+    die "schema %s: %s" path message
 
 let analyze ~schema ~plain_sql files =
   let allow_extensions = not plain_sql in
