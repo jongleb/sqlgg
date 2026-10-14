@@ -66,6 +66,23 @@ ORDER BY @choice { ByPrice { price } | ByName { name } | ById { id } } DESC;
 
 All branches reference columns — no parameters needed.
 
+An `ORDER BY` choice can select complete ordering terms, including direction,
+multiple expressions, and branch-specific parameters:
+
+```sql
+-- @sorted
+SELECT * FROM products
+ORDER BY @sort {
+    Recent { created_at DESC, id DESC } |
+    Name { name ASC, id DESC } |
+    Shifted { id + @offset DESC, name ASC }
+};
+```
+
+This generates one variant argument. Parameterless branches are selected with
+`` `Recent `` or `` `Name ``, while `Shifted` carries the typed `@offset`
+argument. Each branch must contain at least one ordering term.
+
 ### Nested Choice Expressions
 
 `@choice` expressions can be nested for hierarchical filtering:

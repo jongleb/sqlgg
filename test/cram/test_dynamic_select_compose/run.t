@@ -44,6 +44,22 @@ Run the generated code against the printing mock and check the final SQL strings
   -- order_comma_choice: comma before choice
   [SQL] SELECT name FROM t ORDER BY id, ( name ) 
   
+  -- order_terms_choice: plain term mixed with rich branches
+  [SQL] SELECT name FROM t
+  ORDER BY  id 
+  
+  -- order_terms_choice: descending term
+  [SQL] SELECT name FROM t
+  ORDER BY  id DESC 
+  
+  -- order_terms_choice: two terms
+  [SQL] SELECT name FROM t
+  ORDER BY  name ASC, id DESC 
+  
+  -- order_terms_choice: branch parameter
+  [SQL] SELECT name FROM t
+  ORDER BY  id + 3 DESC, name ASC 
+  
   -- where_choice: all
   [SQL] SELECT name FROM t WHERE  ( TRUE ) 
   

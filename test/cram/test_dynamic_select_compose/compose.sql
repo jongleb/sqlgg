@@ -24,6 +24,16 @@ SELECT id, name FROM t ORDER BY @sort { I { id } | N { name } };
 SELECT id, name FROM t ORDER BY id, @sort { I { id } | N { name } };
 
 -- [sqlgg] dynamic_select=true
+-- @order_terms_choice
+SELECT id, name FROM t
+ORDER BY @sort {
+  Plain { id } |
+  Recent { id DESC } |
+  Name { name ASC, id DESC } |
+  Shifted { id + @offset DESC, name ASC }
+};
+
+-- [sqlgg] dynamic_select=true
 -- @where_choice
 SELECT id, name FROM t WHERE @f { All { TRUE } | ById { id = @id } };
 

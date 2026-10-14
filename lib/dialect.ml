@@ -236,7 +236,7 @@ and analyze_row_values acc rvs k = match rvs with
       | RowExprList expr_lists -> List.concat expr_lists
       | RowParam _ -> []
     in
-    let order_exprs = List.map fst row_order in
+    let order_exprs = Sql.order_exprs row_order in
     analyze_expr acc (constructor_exprs @ order_exprs) (fun acc -> analyze_row_values acc rest k)
 
 and analyze_nested acc nesteds k = match nesteds with
@@ -287,7 +287,7 @@ and analyze_select_complete acc scs k = match scs with
     in
     let all_selects = core :: List.map snd others in
     analyze_select acc all_selects (fun acc ->
-      let order_exprs = List.map fst order in
+      let order_exprs = Sql.order_exprs order in
       analyze_expr acc order_exprs (fun acc ->
         analyze_select_complete acc rest k))
 
@@ -427,13 +427,13 @@ let rec analyze stmt =
   | Update (_, assignments, where_opt, order, _) ->
       let aes = List.map snd assignments in
       analyze_assignment_expr acc aes (fun acc ->
-        let exprs = option_list where_opt @ List.map fst order in
+        let exprs = option_list where_opt @ Sql.order_exprs order in
         analyze_expr acc exprs List.rev)
   | UpdateMulti (nesteds, assignments, where_opt, order, _) ->
       analyze_nested acc nesteds (fun acc ->
         let aes = List.map snd assignments in
         analyze_assignment_expr acc aes (fun acc ->
-          let exprs = option_list where_opt @ List.map fst order in
+          let exprs = option_list where_opt @ Sql.order_exprs order in
           analyze_expr acc exprs List.rev))
   | Select select_full ->
       analyze_select_full acc [select_full] List.rev

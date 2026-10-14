@@ -128,6 +128,13 @@ let substitute_vars s vars subst_param =
       assert (i1 > i);
       let acc = Dynamic (name, dyn) :: Static (String.slice ~first:i ~last:i1 s) :: acc in
       loop s acc i2 parami tl
+    | OrderByChoice (name,ctors) :: tl ->
+      let dyn = process_order_choices s i ctors in
+      let (i1,i2) = name.pos in
+      assert (i2 > i1);
+      assert (i1 > i);
+      let acc = Dynamic (name, dyn) :: Static (String.slice ~first:i ~last:i1 s) :: acc in
+      loop s acc i2 parami tl
     | DynamicSelectJoin { pid = name; pos = (j1, j2); _ } :: tl ->
       assert (j2 > j1);
       assert (j1 > i);
@@ -225,6 +232,20 @@ let substitute_vars s vars subst_param =
       | Verbatim (n, v) ->
         { ctor = { value = Some n; pos = (0,0) }; args = Some []; sql = [Static v]; is_poly }
     end
+  and process_order_choices s i choices =
+    List.map
+      (fun ((ctor : Sql.param_id), args) ->
+        let (c1, c2) = ctor.pos in
+        assert (c2 > c1);
+        assert (c1 > i);
+        let (acc, last) = loop s [] c1 0 args in
+        {
+          ctor;
+          sql = squash [] (List.rev (Static (String.slice ~first:last ~last:c2 s) :: acc));
+          args = Some args;
+          is_poly = true;
+        })
+      (choices.first :: choices.rest)
   and loop_and_squash sql vars =
     let acc, last = loop sql [] 0 0 vars in
     let acc = List.rev (Static (String.slice ~first:last sql) :: acc) in
@@ -299,7 +320,7 @@ let rec find_param_ids l =
   List.map
     (function
       | Sql.Single (p, _) | SingleIn (p, _) -> [ p.id ]
-      | Choice (id,_) -> [ id ]
+      | Choice (id,_) | OrderByChoice (id, _) -> [ id ]
       | OptionActionChoice (id, _, _, _) -> [id]
       | ChoiceIn { param; vars; _ } -> find_param_ids vars @ [param]
       | SharedVarsGroup (vars, _) -> find_param_ids vars

@@ -396,6 +396,7 @@ let match_variant_pattern i name args ~is_poly =
         | Sql.Single (param, _) | SingleIn (param, _) -> make_wildcard_param param.id.value
         | SharedVarsGroup _
         | Choice ({ value = None; _ }, _)
+        | OrderByChoice ({ value = None; _ }, _)
         | TupleList ({ value = None; _ }, _) 
         | OptionActionChoice ({ value = None; _ }, _, _, _)
         | ChoiceIn { param = { value = None; _ }; _ }
@@ -403,6 +404,7 @@ let match_variant_pattern i name args ~is_poly =
           ((seen_wildcards, seen_names, all_wc), Some "_")
         | TupleList ({ value = Some s; _ }, _) 
         | Choice ({ value = Some s; _ }, _)
+        | OrderByChoice ({ value = Some s; _ }, _)
         | DynamicSelect ({ value = Some s; _ }, _)
         | OptionActionChoice ({ value = Some s; _ }, _, _, _)
         | ChoiceIn { param = { value = Some s; _ }; _ } ->
@@ -454,6 +456,12 @@ let classify_var = function
   | ChoiceIn { param; vars; _ } -> Where_in_group (param, vars)
   | OptionActionChoice (id, vars, _, _) -> Option_group (id, vars)
   | Choice (id, ctors) -> Choice_group (id, ctors)
+  | OrderByChoice (id, choices) ->
+    Choice_group
+      (id,
+       List.map
+         (fun (name, vars) -> Sql.Simple (name, Some vars))
+         (choices.first :: choices.rest))
   | SharedVarsGroup (vars, _) -> Shared_group vars
 
 let rec has_set_params vars =
@@ -666,7 +674,7 @@ let join_ctors_of_vars vars =
   let module SM = Map.Make(String) in
   let joins = List.filter_map (function
     | Sql.DynamicSelectJoin { pos; source; _ } -> Some (fst pos, source)
-    | Sql.Single _ | SingleIn _ | ChoiceIn _ | Choice _ | DynamicSelect _
+    | Sql.Single _ | SingleIn _ | ChoiceIn _ | Choice _ | OrderByChoice _ | DynamicSelect _
     | TupleList _ | OptionActionChoice _ | SharedVarsGroup _ -> None) vars
   in
   let occurrences =
