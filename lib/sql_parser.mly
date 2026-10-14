@@ -485,10 +485,11 @@ reference_action:
   RESTRICT | CASCADE | SET NULL | NO ACTION | SET DEFAULT { }
 
 on_conflict: ON CONFLICT algo=conflict_algo { algo }
-column_def_extra: PRIMARY? KEY { Some (Alter_action_attr.Syntax_constraint PrimaryKey) }
+column_def_extra: PRIMARY KEY { Some (Alter_action_attr.Syntax_constraint PrimaryKey) }
                 | NOT NULL { Some (Alter_action_attr.Syntax_constraint NotNull) }
                 | NULL { Some (Alter_action_attr.Syntax_constraint Null) }
-                | UNIQUE KEY? { Some (Alter_action_attr.Syntax_constraint Unique) }
+                | UNIQUE { Some (Alter_action_attr.Syntax_constraint Unique) }
+                | UNIQUE KEY { Some (Alter_action_attr.Syntax_constraint Unique) }
                 | AUTOINCREMENT { Some (Alter_action_attr.Syntax_constraint Autoincrement) }
                 | DEFAULT def=default_value {
                     let pos = ($startofs(def), $endofs(def)) in
@@ -499,7 +500,6 @@ column_def_extra: PRIMARY? KEY { Some (Alter_action_attr.Syntax_constraint Prima
                   }
                 | on_conflict { None }
                 | CHECK LPAREN expr RPAREN { None }
-                | COLLATE IDENT { None }
                 | pair(GENERATED,ALWAYS)? AS LPAREN expr RPAREN either(VIRTUAL,STORED)? { None } (* FIXME params and typing ignored *)
 
 default_value: e=single_literal_value

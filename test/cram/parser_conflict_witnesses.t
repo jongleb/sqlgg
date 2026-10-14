@@ -61,7 +61,10 @@ DDL witnesses (column options, constraints, ALTER):
   >   amount DECIMAL(10,2) NOT NULL,
   >   name NATIONAL VARCHAR(80) COLLATE utf8_bin DEFAULT 'x',
   >   code VARBINARY(255) UNIQUE KEY,
+  >   slug TEXT UNIQUE,
   >   payload BLOB DEFAULT X'00',
+  >   label TEXT DEFAULT 'x' COLLATE utf8_bin,
+  >   bytes BLOB DEFAULT X'01' COLLATE blob_bin,
   >   CONSTRAINT uq_name UNIQUE KEY (name),
   >   KEY ix_amount (amount)
   > );
