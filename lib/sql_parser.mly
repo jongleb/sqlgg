@@ -785,7 +785,6 @@ cast_sql_type:
         | T_FLOAT { Float }
         | T_DOUBLE PRECISION? { Float }
         | blob_plain | T_VARBINARY int_arg? { Blob }
-        | binary { Blob }
         | text_plain | text_var { Text }
 
 compound_op:
