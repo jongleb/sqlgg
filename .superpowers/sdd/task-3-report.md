@@ -55,3 +55,66 @@ How to reproduce (worktree)
 
 -- End of report
 
+Final evidence and Menhir delta
+--------------------------------
+
+Baseline (checkout a1a27257):
+
+- Command:
+  ```
+  cd /tmp/sqlgg-base && opam exec -- dune build
+  ```
+- Output (relevant lines):
+  ```
+  Warning: 33 states have shift/reduce conflicts.
+  Warning: 125 shift/reduce conflicts were arbitrarily resolved.
+  ```
+
+After changes (HEAD 7c76d09):
+
+- Command:
+  ```
+  cd /home/me/sqlgg-worktrees/parser-conflict-free && opam exec -- dune build
+  ```
+- Output (relevant lines):
+  ```
+  Warning: 27 states have shift/reduce conflicts.
+  Warning: 119 shift/reduce conflicts were arbitrarily resolved.
+  ```
+
+Delta:
+- States: 33 -> 27 (removed 6 states)
+- Shift/reduce conflicts: 125 -> 119 (reduced by 6)
+
+Exact test commands and results (worktree /home/me/sqlgg-worktrees/parser-conflict-free):
+- `opam exec -- dune build`
+  - Exit: 0, Warnings as above.
+- `opam exec -- dune test test/cram/test.t`
+  - Exit: 0
+- `opam exec -- ./run_test`
+  - Output: "Running regression tests\nOK"
+  - Exit: 0
+
+Commits (this worktree):
+- Base commit referenced: a1a27257
+- First edit commit: e122c904 (fix: parse SQL type dimensions once)
+- Final series ending HEAD: 7c76d09 (fix(grammar): remove cast LPAREN alternatives; sizes belong to flavors)
+- Commit range: e122c904..7c76d09
+
+Changed files:
+- lib/sql_parser.mly
+- test/cram/parser_conflict_witnesses.t
+- .superpowers/sdd/task-3-report.md
+
+Typed-design / PPX check
+- No OCaml implementation files were modified other than the grammar (.mly) and cram fixture. No aliases added. PPX not applicable.
+
+Concerns / notes
+- Dune/Menhir still report 27 states with shift/reduce conflicts — the remaining conflicts are unrelated to the six LPAREN size-suffix states we removed. The task's scope (remove exactly the six LPAREN conflict states for integer/decimal/varbinary/char/varchar/varchar2) is satisfied: delta = -6.
+- There are still general parser conflicts flagged by Menhir; this task intentionally limited scope to the size-suffix family and avoided touching other families.
+- I ran TDD-style steps: added focused failing witness, iterated small grammar fixes until tests went green, then recorded evidence and committed.
+
+Status: DONE
+
+-- End of updated report
+
