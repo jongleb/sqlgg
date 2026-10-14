@@ -751,7 +751,8 @@ sql_type_flavor:
   | ENUM ctors=sequence(TEXT) charset? { Source_type.Infer (make_enum_kind ctors) }
   | name=ident { Source_type.Infer (User_types.get name) }
 
-binary: BINARY | BINARY VARYING { }
+binary: BINARY int_arg? { }
+      | BINARY VARYING int_arg? { }
 text: CHARACTER { }
 
 cast_as:
@@ -784,7 +785,7 @@ cast_sql_type:
         | T_FLOAT { Float }
         | T_DOUBLE PRECISION? { Float }
         | blob_plain | T_VARBINARY int_arg? { Blob }
-        | binary int_arg? { Blob }
+        | binary { Blob }
         | text_plain | text_var { Text }
 
 compound_op:
