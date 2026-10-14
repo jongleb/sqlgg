@@ -463,7 +463,9 @@ int_arg: LPAREN n=INTEGER RPAREN { n }
 
 key_part: n=ident int_arg? either(ASC,DESC)? { n }
 
-index_options: list(IDENT)? { }
+index_options:
+  | { }
+  | IDENT index_options { }
 
 table_index: name=ident? l=sequence(key_part) index_options { (name, l) }
 

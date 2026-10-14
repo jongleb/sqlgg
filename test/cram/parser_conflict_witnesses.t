@@ -39,6 +39,20 @@ RED witness: LIKE … ESCAPE … AND … (parser binds AND into ESCAPE operand u
   Fatal error: exception Failure("types Text?? and Bool do not match in Bool?? -> Text?? -> Bool?? applied to (Bool?, Bool)")
   [2]
 
+Task 2: index_options tail (table constraint, inline KEY, ALTER ADD CONSTRAINT)
+with ignored MySQL index-option identifiers (lexer IDENT tokens):
+
+  $ sqlgg -gen none -dialect mysql - <<'EOF' 2>&1
+  > CREATE TABLE index_opt_witness (
+  >   id INT,
+  >   CONSTRAINT c UNIQUE KEY (id) using_btree comment_tail,
+  >   KEY ix (id) foo bar
+  > );
+  > ALTER TABLE index_opt_witness ADD CONSTRAINT uq UNIQUE (id) opt_tail;
+  > EOF
+  $ echo $?
+  0
+
 DDL witnesses (column options, constraints, ALTER):
 
   $ sqlgg -gen none -dialect mysql - <<'EOF' 2>&1
