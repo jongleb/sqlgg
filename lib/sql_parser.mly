@@ -780,8 +780,6 @@ located_sql_type: t=sql_type { make_located ~value:t ~pos:($startofs, $endofs) }
 
 cast_sql_type:
         | t=expr_sql_type_flavor { t }
-        | t=expr_sql_type_flavor LPAREN INTEGER RPAREN { t }
-        | t=expr_sql_type_flavor LPAREN INTEGER COMMA INTEGER RPAREN { t }
         | T_FLOAT { Float }
         | T_DOUBLE PRECISION? { Float }
         | blob_plain | T_VARBINARY int_arg? { Blob }
