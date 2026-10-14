@@ -36,6 +36,15 @@ let () =
   go "order_comma_choice: comma before choice" (fun () ->
     C.Order_comma_choice.select db C.Order_comma_choice.name ~sort:`N (fun _ -> ()));
 
+  go "order_terms_choice: plain term mixed with rich branches" (fun () ->
+    C.Order_terms_choice.select db C.Order_terms_choice.name ~sort:`Plain (fun _ -> ()));
+  go "order_terms_choice: descending term" (fun () ->
+    C.Order_terms_choice.select db C.Order_terms_choice.name ~sort:`Recent (fun _ -> ()));
+  go "order_terms_choice: two terms" (fun () ->
+    C.Order_terms_choice.select db C.Order_terms_choice.name ~sort:`Name (fun _ -> ()));
+  go "order_terms_choice: branch parameter" (fun () ->
+    C.Order_terms_choice.select db C.Order_terms_choice.name ~sort:(`Shifted (Some 3L)) (fun _ -> ()));
+
   go "where_choice: all" (fun () ->
     C.Where_choice.select db C.Where_choice.name ~f:`All (fun _ -> ()));
   go "where_choice: by id" (fun () ->

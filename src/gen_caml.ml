@@ -396,6 +396,7 @@ let match_variant_pattern i name args ~is_poly =
         | Sql.Single (param, _) | SingleIn (param, _) -> make_wildcard_param param.id.value
         | SharedVarsGroup _
         | Choice ({ value = None; _ }, _)
+        | OrderByChoice ({ value = None; _ }, _)
         | TupleList ({ value = None; _ }, _) 
         | OptionActionChoice ({ value = None; _ }, _, _, _)
         | ChoiceIn { param = { value = None; _ }; _ }
@@ -403,6 +404,7 @@ let match_variant_pattern i name args ~is_poly =
           ((seen_wildcards, seen_names, all_wc), Some "_")
         | TupleList ({ value = Some s; _ }, _) 
         | Choice ({ value = Some s; _ }, _)
+        | OrderByChoice ({ value = Some s; _ }, _)
         | DynamicSelect ({ value = Some s; _ }, _)
         | OptionActionChoice ({ value = Some s; _ }, _, _, _)
         | ChoiceIn { param = { value = Some s; _ }; _ } ->
@@ -444,6 +446,7 @@ type var_class =
   | Where_in_group of Sql.param_id * Sql.var list
   | Option_group of Sql.param_id * Sql.var list
   | Choice_group of Sql.param_id * Sql.ctor list
+  | Order_choice_group of Sql.param_id * (Sql.param_id * Sql.var list) Sql.nonempty
   | Shared_group of Sql.var list
 
 let classify_var = function
@@ -454,6 +457,7 @@ let classify_var = function
   | ChoiceIn { param; vars; _ } -> Where_in_group (param, vars)
   | OptionActionChoice (id, vars, _, _) -> Option_group (id, vars)
   | Choice (id, ctors) -> Choice_group (id, ctors)
+  | OrderByChoice (id, choices) -> Order_choice_group (id, choices)
   | SharedVarsGroup (vars, _) -> Shared_group vars
 
 let rec has_set_params vars =
@@ -463,6 +467,8 @@ let rec has_set_params vars =
     | Substituted | No_params -> false
     | Where_in_group (_, vars) | Option_group (_, vars) | Shared_group vars -> has_set_params vars
     | Choice_group (_, ctors) -> has_set_params (List.concat_map Sql.ctor_vars ctors)
+    | Order_choice_group (_, choices) ->
+      has_set_params (List.concat_map snd (choices.first :: choices.rest))
   ) vars
 
 let set_var index var =
@@ -543,6 +549,30 @@ let set_var index var =
         output "begin match %s with" (make_param_name index name);
         execute_generators (units @ gens);
         output "end;")
+    | Order_choice_group (name, choices) ->
+      let branch i (param, args) =
+        let inner = filter_generators index args in
+        let variant_name = make_variant_name i param.value ~is_poly:true in
+        let pattern_args =
+          match args, inner with
+          | [], [] -> ""
+          | [], _ -> (match param.value with Some n -> " " ^ n | None -> "")
+          | _, [] -> " _"
+          | _, _ -> " (" ^ String.concat "," (names_of_vars args) ^ ")"
+        in
+        match inner with
+        | [] -> `Unit (fun () -> output "| %s%s -> ()" variant_name pattern_args)
+        | inner -> `Gen (fun () ->
+            output "| %s%s ->" variant_name pattern_args;
+            with_indent (fun () -> execute_generators inner))
+      in
+      let branches = List.mapi branch (choices.first :: choices.rest) in
+      let units = List.filter_map (function `Unit f -> Some f | `Gen _ -> None) branches in
+      let gens = List.filter_map (function `Gen f -> Some f | `Unit _ -> None) branches in
+      unless_empty gens (fun gens ->
+        output "begin match %s with" (make_param_name index name);
+        execute_generators (units @ gens);
+        output "end;")
   in
   Option.may (fun g -> g ()) (aux index var)
 
@@ -557,6 +587,13 @@ let rec eval_count_params vars =
         | Option_group (id, vars) -> group_vars (static, choices, (id, vars)::bool_choices, choices_in) xs
         | Where_in_group (id, vars) -> group_vars (static, choices, bool_choices, (id, vars)::choices_in) xs
         | Choice_group (id, ctors) -> group_vars (static, (id, ctors)::choices, bool_choices, choices_in) xs
+        | Order_choice_group (id, order_choices) ->
+          let ctors =
+            List.map
+              (fun (name, vars) -> Sql.Simple (name, Some vars))
+              (order_choices.first :: order_choices.rest)
+          in
+          group_vars (static, (id, ctors)::choices, bool_choices, choices_in) xs
         | Shared_group vars ->
           let static', choices', bool_choices', choices_in' = group_vars ([], [], [], []) vars in
           group_vars (static' @ static, choices' @ choices, bool_choices' @ bool_choices, choices_in' @ choices_in) xs
@@ -666,7 +703,7 @@ let join_ctors_of_vars vars =
   let module SM = Map.Make(String) in
   let joins = List.filter_map (function
     | Sql.DynamicSelectJoin { pos; source; _ } -> Some (fst pos, source)
-    | Sql.Single _ | SingleIn _ | ChoiceIn _ | Choice _ | DynamicSelect _
+    | Sql.Single _ | SingleIn _ | ChoiceIn _ | Choice _ | OrderByChoice _ | DynamicSelect _
     | TupleList _ | OptionActionChoice _ | SharedVarsGroup _ -> None) vars
   in
   let occurrences =

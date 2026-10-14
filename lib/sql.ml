@@ -588,6 +588,7 @@ type 't param = { id : param_id; typ : 't; } [@@deriving show, make]
 type option_actions_kind = BoolChoices | SetDefault [@@deriving show]
 type params = Type.t param list [@@deriving show]
 type in_or_not_in = [`In | `NotIn] [@@deriving show]
+type 'a nonempty = { first : 'a; rest : 'a list } [@@deriving show]
 type ctor =
 | Simple of param_id * var list option
 | Verbatim of string * string
@@ -596,6 +597,7 @@ and var =
 | SingleIn of Type.t param * Meta.t
 | ChoiceIn of { param: param_id; kind : in_or_not_in; vars: var list }
 | Choice of param_id * ctor list
+| OrderByChoice of param_id * (param_id * var list) nonempty
 | DynamicSelect of param_id * ctor list
 | DynamicSelectJoin of { pid : param_id; pos : pos; source : join_source }
 | TupleList of param_id * tuple_list_kind
@@ -619,6 +621,8 @@ let sub_vars = function
   | OptionActionChoice (_, vars, _, _) -> vars
   | SharedVarsGroup (vars, _) -> vars
   | Choice (_, ctors) | DynamicSelect (_, ctors) -> List.concat_map ctor_vars ctors
+  | OrderByChoice (_, choices) ->
+    List.concat_map snd (choices.first :: choices.rest)
 
 let map_sub_vars f =
   let map_ctor = function
@@ -631,11 +635,19 @@ let map_sub_vars f =
   | OptionActionChoice (p, vars, pos, kind) -> OptionActionChoice (p, f vars, pos, kind)
   | SharedVarsGroup (vars, id) -> SharedVarsGroup (f vars, id)
   | Choice (p, ctors) -> Choice (p, List.map map_ctor ctors)
+  | OrderByChoice (p, choices) ->
+    let map_choice (name, vars) = name, f vars in
+    OrderByChoice
+      (p,
+       {
+         first = map_choice choices.first;
+         rest = List.map map_choice choices.rest;
+       })
   | DynamicSelect (p, ctors) -> DynamicSelect (p, List.map map_ctor ctors)
 
 let var_pos = function
   | Single (p, _) | SingleIn (p, _) -> fst p.id.pos
-  | Choice (id, _) | DynamicSelect (id, _) | TupleList (id, _)
+  | Choice (id, _) | OrderByChoice (id, _) | DynamicSelect (id, _) | TupleList (id, _)
   | OptionActionChoice (id, _, _, _) -> fst id.pos
   | ChoiceIn { param; _ } -> fst param.pos
   | SharedVarsGroup (_, id) -> fst id.pos
@@ -677,7 +689,7 @@ and cte_stmt = CteInline of select_complete | CteSharedQuery of shared_query_ref
 and cte = { cte_items: cte_item list; is_recursive: bool; } [@@deriving show]
 and select_complete = {
   select : select * (compound_op * select) list;
-  order : order;
+  order : order list;
   limit : limit option;
   select_row_locking: select_row_locking_kind located option;
 }
@@ -685,10 +697,20 @@ and select_full = { select_complete: select_complete; cte: cte option; }
 and row_constructor_list = RowExprList of expr list list | RowParam of { id : param_id; types : Source_type.t list; values_start_pos: int; } 
 and row_values = {
   row_constructor_list: row_constructor_list;
-  row_order: order;
+  row_order: order list;
   row_limit: limit option;
 }
-and order = (expr * direction option) list
+and order_term = {
+  order_expr : expr;
+  order_direction : direction option;
+}
+and order =
+  | OrderExpr of order_term
+  | OrderChoice of {
+      order_choice_param : param_id;
+      order_choice_branches : (param_id * order_term nonempty) nonempty;
+      order_choice_direction : direction option;
+    }
 and agg_with_order_kind = 
     | Group_concat
     | Json_arrayagg
@@ -697,7 +719,7 @@ and agg_fun = Self (* self means that it returns the same type what aggregated c
     | Avg (* avg it's avg function that returns float *)
     | With_order of {
         with_order_kind: agg_with_order_kind;
-        order: order; 
+        order: order list;
       }
 and 't func =
   | Agg of agg_fun (* 'a -> 'a | 'a -> t *)
@@ -762,12 +784,23 @@ let source_fun_kind_to_infer = function
 
 let expr_to_string = show_expr
 
+let order_exprs order =
+  List.concat_map
+    (function
+      | OrderExpr term -> [term.order_expr]
+      | OrderChoice { order_choice_branches; _ } ->
+        List.concat_map
+          (fun (_, branch) ->
+            List.map (fun term -> term.order_expr) (branch.first :: branch.rest))
+          (order_choice_branches.first :: order_choice_branches.rest))
+    order
+
 let sub_exprs = function
   | Value _ | Param _ | Inparam _ | Column _ | Of_values _ | SelectExpr _ -> []
   | Choices (_, l) -> List.filter_map snd l
   | InChoice (_, _, e) -> [e]
   | OptionActions { choice; _ } -> [choice]
-  | Fun { kind = Agg (With_order { order; _ }); parameters; _ } -> parameters @ List.map fst order
+  | Fun { kind = Agg (With_order { order; _ }); parameters; _ } -> parameters @ order_exprs order
   | Fun { parameters; _ } -> parameters
   | InTupleList { value = { exprs; _ }; _ } -> exprs
   | Case { case; branches; else_ } ->
@@ -781,8 +814,31 @@ let map_sub_exprs f = function
   | InChoice (n, k, e) -> InChoice (n, k, f e)
   | OptionActions ({ choice; _ } as o) -> OptionActions { o with choice = f choice }
   | Fun ({ kind = Agg (With_order ({ order; _ } as wo)); parameters; _ } as fn) ->
+    let map_order = function
+      | OrderExpr term -> OrderExpr { term with order_expr = f term.order_expr }
+      | OrderChoice choice ->
+        let map_branch (name, branch) =
+          name,
+          {
+            first = { branch.first with order_expr = f branch.first.order_expr };
+            rest =
+              List.map
+                (fun term -> { term with order_expr = f term.order_expr })
+                branch.rest;
+          }
+        in
+        OrderChoice
+          {
+            choice with
+            order_choice_branches =
+              {
+                first = map_branch choice.order_choice_branches.first;
+                rest = List.map map_branch choice.order_choice_branches.rest;
+              };
+          }
+    in
     Fun { fn with
-          kind = Agg (With_order { wo with order = List.map (fun (e, dir) -> f e, dir) order });
+          kind = Agg (With_order { wo with order = List.map map_order order });
           parameters = List.map f parameters }
   | Fun ({ parameters; _ } as fn) -> Fun { fn with parameters = List.map f parameters }
   | InTupleList ({ value = { exprs; _ } as tl; _ } as loc) ->
@@ -974,8 +1030,8 @@ type stmt =
   | Delete of table_name * expr option
   | DeleteMulti of table_name list * nested * expr option
   | Set of (string * expr) list * stmt option
-  | Update of table_name * assignments * expr option * order * Source_type.t param list (* where, order, limit *)
-  | UpdateMulti of nested list * assignments * expr option * order * Source_type.t param list (* where, order, limit *)
+  | Update of table_name * assignments * expr option * order list * Source_type.t param list (* where, order, limit *)
+  | UpdateMulti of nested list * assignments * expr option * order list * Source_type.t param list (* where, order, limit *)
   | Select of select_full
   | CreateRoutine of table_name * Source_type.kind collated located option * (string * Source_type.kind collated located * expr option) list (* table_name represents possibly namespaced function name *)
   | CreateType of string * create_type_target

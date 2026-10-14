@@ -86,6 +86,10 @@
 (* Warning: the precedence level assigned to BINARY is never useful. *)
 (* %nonassoc BINARY COLLATE *)
 %nonassoc INTERVAL
+(* A one-term ORDER choice also matches an expression choice. Prefer the
+   ORDER-specific production so its non-empty term invariant reaches the AST. *)
+%nonassoc RCURLY
+%nonassoc ORDER_CHOICE
 
 %type <Sql.expr> expr
 
@@ -339,7 +343,35 @@ limit_t: LIMIT lim=int_or_param { make_limit [`Limit,lim] }
 
 limit: limit_t { fst $1 }
 
-order: ORDER BY l=commas(pair(expr,order_type?)) { l }
+order: ORDER BY l=commas(order_item) { l }
+order_item:
+          | p=param parser_state_ident LCURLY branches=order_choices c2=RCURLY direction=order_type?
+            {
+              let { value; pos=(p1,_p2) } = p in
+              OrderChoice {
+                order_choice_param = { value; pos = (p1,c2+1) };
+                order_choice_branches = branches;
+                order_choice_direction = direction;
+              }
+            }
+          | e=expr direction=order_type?
+            { OrderExpr { order_expr = e; order_direction = direction } }
+order_choice_body:
+          | c1=LCURLY first=order_choice_term rest=list(preceded(COMMA,order_choice_term)) c2=RCURLY
+            { (c1, { first; rest }, c2) }
+order_choice_term:
+          | e=expr %prec ORDER_CHOICE { { order_expr = e; order_direction = None } }
+          | e=expr direction=order_type { { order_expr = e; order_direction = Some direction } }
+order_choice:
+          | parser_state_normal value=IDENT? body=order_choice_body
+            {
+              let (c1, terms, c2) = body in
+              ({ value; pos = (c1+1,c2) }, terms)
+            }
+order_choice_tail:
+          | parser_state_ident NUM_BIT_OR choice=order_choice { choice }
+order_choices:
+          | first=order_choice rest=list(order_choice_tail) { { first; rest } }
 order_type:
           | DESC | ASC { `Fixed }
           | param { `Param $1 }
@@ -590,7 +622,7 @@ window_function:
   | NTH_VALUE LPAREN e=expr COMMA INTEGER RPAREN { e }
   | either(LAG,LEAD) LPAREN e=expr pair(COMMA, pair(MINUS?,INTEGER))? RPAREN { e }
 
-window_spec: LPAREN e=partition? o=order? frame? RPAREN (* TODO order parameters? *) { (Option.may (fun o -> make_partition_by (List.map fst o )) o); e }
+window_spec: LPAREN e=partition? o=order? frame? RPAREN (* TODO order parameters? *) { (Option.may (fun o -> make_partition_by (Sql.order_exprs o)) o); e }
 partition: PARTITION BY e=expr_list { make_partition_by e} (* TODO check no params *)
 
 frame: either(ROWS,RANGE) either(frame_border, frame_between) { }

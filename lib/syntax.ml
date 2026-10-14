@@ -479,7 +479,7 @@ module Table_elimination = struct
       |> List.fold_left (fun m c -> Id_map.add (join_id c) c m) Id_map.empty
     in
     if Id_map.is_empty candidates then unchanged else
-    let outside_select_list = option_list where @ group @ option_list having @ List.map fst order in
+    let outside_select_list = option_list where @ group @ option_list having @ Sql.order_exprs order in
     let query_exprs =
       List.filter_map (fun c -> match c.Sql.value with
         | All | AllOf _ -> None
@@ -1121,16 +1121,46 @@ and get_params_of_res_expr env e =
   loop [] e |> List.rev
 
 and params_of_order order final_schema env =
+  let env = { env with schema = update_schema_with_aliases env.schema final_schema } in
+  let params_of_direction = function
+    | None | Some `Fixed -> []
+    | Some (`Param p) -> [Choice (p, [Verbatim ("ASC", "ASC"); Verbatim ("DESC", "DESC")])]
+  in
+  let params_of_term term =
+    let expr_params = get_params_l { env with is_order_by = true } [term.order_expr] in
+    expr_params @ params_of_direction term.order_direction
+  in
   List.concat_map
-    (fun (order, direction) ->
-       let env = { env with schema = update_schema_with_aliases env.schema final_schema ;  } in
-       let p1 = get_params_l { env with is_order_by = true } [ order ] in
-       let p2 =
-         match direction with
-         | None | Some `Fixed -> []
-         | Some (`Param p) -> [Choice (p,[Verbatim ("ASC","ASC");Verbatim ("DESC","DESC")])]
-       in
-       p1 @ p2)
+    (function
+      | OrderExpr term -> params_of_term term
+      | OrderChoice { order_choice_param; order_choice_branches; order_choice_direction } ->
+        let params_of_branch (name, branch) =
+          name, List.concat_map params_of_term (branch.first :: branch.rest)
+        in
+        let branches = order_choice_branches.first :: order_choice_branches.rest in
+        let dynamic_choice =
+          if List.for_all
+               (fun (_, branch) ->
+                 branch.rest = [] && branch.first.order_direction = None)
+               branches
+          then
+            Choice
+              (order_choice_param,
+               List.map
+                 (fun branch ->
+                   let (name, vars) = params_of_branch branch in
+                   Simple (name, Some vars))
+                 branches)
+          else
+            OrderByChoice
+              (order_choice_param,
+               {
+                 first = params_of_branch order_choice_branches.first;
+                 rest = List.map params_of_branch order_choice_branches.rest;
+               })
+        in
+        [dynamic_choice]
+        @ params_of_direction order_choice_direction)
     order
 
 and ensure_res_expr = function
@@ -1863,6 +1893,12 @@ let rec var_shape = function
   | OptionActionChoice (id, vars, _, _) -> Shape_opt_choice (id.value, List.map var_shape vars)
   | SharedVarsGroup (vars, id) -> Shape_shared_group (id.value, List.map var_shape vars)
   | Choice (id, cs) -> Shape_choice (id.value, List.map ctor_shape cs)
+  | OrderByChoice (id, choices) ->
+    Shape_choice
+      (id.value,
+       List.map
+         (fun (name, vars) -> Shape_simple (name.value, List.map var_shape vars))
+         (choices.first :: choices.rest))
   | DynamicSelect (id, cs) -> Shape_dyn_select (id.value, List.map ctor_shape cs)
   | DynamicSelectJoin { pid; _ } -> Shape_dyn_join pid.value
 and ctor_shape = function
@@ -1950,6 +1986,14 @@ let unify_params l =
       Option.may (fun name -> Var_unifier.note unifier name typ) id.value
     | Choice (p, ctors) ->
       register p (`Branches (List.map ctor_shape ctors, bound_names (List.concat_map ctor_vars ctors)))
+    | OrderByChoice (p, choices) ->
+      let choices = choices.first :: choices.rest in
+      register p
+        (`Branches
+          (List.map
+             (fun (name, vars) -> Shape_simple (name.value, List.map var_shape vars))
+             choices,
+           bound_names (List.concat_map snd choices)))
     | DynamicSelect (p, _) -> register p `Dynamic
     | TupleList _ | ChoiceIn _ | OptionActionChoice _ | SharedVarsGroup _ | DynamicSelectJoin _ -> ()
     end;
