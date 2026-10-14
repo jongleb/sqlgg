@@ -70,6 +70,21 @@ DDL witnesses (column options, constraints, ALTER):
   $ echo $?
   0
 
+Focused size witness (Task 3: sizes parsed in flavours only)
+
+  $ sqlgg -gen none -dialect mysql - <<'EOF' 2>&1
+  > CREATE TABLE sized (
+  >   i INT(11) UNSIGNED,
+  >   d DECIMAL(10,2),
+  >   b VARBINARY(255),
+  >   c CHAR(10),
+  >   v VARCHAR(80),
+  >   v2 VARCHAR2(40)
+  > );
+  > EOF
+  $ echo $?
+  0
+
 JOIN, UPDATE, INSERT, and statement-prefix witnesses:
 
   $ sqlgg -gen none -dialect mysql - <<'EOF' 2>&1

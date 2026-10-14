@@ -773,8 +773,6 @@ charset: charset_kw c=IDENT { Named c }
 collate: COLLATE c=IDENT { make_located ~value:c ~pos:($startofs, $endofs) }
 
 sql_type: t=collated(sql_type_flavor)
-        | t=collated(sql_type_flavor) LPAREN INTEGER RPAREN UNSIGNED?
-        | t=collated(sql_type_flavor) LPAREN INTEGER COMMA INTEGER RPAREN
         { t }
 
 located_sql_type: t=sql_type { make_located ~value:t ~pos:($startofs, $endofs) }
@@ -786,6 +784,7 @@ cast_sql_type:
         | T_FLOAT { Float }
         | T_DOUBLE PRECISION? { Float }
         | blob_plain | T_VARBINARY int_arg? { Blob }
+        | binary int_arg? { Blob }
         | text_plain | text_var { Text }
 
 compound_op:
