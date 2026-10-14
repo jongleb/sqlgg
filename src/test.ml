@@ -98,6 +98,22 @@ let param t = make_param ~id:(make_located ~value:None ~pos:(0,0)) ~typ:(Type.st
 
 let test = Type.[
   tt "CREATE TABLE test (id INT, str TEXT, name TEXT)" [] [];
+  tt "CREATE TABLE t (id INT, name TEXT, flag INT)" [] [];
+  tt "SELECT id FROM t WHERE NOT EXISTS (SELECT id FROM t)"
+    [attr' ~nullability:Nullable "id" Int]
+    [];
+  tt "SELECT id FROM t WHERE name LIKE @p ESCAPE @e AND flag = 1"
+    [attr' ~nullability:Nullable "id" Int]
+    [named "p" Text; named "e" Text];
+  tt "SELECT id FROM t WHERE id BETWEEN @lo AND @hi OR flag = 1"
+    [attr' ~nullability:Nullable "id" Int]
+    [named_nullable "lo" Int; named_nullable "hi" Int];
+  tt "SELECT id FROM t WHERE id IS NULL OR id IS NOT NULL"
+    [attr' ~nullability:Nullable "id" Int]
+    [];
+  tt "SELECT id FROM t WHERE id IS NOT DISTINCT FROM @id"
+    [attr' ~nullability:Nullable "id" Int]
+    [named_nullable "id" Int];
   tt "SELECT str FROM test WHERE id=?"
      [attr' ~nullability:Nullable "str" Text]
      [param Int];
@@ -479,11 +495,43 @@ let test_param_not_null_by_default = [
 (* Since @abc is tuple list, but TupleList isn't a Sql.type *)
 let test_in_clause_with_tuple_sets () = 
   do_test "CREATE TABLE test17 (a INT, b INT NULL, c TEXT NULL)" [] [];
+  do_test "CREATE TABLE t (id INT, name TEXT, flag INT)" [] [];
   let stmt = parse {| 
     SELECT a FROM test17 
     WHERE (a, b, c) IN @abc
   |} in
   assert_equal ~msg:"schema" ~printer:Sql.Schema.to_string [attr' ~nullability:Nullable "a" Int] (schema_to_attrs stmt.schema);
+  let stmt = parse "SELECT id FROM t WHERE (id, name) IN @pairs" in
+  assert_equal
+    ~msg:"tuple IN schema"
+    ~printer:Sql.Schema.to_string
+    [attr' ~nullability:Nullable "id" Int]
+    (schema_to_attrs stmt.schema);
+  assert_equal
+    ~msg:"tuple IN parameter"
+    ~printer:show_vars
+    ~cmp:(fun actual expected ->
+      match actual, expected with
+      | [TupleList ({ value = actual_name; _ }, Where_in { value = (actual_types, actual_kind); _ })],
+        [TupleList ({ value = expected_name; _ }, Where_in { value = (expected_types, expected_kind); _ })] ->
+          actual_name = expected_name
+          && actual_types = expected_types
+          && actual_kind = expected_kind
+      | [], [] -> true
+      | [], _ :: _ | _ :: _, [] -> false
+      | (Single _ | SingleIn _ | ChoiceIn _ | Choice _ | OrderByChoice _
+        | DynamicSelect _ | DynamicSelectJoin _ | OptionActionChoice _
+        | SharedVarsGroup _ | TupleList _) :: _,
+        (Single _ | SingleIn _ | ChoiceIn _ | Choice _ | OrderByChoice _
+        | DynamicSelect _ | DynamicSelectJoin _ | OptionActionChoice _
+        | SharedVarsGroup _ | TupleList _) :: _ -> false)
+    [TupleList
+       (make_located ~value:(Some "pairs") ~pos:(0, 0),
+        Where_in
+          (make_located
+             ~value:([Type.nullable Int, Meta.empty (); Type.nullable Text, Meta.empty ()], `In)
+             ~pos:(0, 0)))]
+    stmt.vars;
   ()
 
 let test_agg_nullable = [

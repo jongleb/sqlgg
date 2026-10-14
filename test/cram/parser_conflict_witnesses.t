@@ -2,10 +2,7 @@ Acceptance witnesses for SQL forms tied to Menhir shift/reduce and
 reduce/reduce conflicts. Each block must parse and type-check under MySQL
 (-gen none); exit status 0 locks compatibility for later conflict-removal tasks.
 
-Expression and predicate witnesses (36 conflicting states), except LIKE/ESCAPE/AND
-which is a separate RED witness below (Task 5: expression tiers must parse
-`… LIKE @pattern ESCAPE @escape AND flag = 1` with AND at predicate level,
-not inside ESCAPE; then this block should expect exit 0 like the others):
+Expression and predicate witnesses (36 conflicting states):
 
   $ sqlgg -gen none -dialect mysql - <<'EOF' 2>&1
   > CREATE TABLE t (
@@ -24,7 +21,7 @@ not inside ESCAPE; then this block should expect exit 0 like the others):
   $ echo $?
   0
 
-RED witness: LIKE … ESCAPE … AND … (parser binds AND into ESCAPE operand until Task 5):
+LIKE … ESCAPE … AND … keeps AND outside the ESCAPE operand:
 
   $ sqlgg -gen none -dialect mysql - <<'EOF' 2>&1
   > CREATE TABLE t (
@@ -35,9 +32,8 @@ RED witness: LIKE … ESCAPE … AND … (parser binds AND into ESCAPE operand u
   > );
   > SELECT id FROM t WHERE name LIKE @pattern ESCAPE @escape AND flag = 1;
   > EOF
-  Failed : SELECT id FROM t WHERE name LIKE @pattern ESCAPE @escape AND flag = 1
-  Fatal error: exception Failure("types Text?? and Bool do not match in Bool?? -> Text?? -> Bool?? applied to (Bool?, Bool)")
-  [2]
+  $ echo $?
+  0
 
 Task 2: index_options tail (table constraint, inline KEY, ALTER ADD CONSTRAINT)
 with ignored MySQL index-option identifiers (lexer IDENT tokens):

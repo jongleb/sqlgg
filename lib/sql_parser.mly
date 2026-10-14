@@ -67,12 +67,8 @@
 
 (* https://dev.mysql.com/doc/refman/8.0/en/operator-precedence.html *)
 
-%left OR CONCAT_OP
-%left XOR
-%left AND
-%nonassoc NOT
-%nonassoc BETWEEN CASE (* WHEN THEN ELSE *) (* never useful *)
-%nonassoc EQUAL NUM_EQ_OP NOT_DISTINCT_OP IS LIKE LIKE_OP IN
+%left CONCAT_OP
+%nonassoc EQUAL NUM_EQ_OP NOT_DISTINCT_OP
 %nonassoc NUM_CMP_OP
 %left NUM_BIT_OR
 %left NUM_BIT_AND
@@ -85,13 +81,14 @@
 %nonassoc EXCL
 (* Warning: the precedence level assigned to BINARY is never useful. *)
 (* %nonassoc BINARY COLLATE *)
-%nonassoc INTERVAL
 (* A one-term ORDER choice also matches an expression choice. Prefer the
    ORDER-specific production so its non-empty term invariant reaches the AST. *)
 %nonassoc RCURLY
 %nonassoc ORDER_CHOICE
 
 %type <Sql.expr> expr
+%type <[ `Is | `Is_not ]> is_not
+%type <[ `Direct | `Distinct_from ]> distinct_from
 
 %start <Sql.stmt> input
 
@@ -521,49 +518,91 @@ mnot(X): NOT x = X | x = X { x }
 attr_name: cname=ident { { cname; tname=None} }
          | table=table_name DOT cname=ident { {cname; tname=Some table} } (* FIXME database identifier *)
 
-distinct_from: DISTINCT FROM { }
+is_not: { `Is } | NOT { `Is_not }
+distinct_from: { `Direct } | DISTINCT FROM { `Distinct_from }
 
-like_expr: e1=expr mnot(like) e2=expr %prec LIKE { Fun { fn_name = "like"; kind = (fixed Bool [Text; Text]); parameters = [e1;e2]; is_over_clause = false } }
-
-expr:
-      e1=expr numeric_bin_op e2=expr %prec PLUS { Fun { fn_name = "numeric_bin_op"; kind = (Ret (Source_type.depends Any)); parameters = [e1;e2]; is_over_clause = false } } (* TODO default Int *)
-    | MOD LPAREN e1=expr COMMA e2=expr RPAREN { Fun { fn_name = "mod"; kind = (Ret (Source_type.depends Any)); parameters = [e1;e2]; is_over_clause = false } } (* mysql special *)
-    | e1=expr NUM_DIV_OP e2=expr %prec PLUS { Fun { fn_name = "num_div"; kind = (Ret (Source_type.depends Float)); parameters = [e1;e2]; is_over_clause = false } }
-    | e1=expr DIV e2=expr %prec PLUS { Fun { fn_name = "div"; kind = (Ret (Source_type.depends Int)); parameters = [e1;e2]; is_over_clause = false } }
-    | e1=expr bool_op=boolean_bin_op e2=expr %prec AND { Fun { fn_name = "boolean_bin_op"; kind = (Logical bool_op); parameters = [e1;e2]; is_over_clause = false } }
-    | e1=expr comp_op=comparison_op anyall? e2=expr %prec EQUAL { Fun { fn_name = "comparison"; kind = Comparison comp_op; parameters = [e1; e2]; is_over_clause = false } }
-    | e1=expr CONCAT_OP e2=expr { Fun { fn_name = "concat"; kind = (fixed Text [Text;Text]); parameters = [e1;e2]; is_over_clause = false } }
-    | e1=expr JSON_EXTRACT_OP e2=expr { Fun { fn_name = "json_extract"; kind = (Function.lookup "json_extract" 2); parameters = [e1; e2]; is_over_clause = false } }
-    | e1=expr JSON_UNQUOTE_EXTRACT_OP e2=expr { 
+%inline operators(E):
+      e1=E numeric_bin_op e2=E %prec PLUS { Fun { fn_name = "numeric_bin_op"; kind = (Ret (Source_type.depends Any)); parameters = [e1;e2]; is_over_clause = false } } (* TODO default Int *)
+    | e1=E NUM_DIV_OP e2=E %prec PLUS { Fun { fn_name = "num_div"; kind = (Ret (Source_type.depends Float)); parameters = [e1;e2]; is_over_clause = false } }
+    | e1=E DIV e2=E %prec PLUS { Fun { fn_name = "div"; kind = (Ret (Source_type.depends Int)); parameters = [e1;e2]; is_over_clause = false } }
+    | e1=E comp_op=comparison_op anyall? e2=E %prec EQUAL { Fun { fn_name = "comparison"; kind = Comparison comp_op; parameters = [e1; e2]; is_over_clause = false } }
+    | e1=E CONCAT_OP e2=E { Fun { fn_name = "concat"; kind = (fixed Text [Text;Text]); parameters = [e1;e2]; is_over_clause = false } }
+    | e1=E JSON_EXTRACT_OP e2=E { Fun { fn_name = "json_extract"; kind = (Function.lookup "json_extract" 2); parameters = [e1; e2]; is_over_clause = false } }
+    | e1=E JSON_UNQUOTE_EXTRACT_OP e2=E {
         let extracted = Fun { fn_name = "json_extract"; kind = (Function.lookup "json_extract" 2); parameters = [e1; e2]; is_over_clause = false } in 
         Fun { fn_name = "json_unquote"; kind = (Function.lookup "json_unquote" 1); parameters = [extracted]; is_over_clause = false } 
       }
-    | e=like_expr esc=escape?
+    | EXCL e=E { Fun { fn_name = "excl"; kind = Negation; parameters = [e]; is_over_clause = false } }
+    | TILDE e=E { e }
+    | MINUS e=E %prec UNARY_MINUS { e }
+    | INTERVAL e=E interval_unit { Fun { fn_name = "interval"; kind = (fixed Datetime [Int]); parameters = [e]; is_over_clause = false } }
+
+b_expr: e=b_expr_ { e }
+
+b_expr_:
+      e=c_expr { e }
+    | e=operators(b_expr) { e }
+
+expr: e=or_expr { e }
+
+or_expr:
+      e=xor_expr { e }
+    | e1=or_expr OR e2=xor_expr { Fun { fn_name = "boolean_bin_op"; kind = Logical Or; parameters = [e1;e2]; is_over_clause = false } }
+
+xor_expr:
+      e=and_expr { e }
+    | e1=xor_expr XOR e2=and_expr { Fun { fn_name = "boolean_bin_op"; kind = Logical Xor; parameters = [e1;e2]; is_over_clause = false } }
+
+and_expr:
+      e=predicate_expr { e }
+    | e1=and_expr AND e2=predicate_expr { Fun { fn_name = "boolean_bin_op"; kind = Logical And; parameters = [e1;e2]; is_over_clause = false } }
+
+predicate_expr:
+      e=b_expr { e }
+    | NOT e=predicate_expr { Fun { fn_name = "not"; kind = Negation; parameters = [e]; is_over_clause = false } }
+    | e1=b_expr mnot(like) e2=b_expr
+      { Fun { fn_name = "like"; kind = (fixed Bool [Text; Text]); parameters = [e1;e2]; is_over_clause = false } }
+    | e1=b_expr mnot(like) e2=b_expr ESCAPE esc=c_expr
       {
-        match esc with
-        | None -> e
-        | Some esc -> Fun { fn_name = "like_escape"; kind = (fixed Bool [Bool; Text]); parameters = [e;esc]; is_over_clause = false }
+        let like = Fun { fn_name = "like"; kind = (fixed Bool [Text; Text]); parameters = [e1;e2]; is_over_clause = false } in
+        Fun { fn_name = "like_escape"; kind = (fixed Bool [Bool; Text]); parameters = [like;esc]; is_over_clause = false }
       }
-    | f=unary_op e=expr { f e }
-    | MINUS e=expr %prec UNARY_MINUS { e }
-    | INTERVAL e=expr interval_unit { Fun { fn_name = "interval"; kind = (fixed Datetime [Int]); parameters = [e]; is_over_clause = false } }
+    | e1=b_expr mnot(IN) l=sequence(expr) { poly "in" (depends Bool) (e1::l) }
+    | e1=b_expr mnot(IN) LPAREN select=select_stmt RPAREN { poly "in_select" (depends Bool) [e1; SelectExpr (select, `AsValue)] }
+    | e1=b_expr IN table=table_name { Tables.check table; e1 }
+    | e1=b_expr k=in_or_not_in p=param
+      {
+        let e = poly "in_param" (depends Bool) [ e1; Inparam (make_param ~id:p ~typ:(Source_type.depends Any), Meta.empty()) ] in
+        InChoice (make_located ~value:p.value ~pos:($startofs, $endofs), k, e )
+      }
+    | LPAREN e=expr COMMA es=commas(expr) RPAREN k=in_or_not_in p=param
+      {
+        InTupleList(make_located ~value:{ exprs = e :: es; param_id = p; kind_in_tuple_list = k; } ~pos:($startofs, $endofs))
+      }
+    | e1=b_expr IS n=is_not d=distinct_from e2=b_expr
+      {
+        match n, d, e2 with
+        | `Is, `Direct, Value { collated = { t = Any; nullability = Nullable }; _ } ->
+            Fun { fn_name = "is_null"; kind = Comparison Is_null; parameters = [e1]; is_over_clause = false }
+        | `Is_not, `Direct, Value { collated = { t = Any; nullability = Nullable }; _ } ->
+            Fun { fn_name = "is_not_null"; kind = Comparison Is_not_null; parameters = [e1]; is_over_clause = false }
+        | (`Is | `Is_not), (`Direct | `Distinct_from),
+          (Value _ | Param _ | Inparam _ | Choices _ | InChoice _ | Fun _
+          | SelectExpr _ | Column _ | InTupleList _ | OptionActions _ | Case _
+          | Of_values _) ->
+            Fun { fn_name = "is_distinct"; kind = Comparison Not_distinct_op; parameters = [e1; e2]; is_over_clause = false }
+      }
+    | e=b_expr mnot(BETWEEN) a=b_expr AND b=b_expr { poly "between" (depends Bool) [e;a;b] }
+
+c_expr: e=c_expr_ { e }
+
+c_expr_:
+      MOD LPAREN e1=expr COMMA e2=expr RPAREN { Fun { fn_name = "mod"; kind = (Ret (Source_type.depends Any)); parameters = [e1;e2]; is_over_clause = false } } (* mysql special *)
     | LPAREN e=expr RPAREN { e }
     | a=attr_name c=collate? { Column (make_collated ?collation:c ~collated:a ()) }
     | VALUES LPAREN n=ident RPAREN { Of_values n }
     | v=literal_value | v=datetime_value { v }
     | INTERVAL_UNIT { Value (make_collated ~collated:(strict Datetime) ()) }
-    | e1=expr mnot(IN) l=sequence(expr) { poly "in" (depends Bool) (e1::l) }
-    | e1=expr mnot(IN) LPAREN select=select_stmt RPAREN { poly "in_select" (depends Bool) [e1; SelectExpr (select, `AsValue)] }
-    | e1=expr IN table=table_name { Tables.check table; e1 }
-    | e1=expr k=in_or_not_in p=param
-      {
-        let e = poly "in_param" (depends Bool) [ e1; Inparam (make_param ~id:p ~typ:(Source_type.depends Any), Meta.empty()) ] in
-        InChoice (make_located ~value:p.value ~pos:($startofs, $endofs), k, e )
-      }
-    | LPAREN exprs=commas(expr) RPAREN k=in_or_not_in p=param
-      {
-        InTupleList(make_located ~value:{ exprs; param_id = p; kind_in_tuple_list = k; } ~pos:($startofs, $endofs))
-      }
     | LPAREN select=select_stmt RPAREN { SelectExpr (select, `AsValue) }
     | p=param t=preceded(DOUBLECOLON, manual_type)? { Param (make_param ~id:{ p with pos=($startofs, $endofs) } ~typ:(Option.default (Source_type.depends Any) t), Meta.empty())  }
     | LCURLY e=expr RCURLY QSTN { OptionActions ({ choice=e; pos=(($startofs, $endofs), ($startofs + 1, $endofs - 2)); kind = BoolChoices}) }
@@ -591,11 +630,7 @@ expr:
     | f=table_name LPAREN p=func_params RPAREN { 
         Fun { fn_name = f.tn; kind = (Function.lookup f.tn (List.length p)); parameters = p; is_over_clause = false } 
       }
-    | e=expr IS NOT NULL { Fun { fn_name = "is_not_null"; kind = Comparison Is_not_null; parameters = [e]; is_over_clause = false } }
-    | e=expr IS NULL { Fun { fn_name = "is_null"; kind = Comparison Is_null; parameters = [e]; is_over_clause = false } }
-    | e1=expr IS NOT? distinct_from? e2=expr { Fun { fn_name = "is_distinct"; kind = Comparison Not_distinct_op; parameters = [e1; e2]; is_over_clause = false } }
-    | e=expr mnot(BETWEEN) a=expr AND b=expr { poly "between" (depends Bool) [e;a;b] }
-    | mnot(EXISTS) LPAREN select=select_stmt RPAREN { Fun { fn_name = "exists"; kind = (F (Typ (strict Bool), [Typ (depends Any)])); parameters = [SelectExpr (select,`Exists)]; is_over_clause = false } }
+    | EXISTS LPAREN select=select_stmt RPAREN { Fun { fn_name = "exists"; kind = (F (Typ (strict Bool), [Typ (depends Any)])); parameters = [SelectExpr (select,`Exists)]; is_over_clause = false } }
     | CASE initial_expr=expr? branches_list=nonempty_list(case_branch) else_expr=preceded(ELSE,expr)? END
       {
         let case_record = {
@@ -670,7 +705,6 @@ expr_list: l=commas(expr) { l }
 func_params: DISTINCT? l=expr_list { l }
            | ASTERISK { [] }
            | (* *) { [] }
-escape: ESCAPE expr { $2 }
 numeric_bin_op: PLUS | MINUS | ASTERISK | MOD | NUM_BIT_OR | NUM_BIT_AND | NUM_BIT_SHIFT { }
 comparison_op: 
     | EQUAL { Comp_equal }
@@ -682,18 +716,6 @@ comparison_op:
          we conservatively return `Comp_num_eq *)  
       Comp_num_eq 
     }
-
-boolean_bin_op: 
-    | AND { And }
-    | OR { Or }
-    | XOR { Xor }
-
-unary_op: EXCL { 
-          (* Some SQLs use ! as negation, some don't. play it safe and negate it,
-             since negation is currently only used to verify cardinality constraints *)
-          (fun e -> Fun { fn_name = "excl"; kind = Negation; parameters = [e]; is_over_clause = false }) } 
-        | TILDE { (fun e -> e) }
-        | NOT { (fun e -> Fun { fn_name = "not"; kind = Negation; parameters = [e]; is_over_clause = false }) }
 
 interval_unit: INTERVAL_UNIT
              | SECOND_MICROSECOND | MINUTE_MICROSECOND | MINUTE_SECOND
