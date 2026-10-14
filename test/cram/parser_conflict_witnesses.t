@@ -2,7 +2,10 @@ Acceptance witnesses for SQL forms tied to Menhir shift/reduce and
 reduce/reduce conflicts. Each block must parse and type-check under MySQL
 (-gen none); exit status 0 locks compatibility for later conflict-removal tasks.
 
-Expression and predicate witnesses (36 conflicting states):
+Expression and predicate witnesses (36 conflicting states), except LIKE/ESCAPE/AND
+which is a separate RED witness below (Task 5: expression tiers must parse
+`… LIKE @pattern ESCAPE @escape AND flag = 1` with AND at predicate level,
+not inside ESCAPE; then this block should expect exit 0 like the others):
 
   $ sqlgg -gen none -dialect mysql - <<'EOF' 2>&1
   > CREATE TABLE t (
@@ -12,7 +15,6 @@ Expression and predicate witnesses (36 conflicting states):
   >   payload BLOB
   > );
   > SELECT id FROM t WHERE NOT EXISTS (SELECT id FROM t);
-  > SELECT id FROM t WHERE name LIKE @pattern ESCAPE @escape AND flag = 1;
   > SELECT id FROM t WHERE name IS NULL OR name IS NOT NULL;
   > SELECT id FROM t WHERE name IS NOT DISTINCT FROM @name;
   > SELECT id FROM t WHERE id BETWEEN @lo AND @hi OR flag = 1;
@@ -21,6 +23,21 @@ Expression and predicate witnesses (36 conflicting states):
   > EOF
   $ echo $?
   0
+
+RED witness: LIKE … ESCAPE … AND … (parser binds AND into ESCAPE operand until Task 5):
+
+  $ sqlgg -gen none -dialect mysql - <<'EOF' 2>&1
+  > CREATE TABLE t (
+  >   id INT PRIMARY KEY,
+  >   name TEXT,
+  >   flag INT,
+  >   payload BLOB
+  > );
+  > SELECT id FROM t WHERE name LIKE @pattern ESCAPE @escape AND flag = 1;
+  > EOF
+  Failed : SELECT id FROM t WHERE name LIKE @pattern ESCAPE @escape AND flag = 1
+  Fatal error: exception Failure("types Text?? and Bool do not match in Bool?? -> Text?? -> Bool?? applied to (Bool?, Bool)")
+  [2]
 
 DDL witnesses (column options, constraints, ALTER):
 
